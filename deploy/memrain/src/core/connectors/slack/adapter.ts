@@ -27,6 +27,10 @@
  *     sync; the hold is cleared once the channel reads again.
  *   - A channel taken off the allowlist is simply not read, from the next
  *     page of a run already under way: its pages stay.
+ *   - A channel Slack reports private has its stored days that are not marked
+ *     private yet re-stamped from their stored copy, at most RESTAMP_PER_RUN a
+ *     run, until none is left (restamp.ts); that holds for a channel this
+ *     account is not granted to read too.
  *   - Slack's rate limits are the connector client's: a 429 is waited out up
  *     to its cap, past it the run ends partial and resumes from the cursor.
  *
@@ -43,6 +47,7 @@ import { syncItemFromPage } from "../sync-item.ts";
 import { settledItemVersions } from "../sync-store.ts";
 import type { ItemBudget, PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
 import { channelHistory, conversationInfo, threadReplies, userInfo, type SlackApiMessage, type SlackChannelInfo, type SlackResult, type SlackUser } from "./api.ts";
+import { RESTAMP_PER_RUN, restampItems } from "./restamp.ts";
 import { addDays, dayFingerprint, dayStartSec, isDay, skippedMessage, toChatDay, userIds, utcDay } from "./text.ts";
 
 export const SLACK_SERVICE = "slack";
@@ -106,6 +111,8 @@ interface AdapterOptions {
 
 class Adapter implements SyncAdapter {
   private readonly infos = new Map<string, SlackChannelInfo>();
+  /** Channels Slack called private this run, whether or not this account may read them. */
+  private readonly privateChannels = new Set<string>();
 
   constructor(private readonly account: SyncAccount, private readonly now: () => number, private readonly engine: Engine | null) {}
 
@@ -117,7 +124,14 @@ class Adapter implements SyncAdapter {
     const channelId = ctx.stream.slice("slack:".length);
     if (!(await this.stillSelected(channelId))) return { ok: true, items: [], checkpoint: null, done: true };
     const info = await this.channel(ctx.client, channelId);
-    if ("failure" in info) return info.failure;
+    // Once a run, before anything else of a private channel, even one this account may no longer read.
+    const restamped = ctx.page === 0 && this.engine !== null && this.privateChannels.has(channelId)
+      ? await restampItems(this.engine, this.account, channelId, ctx.budget?.remaining ?? RESTAMP_PER_RUN)
+      : [];
+    if ("failure" in info) {
+      const failed = info.failure;
+      return failed.ok && restamped.length > 0 ? { ...failed, items: [...restamped, ...failed.items] } : failed;
+    }
 
     const today = utcDay(this.now());
     const parsed = parseSlackCursor(ctx.cursor);
@@ -127,12 +141,12 @@ class Adapter implements SyncAdapter {
       : ctx.page === 0 ? addDays(through, -SLACK_LOOKBACK_DAYS) : addDays(through, 1);
     const days: string[] = [];
     for (let d = start; d <= today && days.length < DAYS_PER_PAGE; d = addDays(d, 1)) days.push(d);
-    if (days.length === 0) return { ok: true, items: [], checkpoint: null, done: true };
+    if (days.length === 0) return { ok: true, items: restamped, checkpoint: null, done: true };
 
     const settled = this.engine === null ? new Map<string, string>()
       : await settledItemVersions(this.engine, this.account.id, days.map(d => dayItemId(channelId, d)));
     const remaining = ctx.budget?.remaining ?? Number.POSITIVE_INFINITY;
-    const items: SyncItem[] = [];
+    const items: SyncItem[] = [...restamped];
     const deletions: string[] = [];
     let last: string | null = null;
     for (const day of days) {
@@ -202,6 +216,7 @@ class Adapter implements SyncAdapter {
       return { failure: { ok: false, response: res.response } };
     }
     const info = res.body;
+    if (info.isPrivate) this.privateChannels.add(channelId);
     if (info.isDirect) return { failure: this.unavailable(channelId, "direct_conversation") };
     if (info.isPrivate && !(this.account.services ?? []).includes(SLACK_PRIVATE_SERVICE)) {
       return { failure: this.unavailable(channelId, "private_channel_not_granted") };

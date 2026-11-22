@@ -468,6 +468,15 @@ export function renderChatDay(ctx: ConnectorContext, day: ChatDay): RenderedConn
   };
 }
 
+/**
+ * A stored chat day re-marked private: the header line renderChatDay writes
+ * for a private channel, in place of the public one. Only the header under the
+ * title is touched, never a message that happens to read the same.
+ */
+export function markChatDayPrivate(body: string): string {
+  return body.replace(/^(# [^\n]*\n\n)Chat channel day · /, "$1Private chat channel day · ");
+}
+
 // ---------------------------------------------------------------------------
 // Meetings.
 

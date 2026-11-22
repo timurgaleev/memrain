@@ -181,6 +181,15 @@ then **Add apps**. For a private channel, invite the bot the same way.
   reply stays with the message that started the thread, with its own date
   when it came on a later day. A private channel's pages say "Private chat
   channel day" under the title and carry `private: true` in their truth.
+- When a channel turns private in Slack, the days already stored become
+  private too, older ones included, from the stored copy and without asking
+  Slack (a day Slack no longer returns is kept, not deleted). Up to 200 days
+  are re-marked per run; a longer history finishes over the next runs. This
+  happens even when the account was not granted private channels.
+- `private: true` is a label, not access control: who reads a page is decided
+  by its source. Keep private channels in an owner-only source
+  (`memrain sources owner-only <source> on`); `memrain connectors status`
+  warns about private pages in a source that is not.
 - Every run reads each channel's last three days again, and today, with one
   history request per day. A day whose messages did not change costs that one
   request: its threads are not read and nothing is written. An edited or

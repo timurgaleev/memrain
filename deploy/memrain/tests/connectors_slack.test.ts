@@ -21,7 +21,13 @@ import { completeConnect, ConnectError, connectorCallbackUri, disconnectAccount,
 import { builtinProviders, ProviderRegistry } from "../src/core/connectors/providers.ts";
 import { connectorRuntime } from "../src/core/connectors/runtime.ts";
 import { runConnectorSync } from "../src/core/connectors/sync-engine.ts";
-import { heldItemCount, readCursor } from "../src/core/connectors/sync-store.ts";
+import { heldItemCount, readCursor, recordItemSettled } from "../src/core/connectors/sync-store.ts";
+import { listAccountStatus } from "../src/core/connectors/account-status.ts";
+import { privateChatPagesInSharedSources } from "../src/core/connectors/slack/restamp.ts";
+import { markChatDayPrivate } from "../src/core/connectors/render.ts";
+import { accountStatusLine } from "../src/commands/connectors.ts";
+import { putPage } from "../src/core/pages.ts";
+import { setSourceOwnerOnly } from "../src/core/owner-only.ts";
 import { _resetLimitersForTesting } from "../src/core/connectors/limiter.ts";
 import { accountRef, shortHash, PASTED_TOKEN } from "../src/core/connectors/model.ts";
 import { SLACK_PRIVATE_SCOPES, SLACK_PUBLIC_SCOPES, slackProvider } from "../src/core/connectors/slack/provider.ts";
@@ -38,6 +44,7 @@ const SESSION = `admin-session-id-${"s".repeat(24)}`;
 const SOURCE = "team-chat";
 const T0 = Date.parse("2026-11-16T12:00:00.000Z");
 const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
 const ENV: NodeJS.ProcessEnv = { MEMRAIN_CONNECTORS_ENABLED: "1", MEMRAIN_DAILY_BUDGET_USD: "5" };
 const GENERAL = "C0GENERAL1";
 const RANDOM = "C0RANDOM01";
@@ -91,6 +98,14 @@ describe("slack provider", () => {
     expect(slackText("<!here> 1 &lt; 2 &amp;&amp; 3 &gt; 2", name)).toBe("@here 1 < 2 && 3 > 2");
     expect(slackText("<mailto:ana@example.com|ana@example.com>", name)).toBe("ana@example.com");
     expect(slackText("<@U0NOBODY1>", name)).toBe("@U0NOBODY1");
+  });
+
+  // Value: protects=the re-stamp changes only the header under the title; fails_when=a message reading
+  // "Chat channel day · ..." is rewritten; why_new=new helper; seam=pure function.
+  it("re-marks only a chat day's header private", () => {
+    const body = "# #general · 2026-11-14\n\nChat channel day · 1 message\n\n10:00 Ana\nChat channel day · not a header\n";
+    expect(markChatDayPrivate(body)).toBe("# #general · 2026-11-14\n\nPrivate chat channel day · 1 message\n\n10:00 Ana\nChat channel day · not a header\n");
+    expect(markChatDayPrivate(markChatDayPrivate(body))).toBe(markChatDayPrivate(body));
   });
 
   it("names a stream after the channel id", () => {
@@ -576,6 +591,125 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const open_ = await page(daySlug(RANDOM, "2026-11-15"));
       expect(open_.markdown_body).not.toContain("Private");
       expect(open_.compiled_truth.private).toBeUndefined();
+    } finally { await db.close(); }
+  });
+
+  const truthOf = async (e: Engine, slug: string) => (await e.query<{ compiled_truth: Record<string, unknown> }>(
+    `SELECT compiled_truth FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [slug])).rows[0]?.compiled_truth ?? null;
+
+  // Value: protects=a channel that turned private has its older stored days marked private, from the stored copy;
+  // fails_when=only the lookback days are re-rendered, or a day Slack no longer returns is deleted or left public;
+  // why_new=no re-stamp existed; seam=the real engine against the fake workspace, channel not granted for private reads.
+  it("re-stamps a channel's older days private once it turns private, even days Slack no longer returns", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const w = world();
+      const account = await pasteToken(db.storage, w, [GENERAL]);
+      await run(db.storage, w, account.id);
+      await run(db.storage, w, account.id, T0 + 10 * DAY);
+      const old = [daySlug(GENERAL, "2026-11-14"), daySlug(GENERAL, "2026-11-15")];
+      for (const slug of old) expect((await truthOf(e, slug))!.private).toBeUndefined();
+
+      w.channels[GENERAL] = { name: "general", is_private: true };
+      w.messages[GENERAL] = [];
+      w.calls.length = 0;
+      const result = await run(db.storage, w, account.id, T0 + 11 * DAY);
+      expect(result.counts.deletions_seen).toBe(0);
+      expect(result.counts.deletions_applied).toBe(0);
+      expect(result.counts.pages_written).toBe(2);
+      // Nothing was asked of Slack beyond the channel's info: the stored copy is the source.
+      expect(slackCalls(w, "conversations.history")).toHaveLength(0);
+      for (const slug of old) {
+        expect((await truthOf(e, slug))!.private).toBe(true);
+        expect(await body(e, slug)).toContain("Private chat channel day");
+      }
+      const thread = (await body(e, old[0]!))!;
+      expect(thread).toContain("Ship it, @Ben Okafor?");
+      expect(thread).toContain("yes");
+
+      // Value: idempotent: nothing left to re-stamp writes nothing.
+      const again = await run(db.storage, w, account.id, T0 + 11 * DAY + HOUR);
+      expect(again.counts.pages_written).toBe(0);
+    } finally { await db.close(); }
+  });
+
+  // Value: protects=the same for a granted private channel read as usual; fails_when=a second run rewrites
+  // the re-stamped days; why_new=as above; seam=a token granted private channels.
+  it("re-stamps a granted channel once and leaves it alone on the next run", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const w = world();
+      w.scope = `${SLACK_PUBLIC_SCOPE},${SLACK_PRIVATE_SCOPES.join(",")}`;
+      const account = await pasteToken(db.storage, w, [GENERAL]);
+      await run(db.storage, w, account.id);
+      // The cursor moves past the stored days, so the lookback no longer reads them.
+      await run(db.storage, w, account.id, T0 + 10 * DAY);
+      w.channels[GENERAL] = { name: "general", is_private: true };
+      const flip = await run(db.storage, w, account.id, T0 + 11 * DAY);
+      expect(flip.counts.deletions_seen).toBe(0);
+      expect((await truthOf(e, daySlug(GENERAL, "2026-11-14")))!.private).toBe(true);
+      expect((await truthOf(e, daySlug(GENERAL, "2026-11-15")))!.private).toBe(true);
+      const again = await run(db.storage, w, account.id, T0 + 11 * DAY + HOUR);
+      expect(again.counts.pages_written).toBe(0);
+    } finally { await db.close(); }
+  });
+
+  // Value: protects=re-stamping continues across runs until no public day is left, whatever its size;
+  // fails_when=the private transition is caught in one run only, or one run writes more than RESTAMP_PER_RUN;
+  // why_new=review amendment (durable continuation, more than 200 days); seam=stored days seeded as the engine settles them.
+  it("re-stamps more days than one run may over several runs, at most 200 a run", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const w = world();
+      w.messages[GENERAL] = [];
+      const account = await pasteToken(db.storage, w, [GENERAL]);
+      const ref = accountRef(SLACK_TEAM.name, "slack");
+      const days = Array.from({ length: 450 }, (_, i) => new Date(Date.parse("2025-06-01T00:00:00Z") + i * DAY).toISOString().slice(0, 10));
+      for (const [i, day] of days.entries()) {
+        const slug = daySlug(GENERAL, day);
+        const put = await putPage(db.storage, {
+          slug, type: "connector-chat", allowAdHocType: true, title: `#general · ${day}`, source_id: SOURCE, written_by: "connector-slack",
+          markdown_body: `# #general · ${day}\n\nChat channel day · 1 message\n\n10:00 Ana Lee\nNote ${i}.\n`,
+          compiled_truth: { origin: "connector", connector: "slack", kind: "chat", trust: "untrusted", account: ref, external_id: `${GENERAL}:${day}` },
+        });
+        await recordItemSettled(e, { accountId: account.id, externalId: `${GENERAL}:${day}`, version: "v1", pageSlug: slug, contentHash: put.content_hash, dedupeKey: null, now: new Date(T0) });
+      }
+      w.channels[GENERAL] = { name: "general", is_private: true };
+      const stamped = async () => count(e, `SELECT count(*)::int AS n FROM pages WHERE source_id = $1 AND compiled_truth->>'private' = 'true'`, [SOURCE]);
+      const written: number[] = [];
+      for (const n of [1, 2, 3, 4]) written.push((await run(db.storage, w, account.id, T0 + n * HOUR)).counts.pages_written);
+      expect(written).toEqual([200, 200, 50, 0]);
+      expect(await stamped()).toBe(450);
+      expect(await body(e, daySlug(GENERAL, days[0]!))).toContain("Private chat channel day · 1 message");
+      expect(await body(e, daySlug(GENERAL, days[0]!))).toContain("Note 0.");
+    } finally { await db.close(); }
+  }, 180_000);
+
+  // Value: protects=the operator is told that a private label in a shared source hides nothing;
+  // fails_when=the warning is missing, or shown for an owner-only source; why_new=new warning; seam=the status query and line.
+  it("warns in status about private pages in a source that is not owner-only, and not once it is", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const w = world();
+      w.scope = `${SLACK_PUBLIC_SCOPE},${SLACK_PRIVATE_SCOPES.join(",")}`;
+      w.channels[SECRET] = { name: "plans", is_private: true };
+      w.messages[SECRET] = [{ ts: slackTs("2026-11-15T08:00:00Z", 7), user: "U0ANA00001", text: "roadmap" }];
+      const account = await pasteToken(db.storage, w, [SECRET]);
+      await run(db.storage, w, account.id);
+      const status = (await listAccountStatus(e)).find(a => a.id === account.id)!;
+
+      const shared = await privateChatPagesInSharedSources(e);
+      expect(shared.get(account.id)).toBe(1);
+      expect(accountStatusLine(status, shared.get(account.id)).join("\n")).toContain("page privacy is a label; restrict the source");
+
+      await setSourceOwnerOnly(e, SOURCE, true);
+      const after = await privateChatPagesInSharedSources(e);
+      expect(after.get(account.id)).toBeUndefined();
+      expect(accountStatusLine(status, after.get(account.id) ?? 0).join("\n")).not.toContain("page privacy is a label");
     } finally { await db.close(); }
   });
 

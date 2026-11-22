@@ -48,6 +48,7 @@ import { listConnectorStates } from "../core/connectors/watermark.ts";
 import { grantExpiryText, listAccountStatus, runCountsText, type AccountStatus } from "../core/connectors/account-status.ts";
 import { connectorsStatus } from "../core/connectors/vault.ts";
 import { sweepMeetingCredentials, type MeetingRedactSweepResult } from "../core/connectors/meeting-redact-sweep.ts";
+import { privateChatPagesInSharedSources } from "../core/connectors/slack/restamp.ts";
 import { withStorage } from "./with-storage.ts";
 import { runRotateKek } from "./connectors-vault.ts";
 import { runGmailWiden } from "./connectors-gmail-widen.ts";
@@ -225,8 +226,11 @@ async function runGithubSync(opts: ConnectorsCmdOptions): Promise<number> {
   return code;
 }
 
-/** One account as the operator reads it in a terminal. */
-export function accountStatusLine(a: AccountStatus): string[] {
+/**
+ * One account as the operator reads it in a terminal. `privateInSharedSource`
+ * counts its pages marked private in a source that is not owner-only.
+ */
+export function accountStatusLine(a: AccountStatus, privateInSharedSource = 0): string[] {
   const head = `${a.provider} ${a.account_label} (${a.id.slice(0, 8)}) into ${a.source_id}: ${a.state}`;
   const run = a.last_run;
   const parts = [
@@ -241,18 +245,25 @@ export function accountStatusLine(a: AccountStatus): string[] {
     lines.push(`  needs a reconnect since ${a.reconnect_since}${a.status_reason ? ` (${a.status_reason})` : ""}: reconnect it on the admin Connections page; its data and cursors are kept`);
   }
   if (a.grant_expiry) lines.push(`  ${grantExpiryText(a.grant_expiry)}`);
+  if (privateInSharedSource > 0) {
+    lines.push(`  ${privateInSharedSource} private chat page(s) in source ${a.source_id}, which is not owner-only: page privacy is a label; restrict the source (memrain sources owner-only ${a.source_id} on)`);
+  }
   return lines;
 }
 
 async function runStatus(opts: ConnectorsCmdOptions): Promise<number> {
   const storage = new Storage(loadConfig(opts.configPath));
-  const { states, accounts } = await withStorage(storage, async () => ({
+  const { states, accounts, privateShared } = await withStorage(storage, async () => ({
     states: await listConnectorStates(storage.engine()),
     accounts: await listAccountStatus(storage.engine()),
+    privateShared: await privateChatPagesInSharedSources(storage.engine()),
   }));
   const gate = connectorsStatus();
   if (opts.json) {
-    console.log(JSON.stringify({ ok: true, connectors_enabled: gate.enabled, connectors_reason: gate.reason, connectors: states, accounts }, null, 2));
+    console.log(JSON.stringify({
+      ok: true, connectors_enabled: gate.enabled, connectors_reason: gate.reason, connectors: states, accounts,
+      private_pages_in_shared_sources: Object.fromEntries(privateShared),
+    }, null, 2));
     return 0;
   }
   if (states.length === 0 && accounts.length === 0) {
@@ -262,7 +273,7 @@ async function runStatus(opts: ConnectorsCmdOptions): Promise<number> {
   // An account's "sync on" is its own switch; this says whether any sync can run in this process at all.
   console.log(gate.enabled ? "connectors: on" : `connectors: off (${gate.reason ?? "unknown"})`);
   if (accounts.length > 0) console.log("accounts:");
-  for (const a of accounts) for (const line of accountStatusLine(a)) console.log(`  ${line}`);
+  for (const a of accounts) for (const line of accountStatusLine(a, privateShared.get(a.id) ?? 0)) console.log(`  ${line}`);
   if (states.length > 0) console.log("recipe connectors:");
   for (const s of states) {
     const run = s.last_run;
