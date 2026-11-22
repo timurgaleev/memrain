@@ -28,6 +28,7 @@ export const CLI_COMMANDS: Readonly<Record<string, CliCommandSpec>> = {
   "serve": bare,
   "index": free,
   "reindex": bare,
+  "code": subs("prune", "restore"),
   "code-def": free,
   "code-refs": free,
   "code-callers": free,
