@@ -197,10 +197,15 @@ async function databaseCacheBytes(engine: Engine): Promise<number | null> {
 }
 
 async function storedVectorRows(engine: Engine): Promise<number> {
-  // The planner's estimate spares a full scan of a table of 2-4 KB rows; a
-  // table never analyzed is small enough to count.
+  // Statistics spare a full scan of a table of 2-4 KB rows. reltuples moves
+  // only with ANALYZE; the live-tuple counter follows inserts as they commit,
+  // so the larger of the two never trails a backfill that just ran. A table
+  // with neither is small enough to count.
   const est = await engine.query<{ n: number | string | null }>(
-    "SELECT reltuples::bigint AS n FROM pg_class WHERE oid = to_regclass('embeddings')",
+    `SELECT GREATEST(c.reltuples::bigint, COALESCE(s.n_live_tup, 0)) AS n
+       FROM pg_class c
+       LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
+      WHERE c.oid = to_regclass('embeddings')`,
   );
   const n = Number(est.rows[0]?.n ?? -1);
   if (Number.isFinite(n) && n >= 1) return n;

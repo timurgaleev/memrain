@@ -202,78 +202,21 @@ function importNamesFromNode(node: TSNode, language: CodeLanguage): string[] {
 }
 
 /**
- * Tree-sitter node types that introduce a NEW symbol scope. When walking
- * a symbol's body for entities, we DON'T descend into these — the inner
- * symbol gets its own `extractCodeEntities` call and would double-count
- * the calls otherwise (a class would claim every method's call sites).
+ * Walk every descendant of `root`, the node itself first. A symbol's body
+ * holds no other symbol's text: a class chunk has its members blanked out, a
+ * module chunk its declarations, and whatever is nested in a function belongs
+ * to that function's chunk (chunkers/code.ts). So every call site found here
+ * is this symbol's own, callbacks and nested helpers included.
  */
-const NESTED_SCOPE_TYPES: Record<CodeLanguage, ReadonlySet<string>> = {
-  typescript: new Set([
-    "function_declaration",
-    "method_definition",
-    "arrow_function",
-    "function_expression",
-    "function",
-    "function_signature",
-    "generator_function_declaration",
-    // Class-family scopes — same reasoning. When extracting entities for
-    // a class symbol, we descend into the class body once but stop at any
-    // nested function/method (each is its own symbol).
-    "class_declaration",
-    "abstract_class_declaration",
-    "interface_declaration",
-    "enum_declaration",
-  ]),
-  tsx: new Set([
-    "function_declaration",
-    "method_definition",
-    "arrow_function",
-    "function_expression",
-    "function",
-    "function_signature",
-    "generator_function_declaration",
-    "class_declaration",
-    "abstract_class_declaration",
-    "interface_declaration",
-    "enum_declaration",
-  ]),
-  python: new Set(["function_definition", "class_definition"]),
-  // A nested scope inside a symbol's body is its own chunk elsewhere; stop the
-  // entity walk at its boundary so calls aren't double-counted.
-  go: new Set([
-    "function_declaration",
-    "method_declaration",
-    "func_literal",
-    "type_spec",
-  ]),
-  bash: new Set(["function_definition"]),
-  sql: new Set(["statement"]),
-};
-
-/**
- * Walk descendants of `root`. Tracks how many scope-introducing nodes
- * we've ENTERED — the first one is the symbol's own body (always
- * descend), subsequent ones are nested functions/methods inside that
- * body which will be processed as their own symbols (skip).
- *
- * We always yield the node itself before deciding whether to descend,
- * so the symbol's own declaration is visible to the caller.
- */
-function* walk(root: TSNode, language: CodeLanguage, moduleScope = false): Generator<TSNode> {
-  const scopeTypes = NESTED_SCOPE_TYPES[language];
-  const stack: { node: TSNode; depth: number }[] = [{ node: root, depth: 0 }];
+function* walk(root: TSNode): Generator<TSNode> {
+  const stack: TSNode[] = [root];
   while (stack.length > 0) {
-    const frame = stack.pop();
-    if (!frame) break;
-    yield frame.node;
-    const isScope = !moduleScope && scopeTypes.has(frame.node.type);
-    // Skip descent only if we're ABOUT to enter the SECOND scope (or deeper).
-    // depth counts scopes entered so far on the path from root.
-    if (isScope && frame.depth >= 1) continue;
-    const childDepth = frame.depth + (isScope ? 1 : 0);
-    for (let i = frame.node.namedChildCount - 1; i >= 0; i--) {
-      const child = frame.node.namedChild(i);
-      if (child) stack.push({ node: child, depth: childDepth });
+    const node = stack.pop();
+    if (!node) break;
+    yield node;
+    for (let i = node.namedChildCount - 1; i >= 0; i--) {
+      const child = node.namedChild(i);
+      if (child) stack.push(child);
     }
   }
 }
@@ -329,7 +272,7 @@ export async function extractCodeEntities(
   // leaking these is what makes the leak grow with the corpus rather than with
   // the file count. Every entity below is a plain string, never a Node.
   withParsedTree(parser, symbol.body, (subTree) => {
-    for (const node of walk(subTree.rootNode, language, symbol.kind === "module")) {
+    for (const node of walk(subTree.rootNode)) {
       const lineInFile = symbol.startLine + node.startPosition.row;
 
       if (callTypes.has(node.type)) {

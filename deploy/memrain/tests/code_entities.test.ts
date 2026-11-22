@@ -118,6 +118,23 @@ function alpha() { return foo(); }
   });
 });
 
+describe("extractCodeEntities (nested code)", () => {
+  // Value: protects=calls made inside a helper nested in a function, or inside a callback, stay in the call
+  // graph now that the helper is part of the outer function's chunk; fails_when=the entity walk still stops
+  // at nested scopes, so those calls vanish from code_callers.
+  it("credits calls in nested helpers and callbacks to the enclosing symbol", async () => {
+    const src = `function outer() {
+  function innerHelper() { return deepCall(); }
+  return items.map((x) => mapCall(x)).concat(innerHelper());
+}
+`;
+    const { entities } = await entitiesFor(src, "src/n.ts", "typescript");
+    const callers = entities.filter((e) => e.type === "code-caller").map((e) => `${e.name}@${e.surfaceForm}`);
+    expect(callers).toContain("deepCall@src/n.ts:2:outer");
+    expect(callers).toContain("mapCall@src/n.ts:3:outer");
+  });
+});
+
 describe("extractCodeEntities (Python)", () => {
   it("emits caller/callee edges for a Python call site", async () => {
     const src = `def alpha():

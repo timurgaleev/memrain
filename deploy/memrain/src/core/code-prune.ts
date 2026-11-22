@@ -24,9 +24,10 @@
  * cut it short. A missing document whose content arrived at a new path in the
  * same walk (`git mv`, a renamed folder) is a move: it is retired without
  * counting toward the valve. Past that, the valve (`codePruneTrip`) withholds
- * the deletions of a pass that would retire more than half of a root's live
- * code documents, more than CODE_PRUNE_MAX_DELETES of them, or more than
- * CODE_PRUNE_MAX_RATIO of them once past CODE_PRUNE_RATIO_FLOOR: a half-mounted
+ * the deletions of a pass that would retire more than one document and more
+ * than half of a root's live code documents, more than CODE_PRUNE_MAX_DELETES
+ * of them, or more than CODE_PRUNE_MAX_RATIO of them once past
+ * CODE_PRUNE_RATIO_FLOOR: a half-mounted
  * checkout looks exactly like a mass deletion. Only `memrain code prune
  * --apply --allow-mass-delete` goes past it.
  */
@@ -37,10 +38,13 @@ import type { Engine } from "./engine/interface.ts";
 import { bumpDocumentClock } from "./generation.ts";
 import { owningSource } from "./sources.ts";
 
-/** A pass retiring more than this share of a root's live code documents is withheld, once the root holds more than CODE_PRUNE_MASS_MIN_DOCS. */
+/**
+ * A pass retiring more than one document and more than this share of a root's
+ * live code documents is withheld, whatever the root's size: a code root is a
+ * mount, and a small one half gone is more likely a broken mount than a
+ * deletion.
+ */
 export const CODE_PRUNE_MASS_RATIO = 0.5;
-/** Below this many live code documents the half-of-the-root check does not apply. */
-export const CODE_PRUNE_MASS_MIN_DOCS = 20;
 /** A pass retiring more documents than this is withheld. */
 export const CODE_PRUNE_MAX_DELETES = 500;
 /** A pass retiring more than CODE_PRUNE_RATIO_FLOOR documents and more than this share of the root's live code documents is withheld. */
@@ -140,7 +144,7 @@ function withSlash(root: string): string {
 /** The valve: true when retiring `deletes` of `live` documents looks like a broken mount, not a deletion. */
 export function codePruneTrip(deletes: number, live: number): boolean {
   if (deletes <= 0) return false;
-  if (live > CODE_PRUNE_MASS_MIN_DOCS && deletes > live * CODE_PRUNE_MASS_RATIO) return true;
+  if (deletes > 1 && deletes > live * CODE_PRUNE_MASS_RATIO) return true;
   if (deletes > CODE_PRUNE_MAX_DELETES) return true;
   return deletes > CODE_PRUNE_RATIO_FLOOR && deletes > live * CODE_PRUNE_MAX_RATIO;
 }
