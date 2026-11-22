@@ -10,7 +10,10 @@ import { Storage } from "../src/core/storage.ts";
 import { getPage, putPage } from "../src/core/pages.ts";
 import { getTimelineForDate } from "../src/core/chronicle.ts";
 import { isChronicleEligible } from "../src/core/chronicle/eligibility.ts";
-import { chronicleJudgeKey, runChronicleExtract, type ChronicleEventProposal, type ChronicleJudge } from "../src/core/chronicle/extract-events.ts";
+import { chronicleExtractJobId, chronicleJudgeKey, runChronicleExtract, type ChronicleEventProposal, type ChronicleJudge } from "../src/core/chronicle/extract-events.ts";
+import { CHRONICLE_EXTRACT_JOB_KIND, registerChronicleHandler } from "../src/core/jobs/chronicle-handler.ts";
+import { getHandler, registerHandler } from "../src/core/jobs/handlers.ts";
+import type { JobRow } from "../src/core/jobs/types.ts";
 import { assignChronicleEventSlugs, eventDiscriminator, suffixedEventSlug } from "../src/core/chronicle/event-identity.ts";
 import { readAutoEvents } from "../src/core/chronicle/retire-events.ts";
 
@@ -158,6 +161,33 @@ describe("ended calendar invites", () => {
     const res = await runChronicleExtract(storage, { slug, judge: throwingJudge, now: new Date("2026-01-11T00:00:00Z") });
     expect(res).toMatchObject({ status: "skipped", reason: "invite_not_ended", events_written: 0 });
     expect(await eventSlugs()).toEqual([]);
+  });
+
+  // Value: protects=an invite written before its meeting reaches the chronicle on its own; fails_when=the skipped job is never queued again.
+  it("queues an invite that has not ended again for its end, under the ended-phase id", async () => {
+    const start = new Date(Date.now() + 3_600_000).toISOString();
+    const end = new Date(Date.now() + 5_400_000).toISOString();
+    const slug = await seedInvite({ start, end });
+    const previous = getHandler(CHRONICLE_EXTRACT_JOB_KIND);
+    try {
+      registerChronicleHandler(storage, { judge: throwingJudge });
+      const out = await getHandler(CHRONICLE_EXTRACT_JOB_KIND)!({ slug, sourceId: "default" }, { job: {} as JobRow });
+      expect(out).toMatchObject({ status: "skipped", reason: "invite_not_ended", retry_at: end });
+    } finally {
+      if (previous) registerHandler(CHRONICLE_EXTRACT_JOB_KIND, previous);
+    }
+    const page = (await getPage(storage, slug, ["default"]))!;
+    const endedId = chronicleExtractJobId("default", { ...page, slug }, new Date(end));
+    expect(endedId).not.toBe(chronicleExtractJobId("default", { ...page, slug }));
+    const jobs = await storage.engine().query<{ id: string; status: string; at: string }>(
+      `SELECT id, status, next_attempt_at::text AS at FROM jobs WHERE kind = 'chronicle_extract'`,
+    );
+    expect(jobs.rows.map((j) => [j.id, j.status])).toEqual([[endedId, "pending"]]);
+    expect(new Date(jobs.rows[0]!.at).toISOString()).toBe(end);
+    // A meeting moved later gets a job for its new end, not the id the old end already holds.
+    const later = new Date(Date.parse(end) + 3_600_000);
+    const moved = { ...page, slug, compiled_truth: { ...(page.compiled_truth as Record<string, unknown>), end: later.toISOString() } };
+    expect(chronicleExtractJobId("default", moved, later)).not.toBe(endedId);
   });
 
   it("gives an invite a new job key once it has ended", async () => {

@@ -93,6 +93,25 @@ describe("conversationFactsBackfillPhase", () => {
     expect(second.factsWritten).toBe(0);
   });
 
+  // Value: protects=an opted-out draft costs no paid call in the backfill; fails_when=the backfill ignores the frontmatter opt-out.
+  it("parks an opted-out page without a call until the line is removed", async () => {
+    let calls = 0;
+    const counting: SonnetFn = async (input) => { calls += 1; return fakeSonnet()(input); };
+    await putPage(storage, { slug: "meetings/draft", type: "meeting", markdown_body: `---\nfacts_extraction: false\n---\n${LONG_BODY}` });
+    let worthCalls = 0;
+    const worthLlmFn = (async () => { worthCalls += 1; return "{}"; }) as never;
+    const first = await conversationFactsBackfillPhase(storage, { sonnetFn: counting, worthGate: true, worthLlmFn });
+    expect(calls).toBe(0);
+    expect(worthCalls).toBe(0);
+    expect(first.factsWritten).toBe(0);
+    const second = await conversationFactsBackfillPhase(storage, { sonnetFn: counting });
+    expect(second.pagesConsidered).toBe(0);
+    await putPage(storage, { slug: "meetings/draft", type: "meeting", markdown_body: LONG_BODY });
+    const third = await conversationFactsBackfillPhase(storage, { sonnetFn: counting });
+    expect(calls).toBe(1);
+    expect(third.factsWritten).toBe(1);
+  });
+
   it("leaves out a page whose search mirror is quarantined", async () => {
     await putPage(storage, { slug: "notes/held", type: "note", markdown_body: LONG_BODY });
     const e = storage.engine();

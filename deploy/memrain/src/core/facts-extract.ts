@@ -7,6 +7,7 @@
  * Untrusted turn text is run through the shared prompt-injection sanitizer and
  * fenced in <turn>…</turn> before the model sees it.
  */
+import { parseFrontmatter } from "./frontmatter.ts";
 import type { Storage } from "./storage.ts";
 import { createHash } from "node:crypto";
 import { pageEntityHints } from "./facts-extract-hints.ts";
@@ -947,6 +948,20 @@ const MIN_EXTRACTION_BODY_CHARS = 80;
 
 export type EligibilityResult = { ok: true } | { ok: false; reason: string };
 
+const OFF_VALUES: ReadonlySet<string> = new Set(["false", "no", "off", "0"]);
+
+/**
+ * A page whose frontmatter sets `facts_extraction: false` is left out of
+ * automatic extraction, on write and in the backfill: a draft still being
+ * verified must not file its claims on entity pages. Saving the page without
+ * the line puts it back in.
+ */
+export function factsExtractionOptedOut(body: string | undefined): boolean {
+  if (body === undefined || !body.startsWith("---")) return false;
+  const value = parseFrontmatter(body).frontmatter.facts_extraction;
+  return value === false || (typeof value === "string" && OFF_VALUES.has(value.trim().toLowerCase()));
+}
+
 /**
  * Should this page write trigger on-write fact extraction? Prose-typed, long
  * enough to carry a claim, and not a subagent-scratch page. Deterministic +
@@ -963,6 +978,7 @@ export function isFactsExtractionEligible(
   }
   const t = (type ?? "").trim().toLowerCase();
   if (isConnectorPageType(t)) return { ok: false, reason: "connector_page" };
+  if (factsExtractionOptedOut(body)) return { ok: false, reason: "opted_out" };
   if (!EXTRACTION_ELIGIBLE_TYPES.includes(t)) {
     return { ok: false, reason: `kind:${t || "unknown"}` };
   }

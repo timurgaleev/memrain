@@ -73,6 +73,18 @@ describe("isFactsExtractionEligible", () => {
     expect(r).toEqual({ ok: false, reason: "too_short" });
   });
 
+  // Value: protects=a draft meeting page files no facts while it is verified; fails_when=the frontmatter opt-out is ignored.
+  it("rejects a page whose frontmatter opts out, and only while it does", () => {
+    for (const v of ["false", "\"false\"", "no", "off"]) {
+      expect(isFactsExtractionEligible("meeting", `---\ntype: meeting\nfacts_extraction: ${v}\n---\n${LONG_BODY}`))
+        .toEqual({ ok: false, reason: "opted_out" });
+    }
+    expect(isFactsExtractionEligible("meeting", `---\ntype: meeting\nfacts_extraction: true\n---\n${LONG_BODY}`).ok).toBe(true);
+    expect(isFactsExtractionEligible("meeting", `---\ntype: meeting\n---\n${LONG_BODY}`).ok).toBe(true);
+    // Only the frontmatter counts, not a line in the body.
+    expect(isFactsExtractionEligible("meeting", `${LONG_BODY}\nfacts_extraction: false\n`).ok).toBe(true);
+  });
+
   it("rejects the subagent scratch namespace", () => {
     const r = isFactsExtractionEligible("note", LONG_BODY, "wiki/agents/foo");
     expect(r).toEqual({ ok: false, reason: "subagent_namespace" });

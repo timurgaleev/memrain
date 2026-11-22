@@ -105,6 +105,39 @@ describe("reflections skip", () => {
     expect(fn.prompts).toHaveLength(1);
   });
 
+  // Value: protects=a transcript no written reflection cites is not re-sent; fails_when=only an all-empty answer parks transcripts.
+  it("parks the transcripts a written reflection does not cite", async () => {
+    await seed("notes/a", BODY);
+    await seed("notes/b", `${BODY} b`);
+    const fn = scripted([JSON.stringify([{ topic_slug: "scope", title: "Scope or time", body: "Weighing scope [[notes/a]].", evidence: ["notes/a"] }])]);
+    const first = await reflectionsPhase(storage, { sonnetFn: fn, modelId: MODEL });
+    expect(first.reflectionsWritten).toBe(1);
+    const parked = await storage.engine().query<{ doc_id: string; kind: string }>(
+      "SELECT doc_id, kind FROM synth_failures WHERE phase = 'reflections'",
+    );
+    expect(parked.rows).toHaveLength(1);
+    expect(parked.rows[0]!.doc_id).toContain("notes/b");
+    expect(parked.rows[0]!.kind).toBe("skipped");
+    expect(fn.prompts[0]).toContain("[[notes/b]]");
+    await reflectionsPhase(storage, { sonnetFn: fn, modelId: MODEL });
+    expect(fn.prompts.slice(1).some((p) => p.includes("[[notes/b]]"))).toBe(false);
+  });
+
+  it("sends no follow-up for broken JSON or a declined answer", async () => {
+    await seed("notes/a", BODY);
+    const broken = scripted(['[{"topic_slug": "x", "title": ']);
+    await reflectionsPhase(storage, { sonnetFn: broken, modelId: MODEL });
+    expect(broken.prompts).toHaveLength(1);
+    await seed("notes/a", `${BODY} edited`);
+    const prompts: string[] = [];
+    const declined: SonnetFn = async (input) => {
+      prompts.push(input.user);
+      return { text: "I cannot help with that.", modelId: MODEL, usage: { inputTokens: 200, outputTokens: 10 }, stopReason: "content_filtered" };
+    };
+    await reflectionsPhase(storage, { sonnetFn: declined, modelId: MODEL });
+    expect(prompts).toHaveLength(1);
+  });
+
   it("re-opens a parked transcript once it is edited", async () => {
     await seed("notes/a", BODY);
     const fn = scripted(["[]"]);

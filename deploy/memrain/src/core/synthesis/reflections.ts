@@ -107,6 +107,9 @@ const REFLECTIONS_MAX_TOKENS = 1500;
  */
 const REFLECTIONS_ARRAY = new RegExp(`\\[[\\s\\S]{0,${REFLECTIONS_MAX_TOKENS * 4}}\\]`);
 
+/** Converse stop reasons for an answer the model declined to give. */
+const DECLINED_STOP_REASONS: ReadonlySet<string> = new Set(["content_filtered", "guardrail_intervened", "refusal"]);
+
 function reflectionsEnabled(): boolean {
   const v = (process.env.MEMRAIN_REFLECTIONS ?? "").trim().toLowerCase();
   return v === "1" || v === "true";
@@ -348,8 +351,10 @@ export async function reflectionsPhase(
     parsed = parseReflections(first.resp.text, validSlugs);
     // An answer in prose (no JSON array at all) is asked once more for the
     // array, so "nothing here" can be recorded instead of paid for every run.
-    // A cut-off answer is not prose; never more than one follow-up.
-    if (parsed.status === "unreadable" && !first.truncated && first.resp.text.trim() !== "") {
+    // A cut-off answer is not prose; never more than one follow-up. A refused or
+    // filtered answer, or broken JSON (a `{` in it), would not come back as the array either.
+    if (parsed.status === "unreadable" && !first.truncated && first.resp.text.trim() !== ""
+      && !DECLINED_STOP_REASONS.has(first.resp.stopReason ?? "") && !first.resp.text.includes("{")) {
       const second = await ask(`${prompt}\n\n${REFLECTIONS_REASK}`);
       if (second === null) base.budgetExhausted = true;
       else {
@@ -383,6 +388,7 @@ export async function reflectionsPhase(
   const drafts = parsed.drafts;
 
   let written = 0;
+  const cited = new Set<string>();
   for (const d of drafts) {
     const slug = `${prefix}${d.topic_slug}`;
     const sourcesMd = d.evidence.map((s) => `- [[${s}]]`).join("\n");
@@ -400,9 +406,21 @@ export async function reflectionsPhase(
         onlyOverwriteWriter: "reflection",
       });
       if (pageWrite.held) base.pagesHeld += 1;
-      else written += 1;
+      else {
+        written += 1;
+        for (const s of d.evidence) cited.add(s);
+      }
     } catch (e) {
       base.errors.push(`${slug}: ${String(e instanceof Error ? e.message : e)}`);
+    }
+  }
+  // A transcript the model read but no written reflection cites is neither linked
+  // from a reflection nor parked, so it would be sent again every run. A draft that
+  // failed to write leaves its evidence open for the next run.
+  if (written > 0) {
+    for (const t of transcripts) {
+      if (cited.has(t.slug)) continue;
+      await recordSynthSkip(engine, { docId: t.docId, phase: "reflections", contentHash: t.contentHash, model });
     }
   }
 

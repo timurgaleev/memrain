@@ -163,6 +163,8 @@ const MAIL_CORPUS: Row[] = [
   { name: "my Gmail forward with an FYI note over someone else's question", messages: () => [mine(96, { subject: "Fwd: Venue", body: `FYI, see below.\n\n${GMAIL_FORWARD}` })], expect: null },
   { name: "my Apple Mail forward with a \"See below.\" note", messages: () => [mine(96, { subject: "Fwd: Venue", body: `See below.\n\n${APPLE_FORWARD}` })], expect: null },
   { name: "my forward with no note at all", messages: () => [mine(96, { subject: "Fwd: Venue", body: GMAIL_FORWARD })], expect: null },
+  // Value: protects=a promise inside a forwarded message is its author's; fails_when=makesPromise reads the whole body again.
+  { name: "my FYI forward of a promise someone else made opens no commitment", messages: () => [mine(96, { subject: "Fwd: Estimate", body: `FYI, see below.\n\n${GMAIL_FORWARD}\nI will send the estimate tomorrow.` })], expect: null },
   { name: "my FYI forward note that only shares a link", messages: () => [mine(96, { subject: "Fwd: Venue", body: `FYI, context: https://docs.example.com/view?id=42\n\n${GMAIL_FORWARD}` })], expect: null },
   { name: "my forward whose own note asks still waits on them", messages: () => [mine(96, { subject: "Fwd: Venue", body: `Can you take this one?\n\n${GMAIL_FORWARD}` })], expect: outbound() },
   { name: "their FYI forward is answered by my thanks", messages: () => [bob(40, { subject: "Fwd: Venue", body: `FYI, see below.\n\n${GMAIL_FORWARD}` }), mine(30, { body: "Thanks!" })], expect: null },

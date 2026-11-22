@@ -13,7 +13,7 @@
  */
 import { createHash } from "node:crypto";
 import type { CalendarEvent, ChatDay, ConnectorContext, MailMessage, Person } from "../connectors/model.ts";
-import { asksQuestion, isAcknowledgementOnly, makesPromise } from "./detect.ts";
+import { asksQuestion, isAcknowledgementOnly, makesPromise, textAboveForward } from "./detect.ts";
 
 export const LOOP_SIGNALS_VERSION = 1;
 
@@ -177,7 +177,7 @@ export function mailLoopSignals(
         ...(to ? { to: label(to), toKey: counterpartyKey(lower(to)) } : {}),
         question: asksQuestion(body),
         ack: isAcknowledgementOnly(body),
-        promise: isMine && makesPromise(body),
+        promise: isMine && makesPromise(textAboveForward(body)),
         machine: (!isMine && isNoiseSender(from)) || m.autoSubmitted === true || isCalendarNotice(m.calendarMethod, m.subject),
         bulk: isDeclaredBulk(m),
         category: m.categories.some(c => BULK_CATEGORIES.has(c.toLowerCase())),
@@ -220,7 +220,7 @@ export function chatLoopSignals(
         ...(isMine && other && otherLabel ? { to: otherLabel, toKey: keyOf(other.author) } : {}),
         question: asksQuestion(body),
         ack: isAcknowledgementOnly(body),
-        promise: isMine && makesPromise(body),
+        promise: isMine && makesPromise(textAboveForward(body)),
         machine: m.bot === true,
         bulk: false,
         category: false,

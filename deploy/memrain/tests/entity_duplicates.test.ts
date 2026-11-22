@@ -98,6 +98,21 @@ describe("duplicate finder", () => {
     expect((await preview()).groups).toEqual([]);
   });
 
+  // Value: protects=a title word, a deleted-user login or a placeholder handle never decides a group; fails_when=the word lists shrink back.
+  it("reads a role before a name as a title, and ghost or a placeholder handle as no key", async () => {
+    await person("people/jane-a", "CEO Jane Example", { email: "jane@example.org" });
+    await person("people/jane-b", "Jane Example", { email: "jane@example.org" });
+    await person("people/ghost-a", "Pat Example", { github: "ghost", x_handle: "private" });
+    await person("people/ghost-b", "Quinn Sample", { github: "ghost", x_handle: "private" });
+    expect(classes(await preview())).toEqual([["likely", ["people/jane-a", "people/jane-b"]]]);
+  });
+
+  it("reads an organization page as a company", async () => {
+    await company("companies/acme", "Acme Labs", { domain: "acme-example.org" });
+    await putPage(storage, { slug: "orgs/acme", type: "organization", allowAdHocType: true, title: "Acme", compiled_truth: { website: "https://acme-example.org" }, markdown_body: "Acme." });
+    expect(classes(await preview())).toEqual([["likely", ["companies/acme", "orgs/acme"]]]);
+  });
+
   it("reads a declared id field the operator names", async () => {
     await company("companies/g1", "Globex", { registry_no: "12345" });
     await company("companies/g2", "Globex", { registry_no: "12345" });
@@ -118,6 +133,13 @@ describe("dedupe reject and confirm", () => {
     // Same entity data on a new slug: the fingerprints still match.
     await storage.engine().query(`UPDATE pages SET deleted_at = now() WHERE slug = 'people/gil-b'`);
     await person("people/gil-c", "Gil Example", { github: "gil-x" });
+    expect((await preview()).groups).toEqual([]);
+  });
+
+  // Value: protects=a pair the page itself declares apart is never proposed or merged; fails_when=distinct_from is not read.
+  it("keeps a pair one page declares distinct_from out of the preview", async () => {
+    await person("people/max-a", "Max Example", { github: "max-x", distinct_from: ["people/max-b"] });
+    await person("people/max-b", "Max Example", { github: "max-x" });
     expect((await preview()).groups).toEqual([]);
   });
 

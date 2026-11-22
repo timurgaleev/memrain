@@ -182,7 +182,7 @@ import { loadChronicleContext } from "../core/context/chronicle-context.ts";
 import { renderTimelineNarrative } from "../core/chronicle/narrative.ts";
 import { chronicleEnabled } from "../core/chronicle/config.ts";
 import { isChronicleEligible } from "../core/chronicle/eligibility.ts";
-import { chronicleJudgeKey } from "../core/chronicle/extract-events.ts";
+import { chronicleExtractJobId, type chronicleJudgeKey } from "../core/chronicle/extract-events.ts";
 import type {
   ChronicleTimelineOpts,
   OntologyConflict,
@@ -2110,6 +2110,8 @@ async function isRemoteDiaryFenced(
   return isDiaryPage(pg.type, pg.slug) || (await ownerOnlyPageSlugs(storage.engine(), [pg.slug])).has(pg.slug);
 }
 
+type ChronicleKeyPage = Parameters<typeof chronicleJudgeKey>[0];
+
 /**
  * Best-effort, default-OFF on-write chronicle backstop. When MEMRAIN_AUTO_CHRONICLE
  * is enabled AND the page is chronicle-eligible (conversation-shape, not diary/
@@ -2119,20 +2121,6 @@ async function isRemoteDiaryFenced(
  * the unscoped local/internal operator). Failures are logged + swallowed — the
  * backstop can never break the triggering write. Returns whether it enqueued.
  */
-/**
- * Dedup id for a chronicle-extract job, addressed by the input the judge
- * actually reads: the same judged input collapses onto the prior job
- * (idempotent), while an edit inside it yields a fresh id and a new job.
- * Without the hash the id would collide with a long-finished succeeded/failed
- * row forever (Queue.enqueue is ON CONFLICT DO NOTHING), so edits would never
- * re-extract and a backfill would falsely report work enqueued.
- */
-function chronicleJobId(sourceId: string, page: ChronicleKeyPage): string {
-  return `chronicle_extract:${sourceId}:${page.slug}:${chronicleJudgeKey(page).slice(0, 16)}`;
-}
-
-type ChronicleKeyPage = Parameters<typeof chronicleJudgeKey>[0];
-
 async function maybeEnqueueChronicleExtract(
   storage: Storage,
   page: ChronicleKeyPage & { markdown_body: string; source_id?: string },
@@ -2154,7 +2142,7 @@ async function maybeEnqueueChronicleExtract(
     await new Queue(storage.engine()).enqueueOrRevive({
       kind: "chronicle_extract",
       payload: { slug: page.slug, sourceId },
-      id: chronicleJobId(sourceId, page),
+      id: chronicleExtractJobId(sourceId, page),
       timeoutMs: 600_000,
     });
     return true;
@@ -5416,7 +5404,7 @@ async function callChronicleBackfill(
       await queue.enqueueOrRevive({
         kind: "chronicle_extract",
         payload: { slug: p.slug, sourceId },
-        id: chronicleJobId(sourceId, p),
+        id: chronicleExtractJobId(sourceId, p),
         timeoutMs: 600_000,
       });
       pagesEnqueued++;

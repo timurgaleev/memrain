@@ -16,6 +16,7 @@ import {
   type ChronicleJudge,
 } from "../chronicle/extract-events.ts";
 import { chronicleTz } from "../chronicle/config.ts";
+import { Queue } from "./queue.ts";
 
 import { CHRONICLE_EXTRACT_JOB_KIND } from "./kinds.ts";
 
@@ -37,6 +38,10 @@ export interface RegisterChronicleHandlerOpts {
  * retries the job with backoff rather than recording a false DONE. A PERMANENT
  * failure (missing page, malformed proposals, auth) resolves to a
  * skipped/… result the handler returns normally (job DONE, no retry).
+ *
+ * A calendar invite whose meeting has not ended is skipped without a call and
+ * queued again for its end, under the id the ended invite gets, so it reaches
+ * the chronicle without a backfill.
  */
 export function registerChronicleHandler(
   storage: Storage,
@@ -55,12 +60,22 @@ export function registerChronicleHandler(
       tz: chronicleTz(),
       ...(opts.judge ? { judge: opts.judge } : {}),
     });
+    if (res.retry) {
+      await new Queue(storage.engine()).enqueueIfAbsent({
+        kind: CHRONICLE_EXTRACT_JOB_KIND,
+        payload: { slug, sourceId },
+        id: res.retry.job_id,
+        runAt: new Date(res.retry.at),
+        timeoutMs: 600_000,
+      });
+    }
     return {
       slug: res.slug,
       status: res.status,
       events_written: res.events_written,
       ...(res.events_retired !== undefined ? { events_retired: res.events_retired } : {}),
       ...(res.reason ? { reason: res.reason } : {}),
+      ...(res.retry ? { retry_at: res.retry.at } : {}),
     };
   });
 }

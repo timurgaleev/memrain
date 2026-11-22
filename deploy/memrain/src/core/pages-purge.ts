@@ -238,10 +238,11 @@ type PurgedPage = { slug: string; source_id: string };
  * and a later page on the slug would inherit them. Another page stating the
  * same claim holds its own fact row, so nothing it supports is lost. Each
  * page's retired ids go into one receipt row, so the retirement can be undone
- * by id.
+ * by id. Without a purge id (the dry run) it changes nothing and returns the
+ * ids it would retire.
  */
-async function retireFacts(engine: Engine, pages: ReadonlyArray<PurgedPage>, purgeId: string | null): Promise<string[] | number> {
-  if (pages.length === 0) return purgeId === null ? 0 : [];
+async function retireFacts(engine: Engine, pages: ReadonlyArray<PurgedPage>, purgeId: string | null): Promise<string[]> {
+  if (pages.length === 0) return [];
   const doomed = `WITH gone AS (
       SELECT * FROM unnest($1::text[], $2::text[]) AS g(slug, source_id)
     ), matched AS (
@@ -262,8 +263,8 @@ async function retireFacts(engine: Engine, pages: ReadonlyArray<PurgedPage>, pur
       SELECT DISTINCT ON (id) id, slug, source_id FROM matched ORDER BY id, slug)`;
   const params: unknown[] = [pages.map((p) => p.slug), pages.map((p) => p.source_id)];
   if (purgeId === null) {
-    const r = await engine.query<{ n: number }>(`${doomed} SELECT count(*)::int AS n FROM doomed`, params);
-    return r.rows[0]?.n ?? 0;
+    const r = await engine.query<{ id: string }>(`${doomed} SELECT id::text AS id FROM doomed ORDER BY id`, params);
+    return r.rows.map((row) => row.id);
   }
   params.push(purgeId);
   const r = await engine.query<{ id: string }>(
@@ -290,7 +291,7 @@ async function retireFacts(engine: Engine, pages: ReadonlyArray<PurgedPage>, pur
  * when asked.
  */
 async function retireDerived(tx: Engine, pages: ReadonlyArray<PurgedPage>, purgeId: string, tombstone: boolean) {
-  const factIds = await retireFacts(tx, pages, purgeId) as string[];
+  const factIds = await retireFacts(tx, pages, purgeId);
   const synthesis = pages.length === 0 ? { ...NO_SYNTHESIS }
     : await applyDerivedCleanup(tx, await planDerivedCleanup(tx, synthesisScope(pages, factIds)), purgeId);
   const tombstoned = tombstone ? await tombstonePages(tx, pages, purgeId) : 0;
@@ -333,12 +334,14 @@ export async function purgeDeletedPages(
     const planned = plan.rows.map((r) => r.slug);
     const planHash = purgePlanHash(plan.rows);
     if (opts.dryRun) {
+      // The contradiction rows that snapshot a fact the purge retires go with it, so the preview counts them too.
+      const factIds = await retireFacts(engine, plan.rows, null);
       return {
         count: 0, slugs: [], blocked: [], ttl_hours: olderThanHours,
         ...(await leftovers(engine, planned, false)),
-        facts_retired: await retireFacts(engine, plan.rows, null) as number,
+        facts_retired: factIds.length,
         synthesis: plan.rows.length === 0 ? { ...NO_SYNTHESIS }
-          : plannedSynthesis(await planDerivedCleanup(engine, synthesisScope(plan.rows, []))),
+          : plannedSynthesis(await planDerivedCleanup(engine, synthesisScope(plan.rows, factIds))),
         tombstoned: 0,
         secret_originals: await purgeSecretOriginals(engine, planned, true),
         dry_run: true, planned, plan_hash: planHash,

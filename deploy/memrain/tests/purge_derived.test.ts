@@ -199,6 +199,20 @@ describe("page purge retires what synthesis derived from the page", () => {
     const live = await ids(`SELECT fact AS id FROM entity_facts WHERE forgotten_at IS NULL ORDER BY fact`);
     expect(live).toEqual(["claim held by another page", "stated directly", "works at Acme"]);
   });
+
+  // Value: protects=the preview the operator approves counts the contradictions the purge deletes; fails_when=the dry run plans with no fact ids again.
+  it("counts in its dry run the contradiction rows that snapshot a fact the purge retires", async () => {
+    await purgeable("people/gone");
+    const f = await engine.query<{ id: string }>(
+      `INSERT INTO entity_facts (entity_slug, fact, source_slug, source_id) VALUES ('people/gone', 'orphan claim', 'notes/vanished', 'default') RETURNING id::text AS id`);
+    await engine.query(`INSERT INTO synth_contradictions (pair_key, a_kind, a_ref, a_text, b_kind, b_ref, b_text, prompt_version, model_id)
+      VALUES ('pk-1', 'fact', $1, 'orphan claim', 'fact', '999999', 'other claim', 'v1', 'm')`, [f.rows[0]!.id]);
+    const dry = await purgeDeletedPages(engine, undefined, undefined, { dryRun: true });
+    expect(dry.facts_retired).toBe(1);
+    expect(dry.synthesis.contradictions).toBe(1);
+    const real = await purgeDeletedPages(engine);
+    expect(real.synthesis.contradictions).toBe(1);
+  });
 });
 
 describe("concepts phase", () => {

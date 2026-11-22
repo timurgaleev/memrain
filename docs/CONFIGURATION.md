@@ -336,7 +336,7 @@ that stops making calls once the budget is spent. All default OFF.
 | `MEMRAIN_TAKE_ENSEMBLE` | off | N-judge Sonnet grading of takes. | **paid (Sonnet)** |
 | `MEMRAIN_TAKE_ENSEMBLE_BUDGET_USD` | `1.0` | USD ceiling for the ensemble. | — |
 | `MEMRAIN_TAKE_ENSEMBLE_JUDGES` | `3` | Judges per take. | — |
-| `MEMRAIN_FACTS_EXTRACTION` | off | Conversation → structured facts extraction via Sonnet. | **paid (Sonnet)** |
+| `MEMRAIN_FACTS_EXTRACTION` | off | Conversation → structured facts extraction via Sonnet. A page whose frontmatter sets `facts_extraction: false` is left out, on write and in the backfill, until it is saved without that line. | **paid (Sonnet)** |
 | `MEMRAIN_FACTS_BUDGET_USD` | `1.0` | USD ceiling for facts extraction. | — |
 | `MEMRAIN_OWNER_ENTITY` | unset | Slug of the brain owner's entity page (e.g. `people/alice`). When set, a first-person claim the owner makes as `User` in a first-party transcript (Claude Code, Codex, ChatGPT, Claude.ai imports under `transcripts/`, or a `User:` turn in `extract-conversation-facts`) and that the extractor left without an entity is stored on this entity instead of being dropped. Diarised speakers ("Speaker 2") never map. Unset: no change. An invalid slug is ignored with one warning. | — |
 | `MEMRAIN_FACTS_JUNK_FILTER` | on (`=0` off) | Drops extracted "facts" that are assistant plan narration ("Let me read the file"), narration about the conversation itself, or a provider spend/rate-limit error sentence. Three anchored patterns; a `commitment` is exempt from the narration one. | free |

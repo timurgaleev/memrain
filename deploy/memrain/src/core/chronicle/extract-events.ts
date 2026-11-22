@@ -81,6 +81,8 @@ export interface ChronicleExtractResult {
   /** Proposals refused by the date screen, by reason; never written. Omitted
    *  when nothing was dropped. */
   events_dropped?: ChronicleDropCounts;
+  /** On `invite_not_ended`: when the meeting ends, and the job id the page gets then. */
+  retry?: { at: string; job_id: string };
 }
 
 /** At most this many events are written per depth page (mirrors the facts
@@ -310,9 +312,10 @@ export function chronicleJudgePrompt(input: ChronicleJudgeInput): string {
  * sees, so it must not buy another paid call. That text also stays unread by
  * extraction — a limit of the 12,000-character window, not of this key.
  *
- * A structured calendar invite also folds in whether it has ended, so an
- * invite queued before its meeting (skipped, no call) gets a fresh job once it
- * is over and the backfill sweep projects it.
+ * A structured calendar invite also folds in whether it has ended, and the
+ * ended phase its end instant, so an invite queued before its meeting
+ * (skipped, no call) gets a fresh job once it is over, and one whose meeting
+ * moved later gets another job for the new end.
  */
 export function chronicleJudgeKey(page: Parameters<typeof chronicleJudgeInputFor>[0], now: Date = new Date()): string {
   const input = chronicleJudgeInputFor(page);
@@ -321,8 +324,20 @@ export function chronicleJudgeKey(page: Parameters<typeof chronicleJudgeInputFor
     input.attendees,
     now,
   );
-  const phase = invite === null ? "" : "pending" in invite ? "\ninvite:pending" : "\ninvite:ended";
+  const phase = invite === null ? "" : "pending" in invite ? "\ninvite:pending" : `\ninvite:ended:${invite.until}`;
   return createHash("sha256").update(chronicleJudgePrompt(input) + phase, "utf8").digest("hex");
+}
+
+/**
+ * Dedup id for a chronicle-extract job, addressed by the input the judge
+ * actually reads: the same judged input collapses onto the prior job
+ * (idempotent), while an edit inside it yields a fresh id and a new job.
+ * Without the hash the id would collide with a long-finished succeeded/failed
+ * row forever (Queue.enqueue is ON CONFLICT DO NOTHING), so edits would never
+ * re-extract and a backfill would falsely report work enqueued.
+ */
+export function chronicleExtractJobId(sourceId: string, page: Parameters<typeof chronicleJudgeKey>[0], now: Date = new Date()): string {
+  return `chronicle_extract:${sourceId}:${page.slug}:${chronicleJudgeKey(page, now).slice(0, 16)}`;
 }
 
 /**
@@ -353,7 +368,11 @@ export async function runChronicleExtract(
     new Date(opts.now ?? Date.now()),
   );
   const invite = projected && !(await hasJudgedAutoEvents(storage, opts.slug, sourceId)) ? projected : null;
-  if (invite && "pending" in invite) return { slug: opts.slug, status: "skipped", events_written: 0, reason: "invite_not_ended" };
+  if (invite && "pending" in invite) {
+    // The job that runs once the meeting is over carries the ended-phase id, so it is a new row, not this one.
+    return { slug: opts.slug, status: "skipped", events_written: 0, reason: "invite_not_ended",
+      retry: { at: invite.until, job_id: chronicleExtractJobId(sourceId, { ...page, slug: opts.slug }, new Date(invite.until)) } };
+  }
   let result: ChronicleJudgeResult;
   if (invite) {
     result = { events: [invite.proposal] };

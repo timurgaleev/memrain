@@ -34,6 +34,7 @@ import {
   ON_WRITE_WRITER,
   extractFactsForPage,
   factsExtractionEnabled,
+  factsExtractionOptedOut,
 } from "../facts-extract.ts";
 import { resolveFactsModel } from "../llm/sonnet.ts";
 import type { SonnetFn } from "../llm/sonnet.ts";
@@ -42,7 +43,7 @@ import { filterWorthwhile, worthGateEnabled } from "../synthesis/worth-gate.ts";
 import { phaseFenceCheck } from "./phase-context.ts";
 import { quarantineFilterFragment } from "../quarantine.ts";
 import { PAGE_MIRROR_PATH_SQL, notSynthesizedPageSql, pageSourcePath } from "../page-index.ts";
-import { recordSynthFailure, clearSynthFailure } from "../synthesis/synth-failures.ts";
+import { recordSynthFailure, recordSynthSkip, clearSynthFailure } from "../synthesis/synth-failures.ts";
 
 export interface ConversationFactsBackfillOptions {
   /** Cap on pages processed per run. Default 50. */
@@ -200,9 +201,17 @@ async function backfillRun(
   const result: ConversationFactsBackfillResult = { ...empty, ran: true };
   let spent = 0;
 
+  // An opted-out draft is parked on this body without any call, the worth gate's
+  // included; saving it without the line re-opens it.
+  let pages = rows.rows;
+  for (const page of pages) {
+    if (!factsExtractionOptedOut(page.markdown_body)) continue;
+    await recordSynthSkip(storage.engine(), { docId: pageSourcePath(page.slug, page.source_id), phase: "facts-backfill", contentHash: page.content_hash, model });
+  }
+  pages = pages.filter((p) => !factsExtractionOptedOut(p.markdown_body));
+
   // Worth gate (opt-in): screen out low-signal pages with the cached Haiku
   // judge BEFORE any Sonnet spend. Fail-open — gate errors keep the page.
-  let pages = rows.rows;
   if (opts.worthGate ?? worthGateEnabled()) {
     const gate = await filterWorthwhile(
       storage.engine(),
