@@ -6,6 +6,39 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.6.0] — 2026-11-22
+
+A connectors release. Gmail learns your send-as addresses and can reach further back on request, Fireflies waits for a meeting's summary, Slack keeps a channel that turned private private, conversation facts survive model refusals, and connector pages can feed facts under their own opt-in cap.
+
+### Added
+
+- Gmail send-as aliases count as the account's own addresses. Mail to a verified alias can owe you a reply and never becomes a person page. The list is read at most once a day. A failed or malformed answer keeps the stored list, and a pending (unverified) alias never counts. No existing page is rewritten.
+- `memrain connectors gmail-widen <account-id> --days N` backfills older mail. Without `--apply` it is a dry run that prints counts and a plan hash. `--apply --plan-hash H` refuses a stale hash or a listing over 200 pages. Only this command moves Gmail's own window (`gmail_history_days`); the shared `history_days`, which the calendar picker saves, never widens Gmail.
+- Opt-in paid facts from connector pages (migration 196). The new `connector-facts` cycle phase is off for every account. `memrain connectors facts <account-id>` is a dry run with a cost estimate. `--enable --cap USD` turns it on, but refuses unless the write gate quarantines outside rows, a brain budget is set and the facts would land at the external tier. `--disable` turns it off. `--forget [--export F]` forgets only that account's facts after writing a 0600 export.
+  - Each account spends under its own daily cap.
+  - A page shared by two accounts goes to the lowest-id enabled account.
+  - The write gate's decision is made once per page, so a gate error stores nothing from that page.
+  - A page that fails three times at the same body and model is skipped until it changes.
+  - The model is `MEMRAIN_CONNECTOR_FACTS_MODEL`, Haiku 5.5 by default.
+- `memrain import --calls --dir D --source S [--apply --plan-hash H]` imports call transcripts as redacted `meeting` pages at the external tier.
+  - Each file is imported once. A changed file is reported and its page is never overwritten.
+  - A deliberately deleted call is not brought back.
+  - Linked files and folders are refused, and error messages carry no paths.
+  - No facts are extracted from these pages.
+
+### Changed
+
+- `extract-conversation-facts` retries a refused turn once as two halves and reports `declinedWindows` and `keptQuiet`. A budget that runs out mid-retry keeps what was written. New keep-secret phrases are recognised in English and Russian, and messages from system, tool and assistant speakers never count as a keep-secret claim.
+- The facts backfill parks a page the model partly refused and retries it after the backoff, instead of marking it read.
+- Fireflies stores a meeting once its summary arrives, or after 48 hours. A held meeting is fetched again only when its summary status changes. One that keeps failing is dropped from the queue after three tries and held on the account. The transcript listing repeats, at most three passes, until a pass finds nothing new.
+- When a Slack channel turns private, or the bot can no longer see it, its older stored days are marked private from the stored copy, without a Slack call. Up to 200 days are marked per run, and the work continues on the next run. `connectors status` warns when private pages sit in a source that is not owner-only.
+
+### Upgrading
+
+- Migration 196 adds two columns to `connector_accounts` with constant defaults (metadata only).
+- Don't roll back below this release while a Gmail widen backfill is open. Remove `gmail_history_days` from the account first.
+- Rolling back below this release while Fireflies meetings are held back makes the older release re-read 90 days of transcripts once.
+
 ## [2.5.0] — 2026-11-22
 
 A release about search quality and memory headroom. Embeddings move to half precision, code gets vectors without crowding notes out of ordinary search, search learns page twins, alias fan-out, relative time and multi-hop relations, and the trust model closes owner-only sources and guards remote forgets.

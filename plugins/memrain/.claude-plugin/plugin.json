@@ -1,6 +1,6 @@
 {
   "name": "memrain",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "description": "Connect Claude Code to your Memrain memory over MCP: search, read and write pages, facts and timelines shared across sessions, plus a small set of skills for working with it.",
   "author": { "name": "Timur Galeev" },
   "license": "MIT",
