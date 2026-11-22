@@ -22,10 +22,11 @@
  * external tier (an owner-tier fact passes the gate unread). The phase runs
  * only with MEMRAIN_FACTS_EXTRACTION on; the output says when it is off.
  *
- * `--forget` withdraws, through the operator forget path, the facts this
- * account's extraction wrote (`written_by = connector-facts:<account>`) in its
- * source, after exporting them to a 0600 JSON file. A withdrawn claim stays
- * withdrawn: a later extraction does not write it again.
+ * `--forget` forgets the facts this account's extraction wrote (`written_by =
+ * connector-facts:<account>`) in its source, after exporting them to a 0600
+ * JSON file. Only those rows: the same claim held by another writer stays, and
+ * the claim is withdrawn (a later extraction does not write it again) only when
+ * no other writer holds it.
  *
  * Exit codes: 0 done or previewed; 1 refused or a usage error.
  */
@@ -279,7 +280,7 @@ async function forgetAccountFacts(
   writeFileSync(path, `${JSON.stringify({ account_id: account.id, source_id: account.source_id, written_by: writer, facts: rows }, null, 2)}\n`, { mode: 0o600, flag: "wx" });
   let forgotten = 0;
   for (const row of rows) {
-    const r = await forgetFact(storage, Number(row.id), { reason: `connector facts of account ${account.id} withdrawn` }, [account.source_id]);
+    const r = await forgetFact(storage, Number(row.id), { reason: `connector facts of account ${account.id} withdrawn`, onlyWriter: writer }, [account.source_id]);
     if (r.forgotten) forgotten += 1;
   }
   if (opts.json) console.log(JSON.stringify({ ok: true, applied: true, account_id: account.id, facts: rows.length, forgotten, export: path }));

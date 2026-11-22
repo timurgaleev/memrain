@@ -17,6 +17,9 @@ const CUE = /\b(?:keep (?:this|it|that) (?:quiet|between us|to yourself|under wr
  */
 const EXTRA_CUE = /(?<![\p{L}\p{N}])(?:keep (?:this|it|that) (?:a )?secret|(?:this is|it'?s|that'?s) (?:strictly )?confidential|\u0434\u0435\u0440\u0436\u0438(?:\u0442\u0435)? (?:\u044D\u0442\u043E )?\u0432 \u0441\u0435\u043A\u0440\u0435\u0442\u0435|\u043D\u0438\u043A\u043E\u043C\u0443 \u043D\u0435 (?:\u0433\u043E\u0432\u043E\u0440\u0438|\u0440\u0430\u0441\u0441\u043A\u0430\u0437\u044B\u0432\u0430\u0439)(?:\u0442\u0435)?)(?![\p{L}\p{N}])|^(?:\u0442\u043E\u043B\u044C\u043A\u043E |\u0441\u0442\u0440\u043E\u0433\u043E )?\u043C\u0435\u0436\u0434\u0443 \u043D\u0430\u043C\u0438(?=\s*(?:[,.:;!]|$|\u043D\u043E(?![\p{L}\p{N}])))/iu;
 
+/** Transcript roles that are not a person speaking. */
+const MACHINE_SPEAKERS: ReadonlySet<string> = new Set(["assistant", "system", "tool", "developer", "function"]);
+
 /** The earliest keep-quiet cue in a sentence, from either list. */
 function cueIn(sentence: string): RegExpExecArray | null {
   const a = CUE.exec(sentence);
@@ -37,10 +40,11 @@ function words(text: string): Set<string> {
  * The word sets of the claims a window's keep-quiet sentences name: the words
  * after the cue, else the rest of its sentence, else the neighbouring sentence
  * of the same message that the cue refers to.
- * An assistant message ("I will keep that quiet") names no claim.
+ * An assistant message ("I will keep that quiet") names no claim, nor does
+ * any other machine role's (system, tool, developer, function).
  */
 export function keepQuietClaims(messages: ReadonlyArray<{ speaker: string; text: string }>): Set<string>[] {
-  return messages.filter((message) => message.speaker.trim().toLowerCase() !== "assistant").flatMap((message) => {
+  return messages.filter((message) => !MACHINE_SPEAKERS.has(message.speaker.trim().toLowerCase())).flatMap((message) => {
     const sentences = message.text.split(/(?<=[.!?])\s+|\n+/).map((sentence) => sentence.trim().replace(/^[^\p{L}\p{N}]+/u, "")).filter(Boolean);
     return sentences.flatMap((sentence, i) => {
       const cue = cueIn(sentence);

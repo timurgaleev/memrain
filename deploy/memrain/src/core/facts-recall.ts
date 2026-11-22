@@ -146,6 +146,12 @@ export interface ForgetFactInput {
   writerTier?: TrustTier;
   /** The credential asking, recorded on a proposal. */
   principal?: string | null;
+  /**
+   * Forget this row only, as this writer's copy: no other copy of the claim
+   * is swept, and the claim is withdrawn only when no live copy by another
+   * writer remains in the source.
+   */
+  onlyWriter?: string;
 }
 
 export interface ForgetFactResult {
@@ -217,7 +223,11 @@ export async function forgetFact(
         if (contested) return { contested };
       }
     }
-    return forgetInTx(tx, factId, { reason, cause, sourceIds, world, ...(input.writerTier !== undefined ? { writerTier: input.writerTier } : {}) });
+    return forgetInTx(tx, factId, {
+      reason, cause, sourceIds, world,
+      ...(input.writerTier !== undefined ? { writerTier: input.writerTier } : {}),
+      ...(input.onlyWriter !== undefined ? { onlyWriter: input.onlyWriter } : {}),
+    });
   });
   let flipped: Awaited<ReturnType<typeof attempt>>;
   try {
@@ -269,6 +279,8 @@ export async function forgetInTx(
     reason: string | null; cause: ForgetCause; sourceIds?: string[]; world?: string;
     /** A remote caller's tier: the duplicate sweep never retires a copy more trusted than it. */
     writerTier?: TrustTier;
+    /** See ForgetFactInput.onlyWriter. */
+    onlyWriter?: string;
   },
 ): Promise<{ duplicates: number; retired: boolean } | null> {
   const { reason, cause, sourceIds } = opts;
@@ -309,6 +321,27 @@ export async function forgetInTx(
     const hit = upd.rows[0] ?? retired?.rows[0];
     if (!hit) return null;
     if (cause !== "forget" || hit.dimension !== null) return { duplicates: 0, retired: false };
+    if (opts.onlyWriter !== undefined) {
+      // Under the exclusive lock no other writer's copy can commit unseen.
+      await lockWithdrawals(tx, [hit.source_id]);
+      const others = await tx.query(
+        `SELECT 1 FROM entity_facts
+          WHERE source_id = $1 AND entity_slug = $2 AND memrain_fact_claim_key(fact) = $3
+            AND id <> $4 AND forgotten_at IS NULL AND written_by IS DISTINCT FROM $5
+          LIMIT 1`,
+        [hit.source_id, hit.entity_slug, hit.claim_key, factId, opts.onlyWriter],
+      );
+      if (others.rows.length === 0) {
+        await tx.query(
+          `INSERT INTO fact_withdrawals
+             (source_id, visibility, entity_slug, claim_key, first_fact_id, reason)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT DO NOTHING`,
+          [hit.source_id, hit.visibility, hit.entity_slug, hit.claim_key, factId, reason],
+        );
+      }
+      return { duplicates: 0, retired: !upd.rows[0] };
+    }
     await tx.query(
       `INSERT INTO fact_withdrawals
          (source_id, visibility, entity_slug, claim_key, first_fact_id, reason)

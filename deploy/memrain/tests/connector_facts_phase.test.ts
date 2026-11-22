@@ -214,6 +214,8 @@ describe("connector-facts phase", () => {
     expect(await facts()).toEqual([]);
     expect(r.errors.map((e) => e.slug)).toEqual(["mail/mixed"]);
     expect(r.errors[0]!.message).toMatch(/^write gate:/);
+    // The calls were paid for even though nothing was written.
+    expect(r.accounts[0]!.spentUsd).toBeGreaterThan(0);
     const parked = await storage.engine().query<{ phase: string }>("SELECT phase FROM synth_failures");
     expect(parked.rows).toEqual([{ phase: "connector-facts" }]);
     expect((await storage.engine().query("SELECT 1 FROM facts_backfill_scans")).rows).toHaveLength(0);
@@ -237,6 +239,95 @@ describe("connector-facts phase", () => {
     expect(second.users).toHaveLength(1);
     expect(await facts()).toEqual([]);
     expect(r.errors[0]!.message).toMatch(/^write gate:/);
+  });
+
+  // Value: protects=the gate decision taken for the whole batch before any write is the one the writes use, so a
+  // transient gate failure on fact 2 cannot leave fact 1 stored alone; fails_when=addFact assesses each fact again
+  // while writing; why_new=review found the pre-check and the write-time gate run at different times;
+  // seam=the engine's query method, failing the gate's tier read the way a dropped connection would.
+  it("writes the batch on the gate decision it took up front: a gate read failing at fact 2 leaves no half batch", async () => {
+    await account(ACCOUNT_A, "mail", { enabled: true, cap: 1 });
+    await page([ACCOUNT_A], "mail", "mail/two-released");
+    const ONE = `${HOSTILE} First note.`;
+    const TWO = `${HOSTILE} Second note.`;
+    const both = () => [{ fact: ONE, entity: "companies/acme-example" }, { fact: TWO, entity: "companies/acme-example" }];
+    await connectorFactsPhase(storage, { sonnetFn: model(both).fn });
+    await storage.engine().query("UPDATE write_gate_row_holds SET status = 'released', decided_at = now(), decided_by = 'operator'");
+    await putPage(storage, { slug: "mail/two-released", type: "connector-mail", allowAdHocType: true, markdown_body: `${BODY}${BODY}A later reply.`, source_id: "mail" });
+    const engine = storage.engine();
+    const realQuery = engine.query.bind(engine);
+    let tierReads = 0;
+    // The page's tier check and the two facts' up-front checks are reads 1-3; a fifth would be fact 2 assessed again.
+    engine.query = (async (text: string, params?: unknown[]) => {
+      if (text.includes("$4::text AS source_markdown_slug") && ++tierReads === 5) throw new Error("connection reset");
+      return realQuery(text, params);
+    }) as typeof engine.query;
+    try {
+      const r = await connectorFactsPhase(storage, { sonnetFn: model(both).fn });
+      expect(r.errors).toEqual([]);
+    } finally {
+      engine.query = realQuery;
+    }
+    expect((await facts()).map((f) => f.fact).sort()).toEqual([ONE, TWO]);
+    expect(tierReads).toBe(3);
+  });
+
+  // Value: protects=a run whose account lock was taken over stops before paying for another page; fails_when=the
+  // lock is never refreshed or checked during the run; why_new=review; seam=the lock row deleted mid-run.
+  it("stops when it loses the account's lock mid-run", async () => {
+    await account(ACCOUNT_A, "mail", { enabled: true, cap: 1 });
+    for (let i = 0; i < 3; i++) await page([ACCOUNT_A], "mail", `mail/thread-${i}`);
+    const { fn, users } = model((user) => {
+      void storage.engine().query("DELETE FROM worker_lock WHERE id LIKE 'connector-facts:%'");
+      return oneFact(user);
+    });
+    const r = await connectorFactsPhase(storage, { sonnetFn: fn });
+    expect(users).toHaveLength(1);
+    expect(r.accounts[0]!.locked).toBe(true);
+  });
+
+  // Value: protects=a page parked by the extraction routine is not parked a second time in the same run, which
+  // doubled its backoff; fails_when=both the routine and the phase record the failure; why_new=review.
+  it("parks a page once per run when the model declined part of it and a fact failed to write", async () => {
+    await account(ACCOUNT_A, "mail", { enabled: true, cap: 1 });
+    const quiet = "Broken Example reviewed the budget for the quarter and agreed on the plan. ".repeat(6);
+    const touchy = "SENSITIVE PASSAGE the model will not read. ".repeat(10);
+    await page([ACCOUNT_A], "mail", "mail/declined", `${quiet}\n\n${touchy}`);
+    await storage.engine().query("ALTER TABLE entity_facts ADD CONSTRAINT test_refuse_broken CHECK (entity_slug <> 'companies/broken-example')");
+    const users: string[] = [];
+    const fn: SonnetFn = async (input) => trackedInvoke(
+      { operation: "facts_extract", model: HAIKU, worstCase: { input: input.system + input.user, maxOutputTokens: input.maxTokens }, maxAttempts: 1 },
+      async (meter) => {
+        users.push(input.user);
+        const usage = { inputTokens: 2000, outputTokens: 500 };
+        meter.report(usage);
+        if (input.user.includes("SENSITIVE PASSAGE")) return { text: "", modelId: HAIKU, usage, stopReason: "content_filtered" };
+        return { text: JSON.stringify({ facts: [{ fact: "Broken Example agreed on the plan", entity: "companies/broken-example", kind: "fact", confidence: 0.9, notability: "high" }] }), modelId: HAIKU, usage };
+      },
+    );
+    await connectorFactsPhase(storage, { sonnetFn: fn });
+    expect(users).toHaveLength(3);
+    const parked = await storage.engine().query<{ attempts: number }>("SELECT attempts FROM synth_failures WHERE phase = 'connector-facts'");
+    expect(parked.rows.map((r) => Number(r.attempts))).toEqual([1]);
+  });
+
+  // Value: protects=a page that fails the same way at the same body stops costing money after three tries;
+  // fails_when=the backoff retries it forever; why_new=review (bounded retries, as a failed batch is retried at most
+  // three times per page version elsewhere); seam=the backoff expired by hand between runs.
+  it("gives up on a page after three failed tries at the same body, until the page changes", async () => {
+    await account(ACCOUNT_A, "mail", { enabled: true, cap: 1 });
+    await page([ACCOUNT_A], "mail", "mail/always-fails");
+    await storage.engine().query("ALTER TABLE write_gate_row_holds ADD CONSTRAINT test_refuse_beta CHECK (slug <> 'companies/beta-example')");
+    const { fn, users } = model(() => [{ fact: HOSTILE, entity: "companies/beta-example" }]);
+    for (let run = 0; run < 4; run++) {
+      await connectorFactsPhase(storage, { sonnetFn: fn });
+      await storage.engine().query("UPDATE synth_failures SET next_eligible_at = now() - interval '1 minute' WHERE kind <> 'skipped'");
+    }
+    expect(users).toHaveLength(3);
+    expect((await storage.engine().query<{ kind: string }>("SELECT kind FROM synth_failures WHERE phase = 'connector-facts'")).rows).toEqual([{ kind: "skipped" }]);
+    await putPage(storage, { slug: "mail/always-fails", type: "connector-mail", allowAdHocType: true, markdown_body: `${BODY}${BODY}Edited.`, source_id: "mail" });
+    await connectorFactsPhase(storage, { sonnetFn: fn });
+    expect(users).toHaveLength(4);
   });
 
   it("parks a page whose facts failed to write instead of paying for it again next tick", async () => {

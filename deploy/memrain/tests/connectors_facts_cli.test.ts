@@ -157,4 +157,38 @@ describe("connectors facts --forget", () => {
     const live = (await storage.engine().query<{ fact: string }>("SELECT fact FROM entity_facts WHERE forgotten_at IS NULL ORDER BY fact")).rows.map((r) => r.fact);
     expect(live).toEqual(["Acme Example hired a CFO", "Acme Example opens a Lisbon office"]);
   });
+
+  // Value: protects=forgetting one account's facts never withdraws a claim another account or the owner also holds;
+  // fails_when=the forget sweeps other copies of the claim or files a withdrawal that blocks their writes;
+  // why_new=the operator forget path sweeps every copy of a claim in its source; seam=the CLI over PGLite.
+  it("leaves the same claim held by another account and by the owner alone, and withdraws nothing", async () => {
+    const CLAIM = "Acme Example signs the lease in May";
+    const at = { entity_slug: "companies/acme-example", fact: CLAIM, source_id: "mail" };
+    await addFact(storage, { ...at, source_slug: "mail/one", written_by: connectorFactsWriter(A) });
+    await addFact(storage, { ...at, source_slug: "mail/two", written_by: connectorFactsWriter(B) });
+    await addFact(storage, { ...at, written_by: "operator" });
+
+    expect(await runConnectorFacts({ accountId: A, forget: true, apply: true, exportPath: join(tmp, "a.json"), storage, json: true })).toBe(0);
+    expect(lastJson()).toMatchObject({ facts: 1, forgotten: 1 });
+    const rows = (await storage.engine().query<{ written_by: string; live: boolean }>(
+      "SELECT written_by, forgotten_at IS NULL AS live FROM entity_facts ORDER BY written_by")).rows;
+    expect(rows).toEqual([
+      { written_by: connectorFactsWriter(A), live: false },
+      { written_by: connectorFactsWriter(B), live: true },
+      { written_by: "operator", live: true },
+    ]);
+    expect((await storage.engine().query("SELECT 1 FROM fact_withdrawals")).rows).toHaveLength(0);
+    // Both can still write the claim (a third writer stands in for any later write).
+    const again = await addFact(storage, { ...at, written_by: "facts-extract" });
+    expect(again.withdrawn).toBeUndefined();
+    expect(again.inserted).toBe(true);
+  });
+
+  it("withdraws a claim only this account held, so its next run does not write it back", async () => {
+    const at = { entity_slug: "companies/acme-example", fact: "Acme Example closes the Porto office", source_id: "mail" };
+    await addFact(storage, { ...at, source_slug: "mail/one", written_by: connectorFactsWriter(A) });
+    expect(await runConnectorFacts({ accountId: A, forget: true, apply: true, exportPath: join(tmp, "a.json"), storage })).toBe(0);
+    expect((await storage.engine().query("SELECT 1 FROM fact_withdrawals")).rows).toHaveLength(1);
+    expect((await addFact(storage, { ...at, written_by: connectorFactsWriter(A) })).withdrawn).toBe(true);
+  });
 });

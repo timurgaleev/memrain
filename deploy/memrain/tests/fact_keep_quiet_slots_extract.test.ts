@@ -61,8 +61,10 @@ describe("keep-quiet matching", () => {
     expect(hits("Acme Example is joining Beta Example. It's confidential.")).toBe(1);
     expect(hits("Keep this secretary posted: Acme Example is joining Beta Example.")).toBe(0);
     expect(hits("Put the confidential info in the contract template for Acme Example and Beta Example.")).toBe(0);
-    // The same request from the assistant names no claim.
-    expect(hits("Please keep this secret: Acme Example is joining Beta Example.", JOIN, "assistant")).toBe(0);
+    // The same request from the assistant, or from another machine role, names no claim.
+    for (const role of ["assistant", "System", "tool", "developer"]) {
+      expect(hits("Please keep this secret: Acme Example is joining Beta Example.", JOIN, role)).toBe(0);
+    }
 
     // "Ivan is moving to Yandex", Russian.
     const IVAN = "\u0418\u0432\u0430\u043D \u043F\u0435\u0440\u0435\u0445\u043E\u0434\u0438\u0442 \u0432 \u042F\u043D\u0434\u0435\u043A\u0441";

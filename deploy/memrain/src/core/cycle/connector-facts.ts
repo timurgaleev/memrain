@@ -41,7 +41,7 @@ import { PAGE_MIRROR_PATH_SQL, notSynthesizedPageSql, pageSourcePath } from "../
 import { quarantineFilterFragment } from "../quarantine.ts";
 import { recordSynthFailure, recordSynthSkip } from "../synthesis/synth-failures.ts";
 import { effectiveRowTier, resolveRowGateMode, RowGateError } from "../write-gate-rows.ts";
-import { acquireWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
+import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
 import { extractAndRecordPage, type FactsPageRow } from "./conversation-facts-backfill.ts";
 import { phaseFenceCheck } from "./phase-context.ts";
 
@@ -58,6 +58,9 @@ export const CONNECTOR_FACTS_PHASE = "connector-facts";
 export const CONNECTOR_FACTS_MAX_CAP_USD = 20;
 
 const LOCK_TTL_SEC = 900;
+
+/** Failed reads of one page at one body and model before it is given up on until it changes. */
+export const MAX_PAGE_ATTEMPTS = 3;
 
 /** The writer stamped on an account's facts; `--forget` selects by it. */
 export function connectorFactsWriter(accountId: string): string {
@@ -266,10 +269,41 @@ async function runAccount(
     out.locked = true;
     return out;
   }
+  const runStartedAt = now();
+  // A failed read parks the page once, and after MAX_PAGE_ATTEMPTS failures at
+  // the same body and model it is given up on until the page changes.
+  const giveUpIfSpent = async (docId: string, page: FactsPageRow): Promise<void> => {
+    const r = await engine.query<{ attempts: number | string }>(
+      `SELECT attempts FROM synth_failures
+        WHERE doc_id = $1 AND phase = $2 AND content_hash = $3 AND model = $4 AND kind <> 'skipped'`,
+      [docId, CONNECTOR_FACTS_PHASE, page.content_hash, model],
+    );
+    if (Number(r.rows[0]?.attempts ?? 0) >= MAX_PAGE_ATTEMPTS) {
+      await recordSynthSkip(engine, { docId, phase: CONNECTOR_FACTS_PHASE, contentHash: page.content_hash, model });
+    }
+  };
+  const park = async (docId: string, page: FactsPageRow): Promise<void> => {
+    await recordSynthFailure(engine, { docId, phase: CONNECTOR_FACTS_PHASE, contentHash: page.content_hash, model, kind: "llm_error" });
+    await giveUpIfSpent(docId, page);
+  };
+  // The lock is refreshed while a page is being read too, so a slow page
+  // cannot let it lapse; a refresh that finds it taken stops the run.
+  let lockLost = false;
+  const beat = setInterval(() => {
+    heartbeatWorkerLock(engine, lockId, holder).then((held) => {
+      if (!held) lockLost = true;
+    }, () => {});
+  }, (LOCK_TTL_SEC * 1000) / 3);
+  beat.unref?.();
   try {
     const pages = await eligibleConnectorPages(engine, account, model, opts.maxPagesPerAccount ?? CONNECTOR_FACTS_PAGE_LIMIT);
     for (const page of pages) {
       await phaseFenceCheck();
+      // Another run took the account over: stop before paying for another page.
+      if (lockLost || !(await heartbeatWorkerLock(engine, lockId, holder))) {
+        out.locked = true;
+        break;
+      }
       const spent = await daySpendUsd(engine, client, now());
       if (spent >= account.cap_usd) {
         out.capReached = true;
@@ -301,7 +335,6 @@ async function runAccount(
             gateOnError: "throw",
             notabilityFilter: "high-only",
           })));
-        out.spentUsd += r.result.spentUsd;
         out.factsWritten += r.result.factsWritten;
         out.pagesProcessed += 1;
         if (r.recorded === "zero_yield") out.zeroYieldRecorded += 1;
@@ -313,24 +346,30 @@ async function runAccount(
         }
         // The phase runs every tick: a page left open by a failed call or a
         // failed write is parked, so it is not paid for again until the backoff
-        // ends (an unreadable answer the routine parked already).
+        // ends. One the routine parked already is not parked twice.
         const absorbed = r.result.absorbed;
-        if (r.result.factsFailed > 0 || (absorbed !== null && absorbed !== "parse_failure" && absorbed !== "output_truncated")) {
-          await recordSynthFailure(engine, { docId, phase: CONNECTOR_FACTS_PHASE, contentHash: page.content_hash, model, kind: "llm_error" });
-          if (absorbed !== null && absorbed !== "parse_failure" && absorbed !== "output_truncated") {
-            errors.push({ slug: page.slug, message: `extraction absorbed: ${absorbed}` });
-          }
-        }
+        const failedCall = absorbed !== null && absorbed !== "parse_failure" && absorbed !== "output_truncated";
+        if (failedCall) errors.push({ slug: page.slug, message: `extraction absorbed: ${absorbed}` });
+        if (r.parked) await giveUpIfSpent(docId, page);
+        else if (r.result.factsFailed > 0 || failedCall) await park(docId, page);
       } catch (e) {
         // A gate that cannot assess the batch stores none of it: the page is
         // parked and asked again after the backoff.
-        await recordSynthFailure(engine, { docId, phase: CONNECTOR_FACTS_PHASE, contentHash: page.content_hash, model, kind: "llm_error" });
+        await park(docId, page);
         errors.push({ slug: page.slug, message: e instanceof RowGateError ? `write gate: ${e.message}` : e instanceof Error ? e.message : String(e) });
       }
     }
   } finally {
+    clearInterval(beat);
     await releaseWorkerLock(engine, lockId, holder);
   }
-  out.spentUsd = Number(out.spentUsd.toFixed(6));
+  // What the ledger booked to the account since the run started, a page whose
+  // writes failed included (by time, not by UTC day, so midnight loses nothing).
+  const booked = await engine.query<{ cents: string | number | null }>(
+    `SELECT COALESCE(SUM(spend_cents - COALESCE(overrun_cents, 0)), 0) AS cents
+       FROM mcp_spend_log WHERE client_id = $1 AND created_at >= $2::timestamptz`,
+    [client, runStartedAt.toISOString()],
+  );
+  out.spentUsd = Number((Number(booked.rows[0]?.cents ?? 0) / 100).toFixed(6));
   return out;
 }

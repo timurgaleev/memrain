@@ -159,6 +159,12 @@ export interface AddFactInput {
    * assess throws RowGateError instead of being stored (write-gate-rows.ts).
    */
   gate_on_error?: "throw";
+  /**
+   * `pass`: the caller already ran `rowHoldVerdict` on this row as part of a
+   * batch it writes all-or-nothing, and the gate let it through; that decision
+   * stands and the gate is not asked again mid-batch.
+   */
+  gate_precheck?: "pass";
 }
 
 /** Allowed `kind` values — mirrors the migration 037 CHECK constraint. */
@@ -755,7 +761,7 @@ export async function addFact(
   }
   // In quarantine mode an instruction-like claim from an agent or an outside
   // source is held for the owner instead, before the paid dedup path.
-  const held = await holdIfQuarantined(storage.engine(), {
+  const held = input.gate_precheck === "pass" ? null : await holdIfQuarantined(storage.engine(), {
     table: "entity_facts",
     fields: [{ field: "fact", text: fact }, { field: "context", text: factContext ?? "" }],
     slug: input.entity_slug,

@@ -837,9 +837,10 @@ export async function writeExtractedFacts(
     planned.push({ f, slug, exact, validFrom });
   }
   // Before the paid slot call: a batch the gate cannot assess stops here.
-  const order = opts.gateOnError === "throw"
+  const gated = opts.gateOnError === "throw"
     ? await gateHeldFirst(storage, planned, { sourceId: opts.sourceId ?? "default", sourceSlug: opts.sourceSlug ?? null, principal: opts.principal ?? null })
-    : planned.map((_, i) => i);
+    : null;
+  const order = gated?.order ?? planned.map((_, i) => i);
   const slots = opts.tagSlots ? await slotsFor(storage, planned, opts.sourceId ?? "default", opts.tagSlots) : new Map();
   for (const i of order) {
     const { f, slug, validFrom } = planned[i]!;
@@ -877,6 +878,9 @@ export async function writeExtractedFacts(
         written_by: opts.writtenBy ?? "facts-extract",
         ...(opts.principal ? { written_by_principal: opts.principal } : {}),
         ...(opts.gateOnError ? { gate_on_error: opts.gateOnError } : {}),
+        // The up-front decision binds: a fact the gate passed is not assessed
+        // again, so a later failure cannot strand the facts written before it.
+        ...(gated?.passed.has(i) ? { gate_precheck: "pass" as const } : {}),
       });
       if (r.inserted) written += 1;
       if (r.inserted && r.id !== null) factIds.push(r.id);
@@ -896,13 +900,15 @@ export async function writeExtractedFacts(
  * first, with nothing recorded, so a fact the gate cannot assess stops the
  * batch before any of it is stored (the RowGateError propagates). The facts
  * the gate will hold go first: recording a hold is the one gate step that
- * writes, so if it fails, no fact of the batch has been inserted yet.
+ * writes, so if it fails, no fact of the batch has been inserted yet. The
+ * facts it passes are written on that decision (`passed`), never assessed
+ * again, so a gate read failing later cannot strand the ones before it.
  */
 async function gateHeldFirst(
   storage: Storage,
   planned: ReadonlyArray<{ f: ExtractedFact; slug: string }>,
   at: { sourceId: string; sourceSlug: string | null; principal: string | null },
-): Promise<number[]> {
+): Promise<{ order: number[]; passed: ReadonlySet<number> }> {
   const held: number[] = [];
   const passed: number[] = [];
   for (const [i, p] of planned.entries()) {
@@ -913,7 +919,7 @@ async function gateHeldFirst(
     );
     (verdict === "hold" ? held : passed).push(i);
   }
-  return [...held, ...passed];
+  return { order: [...held, ...passed], passed: new Set(passed) };
 }
 
 /** Resolver stages that name an existing page exactly (no prefix, name-variant or fuzzy guess). */

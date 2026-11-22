@@ -296,6 +296,8 @@ export interface ExtractPageOutcome {
   errors: string[];
   /** The watermark written for the body read, or null when the page stays open. */
   recorded: "zero_yield" | "extracted" | null;
+  /** The page was parked under `phase` by this read (an unreadable answer or a declined span). */
+  parked: boolean;
 }
 
 /**
@@ -327,21 +329,19 @@ export async function extractAndRecordPage(
   // "has a written_by row" marker above never fires and the next run pays
   // for it again. Surface it (the cycle marks the phase `warn`) instead of
   // letting that loop bill silently forever.
-  if (r.absorbed === "parse_failure" || r.absorbed === "output_truncated") {
-    await recordSynthFailure(storage.engine(), {
-      docId, phase: opts.phase, contentHash: page.content_hash, model: opts.model,
-      kind: r.absorbed === "output_truncated" ? "truncated" : "unparseable",
-    });
-    errors.push(`extraction absorbed: ${r.absorbed}`);
-  }
+  if (r.absorbed === "parse_failure" || r.absorbed === "output_truncated") errors.push(`extraction absorbed: ${r.absorbed}`);
   // A span the model declined leaves the page unfinished: it is parked
   // like a failed read and asked again after the backoff, never memoized.
   const declined = r.declinedRanges?.length ?? 0;
-  if (declined > 0) {
+  if (declined > 0) errors.push(`the model declined ${declined} span(s); retried after the backoff`);
+  // Parked once per read, whichever of the two it was.
+  const parkKind = r.absorbed === "output_truncated" ? "truncated" as const
+    : r.absorbed === "parse_failure" ? "unparseable" as const
+      : declined > 0 ? "llm_error" as const : null;
+  if (parkKind !== null) {
     await recordSynthFailure(storage.engine(), {
-      docId, phase: opts.phase, contentHash: page.content_hash, model: opts.model, kind: "llm_error",
+      docId, phase: opts.phase, contentHash: page.content_hash, model: opts.model, kind: parkKind,
     });
-    errors.push(`the model declined ${declined} span(s); retried after the backoff`);
   }
   if (r.absorbed === null && declined === 0) await clearSynthFailure(storage.engine(), docId, opts.phase);
   // Facts that failed to write were never persisted: the page is not
@@ -349,7 +349,7 @@ export async function extractAndRecordPage(
   if (r.factsFailed > 0) errors.push(`${r.factsFailed} extracted fact(s) failed to write`);
   // A clean read is watermarked against the body it read, so an edit
   // re-opens the page; `zero_yield` when it wrote nothing new.
-  if (r.absorbed !== null || r.factsFailed > 0 || declined > 0) return { result: r, errors, recorded: null };
+  if (r.absorbed !== null || r.factsFailed > 0 || declined > 0) return { result: r, errors, recorded: null, parked: parkKind !== null };
   const outcome = r.factsWritten === 0 ? "zero_yield" : "extracted";
   await storage.engine().query(
     `INSERT INTO facts_backfill_scans
@@ -358,5 +358,5 @@ export async function extractAndRecordPage(
      ON CONFLICT DO NOTHING`,
     [page.source_id, page.slug, page.content_hash, FACTS_EXTRACT_VERSION, outcome, r.factsSkipped, opts.model],
   );
-  return { result: r, errors, recorded: outcome };
+  return { result: r, errors, recorded: outcome, parked: false };
 }

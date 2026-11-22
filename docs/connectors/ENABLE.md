@@ -250,8 +250,9 @@ meeting source, so its facts are written at the external tier the gate
 checks. The cap is at most $20 a day. The phase also needs
 `MEMRAIN_FACTS_EXTRACTION=1`. `--forget --apply` writes the account's facts to
 a 0600 JSON file (`--export F`, else one in the working directory) and then
-withdraws them; a withdrawn claim is not written again by a later run, and an
-identical claim another writer stored in the same source is withdrawn with it.
+forgets them. Only that account's rows are touched: the same claim held by
+another account or by you stays, and a claim is withdrawn (not written again by
+a later run) only when no other writer holds it.
 
 ## Optional: the notification webhook secret
 
