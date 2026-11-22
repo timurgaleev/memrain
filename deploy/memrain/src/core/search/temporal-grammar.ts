@@ -135,6 +135,13 @@ function pickYearForDay(m: number, d: number, ref: string, dir: Direction): numb
 
 const month = (raw: string): number | undefined => MONTH_ABBR.get(raw.toLowerCase());
 
+/** "may" written in lowercase is the modal verb ("this may break", "python 3 may fail"), not the month. */
+const modalMay = (raw: string): boolean => raw === "may";
+
+/** True when the match follows a preposition ("on may 3", "by may 3"). */
+const afterPreposition = (m: RegExpMatchArray): boolean =>
+  /\b(?:on|in|of|by|since|until|till|before|after|from|during)\s+$/i.test((m.input ?? "").slice(0, m.index ?? 0));
+
 export type RelativeUnit = "week" | "month" | "year";
 
 /** The calendar span "last/this/next <unit>" names. */
@@ -179,20 +186,23 @@ const RULES: Rule[] = [
     const mo = month(m[1]!);
     const d = Number(m[2]);
     if (mo === undefined || d < 1 || d > 31) return null;
+    if (modalMay(m[1]!) && !m[3] && !afterPreposition(m)) return null;
     const year = m[3] ? Number(m[3]) : pickYearForDay(mo, d, ref, dir);
     if (!isRealDay(year, mo, d)) return null;
     const day = ymd(year, mo, d);
     return { start: day, end: day, kind: m[3] ? "absolute" : "relative", qualified: !m[3] };
   } },
   // 15 March 2023 / the 15th of March
-  { re: new RegExp(String.raw`\b(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?${MONTH_RE}(?:,?\s+(\d{4}))?\b`, "gi"), resolve: (m, ref, dir) => {
+  { re: new RegExp(String.raw`\b(?:the\s+)?(\d{1,2})((?:st|nd|rd|th)?\s+(?:of\s+)?)${MONTH_RE}(?:,?\s+(\d{4}))?\b`, "gi"), resolve: (m, ref, dir) => {
     const d = Number(m[1]);
-    const mo = month(m[2]!);
+    const mo = month(m[3]!);
     if (mo === undefined || d < 1 || d > 31) return null;
-    const year = m[3] ? Number(m[3]) : pickYearForDay(mo, d, ref, dir);
+    // "3 may" is a number before the verb; "3rd of may", "3rd May" or "3 may 2026" is a date.
+    if (modalMay(m[3]!) && !m[4] && !/^(?:st|nd|rd|th)|\bof\b/i.test(m[2]!)) return null;
+    const year = m[4] ? Number(m[4]) : pickYearForDay(mo, d, ref, dir);
     if (!isRealDay(year, mo, d)) return null;
     const day = ymd(year, mo, d);
-    return { start: day, end: day, kind: m[3] ? "absolute" : "relative", qualified: !m[3] };
+    return { start: day, end: day, kind: m[4] ? "absolute" : "relative", qualified: !m[4] };
   } },
   // between March and April / in March and April / from March to April
   { re: new RegExp(String.raw`\b(?:between|in|during|from)\s+${MONTH_RE}\s+(?:and|to|through|-)\s+${MONTH_RE}(?:,?\s+(\d{4}))?\b`, "gi"), resolve: (m, ref, dir) => {
@@ -209,6 +219,8 @@ const RULES: Rule[] = [
     if (mo === undefined) return null;
     const lead = m[1]!.toLowerCase();
     if (lead === "since" || lead === "by") return null;
+    // "this may break": only a preposition makes a lowercase "may" the month.
+    if (modalMay(m[2]!) && !["in", "during", "of", "early", "mid", "late"].includes(lead) && !m[3]) return null;
     if (m[3]) return { ...monthRange(Number(m[3]), mo), kind: "absolute" };
     if (lead === "this") return { ...monthRange(parseDay(ref).getUTCFullYear(), mo), kind: "relative", qualified: true };
     return { ...monthRange(pickYearForMonth(mo, ref, lead === "last" ? "past" : dir), mo), kind: "relative", qualified: true };
@@ -219,8 +231,11 @@ const RULES: Rule[] = [
     if (mo === undefined) return null;
     return { ...monthRange(Number(m[2]), mo), kind: "absolute" };
   } },
-  // A capitalized bare month name ("the June deadline"); "May" needs a preposition (modal verb).
-  { re: /\b(January|February|March|April|June|July|August|September|October|November|December)\b/g, resolve: (m, ref, dir) => {
+  // A capitalized bare month name after a determiner or preposition ("the June deadline", "before
+  // April"); "May" needs a preposition (modal verb), and a month name standing alone may be a person
+  // ("What did April say?").
+  { re: /(?<=\b(?:the|which|every|each|next|for|before|after|until|till|around|from|to|through|on|at)\s+)(January|February|March|April|June|July|August|September|October|November|December)\b/gi, resolve: (m, ref, dir) => {
+    if (!/^[A-Z]/.test(m[1]!)) return null;
     const mo = month(m[1]!)!;
     return { ...monthRange(pickYearForMonth(mo, ref, dir), mo), kind: "relative", qualified: true };
   } },

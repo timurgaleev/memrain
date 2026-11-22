@@ -75,6 +75,23 @@ describe("parseQueryTimeRange", () => {
     expect(parseQueryTimeRange("what happened on March 1", "2026-03-01")).toMatchObject({ start: "2026-03-01", end: "2026-03-01" });
   });
 
+  // Value: protects=the modal verb "may" and a person named April never scope a search;
+  // fails_when=any month word resolves wherever it stands.
+  it("does not read the verb may or a month-named person as a time", () => {
+    expect(parseQueryTimeRange("python 3 may fail on import", ref)).toBeNull();
+    expect(parseQueryTimeRange("this may break the build", ref)).toBeNull();
+    expect(parseQueryTimeRange("This may break the build", ref)).toBeNull();
+    expect(parseQueryTimeRange("What did April say?", ref)).toBeNull();
+    expect(parseQueryTimeRange("we may 2 options", ref)).toBeNull();
+    // A preposition, a capital or a year still makes it a month.
+    expect(parseQueryTimeRange("notes from in may", ref)).toMatchObject({ start: "2026-05-01", end: "2026-05-31" });
+    expect(parseQueryTimeRange("what happened on May 3", ref)).toMatchObject({ start: "2026-05-03" });
+    expect(parseQueryTimeRange("the 3rd of may", ref)).toMatchObject({ start: "2026-05-03" });
+    expect(parseQueryTimeRange("what happened on may 3", ref)).toMatchObject({ start: "2026-05-03" });
+    expect(parseQueryTimeRange("the June deadline", ref)).toMatchObject({ start: "2026-06-01", end: "2026-06-30" });
+    expect(parseQueryTimeRange("before April", ref)).toMatchObject({ start: "2026-04-01" });
+  });
+
   it("merges joined mentions into one range", () => {
     expect(parseQueryTimeRange("between March and April", ref)).toMatchObject({ start: "2026-03-01", end: "2026-04-30" });
     expect(parseQueryTimeRange("between May 3 and May 9", ref)).toMatchObject({ start: "2026-05-03", end: "2026-05-09" });

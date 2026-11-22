@@ -84,7 +84,7 @@ import { expandQuery } from "./expansion.ts";
 import { graphRerank, graphRerankLiveEnabled } from "./graph-rerank.ts";
 import { getGraphSignalsFloorRatio } from "./graph-signals.ts";
 import { applyAliasHop, aliasHopEnabled, fetchPageHeadHit } from "./alias-hop.ts";
-import { collapseEnabled, collapseResults, type CollapsedRef } from "./collapse.ts";
+import { collapseEnabled, collapseResults, type CollapsedRef, type CollapsibleHit } from "./collapse.ts";
 import {
   aliasFanoutEnabled,
   aliasFanoutPlan,
@@ -114,6 +114,8 @@ import { dayInZone, pageContentDate, thinkTimeZone } from "../synthesis/think-te
 import { CACHE_HIT_CONFIDENCE, gradeConfidence } from "./confidence-grade.ts";
 import { paidStageEnabled, runPostFusionStages } from "./stages/pipeline.ts";
 import { shadowCopy, shadowFlag, startShadow } from "./shadow.ts";
+import { fenceOwnerOnlyHits } from "../owner-only.ts";
+import { isDiarySourcePath } from "../pages.ts";
 import type { Hit as HitScore, HitPayload, RerankOutcome, StageInput } from "./stages/types.ts";
 
 /**
@@ -1471,7 +1473,17 @@ async function hybridSearchUnbounded(
           frontmatterOf: new Map(hits.map((h) => [h.chunkId, h.payload?.frontmatter] as const)),
           ...(opts.sourceIds !== undefined ? { sourceIds: opts.sourceIds } : {}),
           filters: chunkFilters,
-          ...(opts.remote ? { remote: true } : {}),
+          ...(opts.remote
+            ? {
+                remote: true,
+                // The diary and owner-only fences the response applies later.
+                fencedChunks: async (list: readonly CollapsibleHit[]) => {
+                  const open = await fenceOwnerOnlyHits(engine, list.filter((h) => !isDiarySourcePath(h.sourcePath)), true);
+                  const kept = new Set(open.map((h) => h.chunkId));
+                  return new Set(list.filter((h) => !kept.has(h.chunkId)).map((h) => h.chunkId));
+                },
+              }
+            : {}),
           // Only a live page's mirror: a mirror left behind by a deleted page is never brought back.
           fetchHead: async (slug, sourceId) => {
             const live = await engine.query(

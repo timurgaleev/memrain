@@ -172,10 +172,10 @@ export async function aliasFanoutPlan(
        JOIN pages p ON p.slug = pa.slug AND p.source_id = pa.source_id
       WHERE pa.alias_norm = ANY($1::text[])${aliasScope} AND ${readable("p")}
      UNION ALL
-     SELECT 'title' AS via, lower(regexp_replace(btrim(p.title), '\\s+', ' ', 'g')) AS norm, p.slug, p.source_id
-       FROM (SELECT DISTINCT slug, source_id FROM page_aliases) ta
-       JOIN pages p ON p.slug = ta.slug AND p.source_id = ta.source_id
-      WHERE lower(regexp_replace(btrim(p.title), '\\s+', ' ', 'g')) = ANY($1::text[])${titleScope}
+     SELECT 'title' AS via, lower(p.title) AS norm, p.slug, p.source_id
+       FROM pages p
+      WHERE lower(p.title) = ANY($1::text[])${titleScope}
+        AND EXISTS (SELECT 1 FROM page_aliases ta WHERE ta.slug = p.slug AND ta.source_id = p.source_id)
         AND ${readable("p")}
       ORDER BY 1, 2, 4, 3`,
     params,

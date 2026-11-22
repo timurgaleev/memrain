@@ -25,14 +25,18 @@ const hit = (slug: string, content: string, score: number, sourceId = "default")
   source_id: sourceId,
 });
 
-const chars = (lengths: Record<string, number>): Engine => ({
+/** A stub engine answering the whole-document read: text per document id. */
+const docs = (texts: Record<string, string>): Engine => ({
   query: async (_sql: string, params: unknown[]) => ({
-    rows: (params[0] as string[]).filter(d => d in lengths).map(d => ({ document_id: d, chars: lengths[d] })),
+    rows: (params[0] as string[]).filter(d => d in texts).map((d) => {
+      const t = texts[d]!.trim();
+      return { document_id: d, chars: t.length, body: t.length >= 200 ? `h:${t}` : null, lead: t.slice(0, 4000) };
+    }),
   }),
 }) as unknown as Engine;
 
 const opts = (over: Partial<CollapseOptions> = {}): CollapseOptions => ({
-  engine: chars({}),
+  engine: docs({}),
   intent: "topic",
   frontmatterOf: new Map(),
   fetchHead: async () => null,
@@ -88,9 +92,9 @@ describe("collapseResults", () => {
   it("folds a short body stub, not a long page that mentions a move", async () => {
     const body = "This page has been merged into [[companies/acme]].";
     const pool = [hit("companies/acme-old", body, 3), hit("companies/acme", LONG, 1)];
-    const short = await collapseResults(pool, opts({ engine: chars({ "default:companies/acme-old": body.length }) }));
+    const short = await collapseResults(pool, opts({ engine: docs({ "default:companies/acme-old": body }) }));
     expect(slugs(short)).toEqual(["default:companies/acme"]);
-    const long = await collapseResults(pool, opts({ engine: chars({ "default:companies/acme-old": 5000 }) }));
+    const long = await collapseResults(pool, opts({ engine: docs({ "default:companies/acme-old": `${body} ${"more text ".repeat(100)}` }) }));
     expect(slugs(long)).toEqual(slugs(pool));
   });
 
@@ -104,12 +108,58 @@ describe("collapseResults", () => {
   // Value: protects=the same page copied into two sources takes one place;
   // fails_when=cross-source copies each keep a slot.
   it("folds a copy of a page in another source into the better-ranked one", async () => {
-    const pool = [hit("companies/acme", LONG, 3), hit("notes/a", "a note", 2), hit("companies/acme", `${LONG} Updated.`, 1, "tenant-b")];
-    const out = await collapseResults(pool, opts());
+    const pool = [hit("companies/acme", "chunk one", 3), hit("notes/a", "a note", 2), hit("companies/acme", "chunk nine", 1, "tenant-b")];
+    const engine = docs({ "default:companies/acme": LONG, "tenant-b:companies/acme": `${LONG} Updated.` });
+    const out = await collapseResults(pool, opts({ engine }));
     expect(slugs(out)).toEqual(["default:companies/acme", "default:notes/a"]);
     expect(out[0]!.collapsed).toEqual([{ slug: "companies/acme", source_id: "tenant-b", reason: "twin" }]);
-    const different = [pool[0]!, hit("companies/acme", "A different company entirely, based in Lisbon, making ceramic tiles and pottery.", 1, "tenant-b")];
-    expect(slugs(await collapseResults(different, opts()))).toEqual(slugs(different));
+    const different = docs({ "default:companies/acme": LONG, "tenant-b:companies/acme": "A different company entirely, based in Lisbon, making ceramic tiles and pottery." });
+    expect(slugs(await collapseResults(pool, opts({ engine: different })))).toEqual(slugs(pool));
+  });
+
+  // Value: protects=copies are judged on the whole documents, in both directions;
+  // fails_when=the ranked chunks decide, or a short page inside a long one counts as its copy.
+  it("judges copies on the documents, not the chunks that ranked, and in both directions", async () => {
+    const pool = [hit("companies/acme", LONG, 3), hit("companies/acme", LONG, 1, "tenant-b")];
+    const sameChunkDifferentDocs = docs({
+      "default:companies/acme": `${LONG} ${"Ledger reconciliation quarterly audit payroll invoices treasury. ".repeat(20)}`,
+      "tenant-b:companies/acme": "A different company entirely, based in Lisbon, making ceramic tiles and pottery.",
+    });
+    expect(slugs(await collapseResults(pool, opts({ engine: sameChunkDifferentDocs })))).toEqual(slugs(pool));
+    const shortInsideLong = docs({
+      "default:companies/acme": `${LONG} ${"Ledger reconciliation quarterly audit payroll invoices treasury budgets forecasting hiring onboarding laptops vendors contracts renewals pricing discounts margins logistics shipping warehouses. "}`,
+      "tenant-b:companies/acme": LONG,
+    });
+    expect(slugs(await collapseResults(pool, opts({ engine: shortInsideLong })))).toEqual(slugs(pool));
+  });
+
+  // Value: protects=a page the caller's fences drop is never named nor absorbs a visible copy;
+  // fails_when=a diary or owner-only page folds before the response fences run.
+  it("leaves pages the caller will not be shown out of every fold", async () => {
+    const engine = docs({ "default:companies/acme": LONG, "tenant-b:companies/acme": LONG });
+    const hiddenFirst = [hit("companies/acme", "x", 3), hit("companies/acme", "y", 1, "tenant-b")];
+    const fencedChunks = async () => new Set([hiddenFirst[0]!.chunkId]);
+    const out = await collapseResults(hiddenFirst, opts({ engine, fencedChunks }));
+    expect(slugs(out)).toEqual(slugs(hiddenFirst));
+    expect(out.every(h => h.collapsed === undefined)).toBe(true);
+    const hiddenSecond = [hiddenFirst[0]!, hiddenFirst[1]!];
+    const named = await collapseResults(hiddenSecond, opts({ engine, fencedChunks: async () => new Set([hiddenSecond[1]!.chunkId]) }));
+    expect(named[0]!.collapsed).toBeUndefined();
+    expect(slugs(named)).toEqual(slugs(hiddenSecond));
+    const stub = hit("companies/acme-old", "Old Acme page.", 3);
+    const redirect = await collapseResults([stub, hit("companies/acme", LONG, 1)], opts({
+      frontmatterOf: new Map([[stub.chunkId, { redirect_to: "[[companies/acme]]" }]]),
+      fencedChunks: async () => new Set([stub.chunkId]),
+    }));
+    expect(redirect.map(h => h.collapsed)).toEqual([undefined, undefined]);
+    // A visible stub never folds into a target the fences will drop.
+    const visibleStub = hit("companies/acme-old", "Old Acme page.", 3);
+    const hiddenTarget = hit("companies/acme", LONG, 1);
+    const kept = await collapseResults([visibleStub, hiddenTarget], opts({
+      frontmatterOf: new Map([[visibleStub.chunkId, { redirect_to: "[[companies/acme]]" }]]),
+      fencedChunks: async () => new Set([hiddenTarget.chunkId]),
+    }));
+    expect(slugs(kept)).toEqual([visibleStub.documentId, hiddenTarget.documentId]);
   });
 
   it("returns the input order when nothing folds", async () => {

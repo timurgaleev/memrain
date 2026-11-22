@@ -16,9 +16,13 @@
  *     stub whose target cannot be shown stays, stamped `redirect_to` with the
  *     target as the stub itself writes it (for an operator or tenant caller,
  *     never a remote one).
- *   - twin: the same slug in another source, when the two pages are copies
- *     (identical text, or most of the shorter one's words in the other). The
+ *   - twin: the same slug in another source, when the two documents are
+ *     copies: identical text of at least IDENTICAL_BODY_MIN_CHARS, or most of
+ *     each one's leading words found in the other (both directions). The
  *     better-ranked one stays and names the other in `collapsed`.
+ * A page the caller's response fences will drop (a remote caller's diary and
+ * owner-only pages) takes part in no fold, so it is never named in a visible
+ * page's `collapsed` and never absorbs a visible copy.
  * The per-page key inside one source (a page's mirror, truth mirror and file
  * twin) stays the per-page cap's job. MEMRAIN_SEARCH_COLLAPSE=0 turns this
  * off. Fail-open: a failed read folds nothing it depended on.
@@ -81,13 +85,16 @@ function wordSet(text: string | null | undefined): Set<string> | null {
   return words.size >= 5 ? words : null;
 }
 
-/** Share of the smaller word set found in the larger; 0 when either text is too short to say. */
+/**
+ * The share of shared words, taken in both directions: the lower of the two
+ * shares, so a short page whose words all appear in a long one is not called
+ * its copy. 0 when either text is too short to say.
+ */
 function overlap(a: Set<string> | null, b: Set<string> | null): number {
   if (!a || !b) return 0;
-  const [small, large] = a.size <= b.size ? [a, b] : [b, a];
   let shared = 0;
-  for (const w of small) if (large.has(w)) shared++;
-  return shared / small.size;
+  for (const w of a) if (b.has(w)) shared++;
+  return Math.min(shared / a.size, shared / b.size);
 }
 
 const leaf = (slug: string): string => (slug.split("/").pop() ?? slug).toLowerCase();
@@ -125,7 +132,21 @@ export interface CollapseOptions {
   remote?: boolean;
   /** Head chunk of a page as a hit, under the caller's scope; null when it may not be shown. */
   fetchHead: (slug: string, sourceId: string) => Promise<CollapsibleHit | null>;
+  /**
+   * Chunk ids the caller's response fences will drop afterwards (a remote
+   * caller's diary and owner-only pages). Such a page takes part in no fold:
+   * it neither absorbs a visible copy (both would vanish) nor is named in a
+   * visible page's `collapsed`.
+   */
+  fencedChunks?: (hits: readonly CollapsibleHit[]) => Promise<ReadonlySet<string>>;
 }
+
+/** Identical documents shorter than this (empty templates, one-line stubs) say nothing about a shared document. */
+const IDENTICAL_BODY_MIN_CHARS = 200;
+/** Document prefix compared for word overlap. */
+const OVERLAP_PREFIX_CHARS = 4000;
+
+interface DocFacts { chars: number; body: string | null; words: Set<string> | null }
 
 /**
  * Fold redirect stubs into their targets and cross-source twins into one
@@ -150,6 +171,18 @@ export async function collapseResults<T extends CollapsibleHit>(hits: readonly T
     g.rows.push(i);
   });
 
+  // Pages the caller will not be shown never fold, either way.
+  let fenced: ReadonlySet<string> = new Set();
+  if (opts.fencedChunks) {
+    try {
+      fenced = await opts.fencedChunks(hits);
+    } catch {
+      return [...hits]; // fail closed on the fold, open on the results
+    }
+  }
+  const hidden = new Set(order.filter(k => groups.get(k)!.rows.some(i => fenced.has(hits[i]!.chunkId))));
+  for (const k of hidden) groups.get(k)!.slug = null;
+
   // Redirect stubs and the target each names (as written, then as a slug).
   const written = new Map<string, string>();
   const bodyCandidates = new Map<string, string>();
@@ -168,27 +201,41 @@ export async function collapseResults<T extends CollapsibleHit>(hits: readonly T
     }
     written.set(key, raw);
   }
-  if (bodyCandidates.size > 0) {
-    // A body-text stub must be the whole page: its document holds no more text than the cap.
+  // Twin candidates: a slug more than one source holds in the results.
+  const slugCount = new Map<string, number>();
+  for (const key of order) {
+    const slug = groups.get(key)!.slug;
+    if (slug) slugCount.set(slug, (slugCount.get(slug) ?? 0) + 1);
+  }
+  const twinKeys = order.filter(k => (slugCount.get(groups.get(k)!.slug ?? "") ?? 0) > 1);
+  // Whole-document facts, read once for the body-stub and twin candidates:
+  // length, an identity hash of a substantial text, and its leading words.
+  const facts = new Map<string, DocFacts>();
+  const factKeys = [...new Set([...bodyCandidates.keys(), ...twinKeys])];
+  if (factKeys.length > 0) {
     try {
-      const docs = [...bodyCandidates.keys()].map(k => hits[groups.get(k)!.rows[0]!]!.documentId);
-      const params: unknown[] = [docs];
+      const docs = [...new Set(factKeys.map(k => hits[groups.get(k)!.rows[0]!]!.documentId))];
+      const params: unknown[] = [docs, IDENTICAL_BODY_MIN_CHARS, OVERLAP_PREFIX_CHARS];
       const scope = andSourceScope("d.source_id", opts.sourceIds, params);
-      const r = await opts.engine.query<{ document_id: string; chars: number | string }>(
-        `SELECT c.document_id, sum(length(c.content))::int AS chars
-           FROM chunks c JOIN documents d ON d.id = c.document_id
-          WHERE c.document_id = ANY($1::text[])${scope}
-          GROUP BY c.document_id`,
+      const r = await opts.engine.query<{ document_id: string; chars: number | string; body: string | null; lead: string | null }>(
+        `SELECT t.document_id, length(t.text) AS chars,
+                CASE WHEN length(t.text) >= $2::int THEN md5(t.text) END AS body,
+                left(t.text, $3::int) AS lead
+           FROM (SELECT c.document_id, btrim(string_agg(c.content, E'\n' ORDER BY c.chunk_index, c.id COLLATE "C")) AS text
+                   FROM chunks c JOIN documents d ON d.id = c.document_id
+                  WHERE c.document_id = ANY($1::text[])${scope}
+                  GROUP BY c.document_id) t`,
         params,
       );
-      const chars = new Map(r.rows.map(row => [row.document_id, Number(row.chars)]));
-      for (const [key, link] of bodyCandidates) {
-        const doc = hits[groups.get(key)!.rows[0]!]!.documentId;
-        if ((chars.get(doc) ?? Number.POSITIVE_INFINITY) <= REDIRECT_BODY_MAX_CHARS) written.set(key, link);
-      }
+      for (const row of r.rows) facts.set(row.document_id, { chars: Number(row.chars), body: row.body, words: wordSet(row.lead) });
     } catch {
-      // fail-open: no body-text redirects this call
+      // fail-open: no body-text redirects or twins this call
     }
+  }
+  const factsOf = (key: string): DocFacts | undefined => facts.get(hits[groups.get(key)!.rows[0]!]!.documentId);
+  // A body-text stub must be the whole page: its document holds no more text than the cap.
+  for (const [key, link] of bodyCandidates) {
+    if ((factsOf(key)?.chars ?? Number.POSITIVE_INFINITY) <= REDIRECT_BODY_MAX_CHARS) written.set(key, link);
   }
 
   const keyFor = (sourceId: string, slug: string): string => `${sourceId}:${slug}`;
@@ -228,6 +275,8 @@ export async function collapseResults<T extends CollapsibleHit>(hits: readonly T
   // Each page's representative: a redirect stub folds into its target, a twin into the better-ranked copy.
   const foldInto = new Map<string, { into: string; reason: "redirect" | "twin" }>();
   for (const [stubKey, targetKey] of targetOf) {
+    // A target the response fences will drop takes nothing: the stub would vanish with it.
+    if (hidden.has(targetKey)) continue;
     if (groups.has(targetKey) || injected.has(targetKey)) foldInto.set(stubKey, { into: targetKey, reason: "redirect" });
   }
   const bySlug = new Map<string, string>();
@@ -239,9 +288,11 @@ export async function collapseResults<T extends CollapsibleHit>(hits: readonly T
       bySlug.set(g.slug, key);
       continue;
     }
-    const a = hits[groups.get(twin)!.rows[0]!]!.content;
-    const b = hits[g.rows[0]!]!.content;
-    if (a.trim() === b.trim() || overlap(wordSet(a), wordSet(b)) >= TWIN_OVERLAP) foldInto.set(key, { into: twin, reason: "twin" });
+    // Copies are judged on the whole documents, never on the chunk that happened to rank.
+    const a = factsOf(twin);
+    const b = factsOf(key);
+    if (!a || !b) continue;
+    if ((a.body !== null && a.body === b.body) || overlap(a.words, b.words) >= TWIN_OVERLAP) foldInto.set(key, { into: twin, reason: "twin" });
   }
   // A remote caller is not shown what a stub's frontmatter names.
   const unresolved = new Map(opts.remote ? [] : [...written].filter(([k]) => !foldInto.has(k)));
