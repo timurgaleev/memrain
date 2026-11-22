@@ -154,6 +154,11 @@ export interface AddFactInput {
    * stores no slot. A later value of the same slot ends this one at read time.
    */
   slot?: { dimension: string; value: string };
+  /**
+   * `throw`: the write gate fails closed for this write — a row it cannot
+   * assess throws RowGateError instead of being stored (write-gate-rows.ts).
+   */
+  gate_on_error?: "throw";
 }
 
 /** Allowed `kind` values — mirrors the migration 037 CHECK constraint. */
@@ -755,7 +760,8 @@ export async function addFact(
     fields: [{ field: "fact", text: fact }, { field: "context", text: factContext ?? "" }],
     slug: input.entity_slug,
     payload: Object.fromEntries(cols.map((c, i) => [c, params[i]])),
-  }, { newFact: { principal: input.written_by_principal ?? null, sourceId: effectiveSource, sourceSlug, chunkId } });
+  }, { newFact: { principal: input.written_by_principal ?? null, sourceId: effectiveSource, sourceSlug, chunkId } },
+  process.env, input.gate_on_error ? { onError: input.gate_on_error } : {});
   if (held !== null) return { id: null, entity_slug: input.entity_slug, inserted: false, held };
 
   // Insert-time dedup / supersede (opt-in). Embed the new fact, fetch its

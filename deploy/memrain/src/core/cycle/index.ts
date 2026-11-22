@@ -103,6 +103,7 @@ import {
   conversationFactsBackfillPhase,
   type ConversationFactsBackfillResult,
 } from "./conversation-facts-backfill.ts";
+import { connectorFactsPhase, type ConnectorFactsResult } from "./connector-facts.ts";
 import {
   rechunkSweepPhase,
   type RechunkSweepResult,
@@ -151,6 +152,9 @@ export type PhaseName =
   // paid (Sonnet), follows extraction opt-in and can be overridden by MEMRAIN_FACTS_BACKFILL.
   | "consolidate-facts"
   | "conversation-facts-backfill"
+  // Paid facts from the connector accounts that opted in (migration 196),
+  // under each account's own daily cap. NOT in ALL_PHASES.
+  | "connector-facts"
   // Chunker-maintenance sweep — opt-in, default-OFF (NOT in ALL_PHASES). Spends
   // Bedrock Titan re-embedding chunker-version-stale docs, so it is gated by its
   // own env flag (MEMRAIN_RECHUNK_SWEEP) and count/char-capped per tick.
@@ -207,6 +211,7 @@ export const SYNTHESIS_PHASES: readonly PhaseName[] = [
 export const FACTS_MAINT_PHASES: readonly PhaseName[] = [
   "consolidate-facts",
   "conversation-facts-backfill",
+  "connector-facts",
 ];
 
 /**
@@ -264,6 +269,7 @@ export interface PhaseResult {
     | DriftPhaseResult
     | ConsolidateFactsResult
     | ConversationFactsBackfillResult
+    | ConnectorFactsResult
     | RechunkSweepResult;
   error?: string;
   /** The phase was aborted or hit its deadline and its own work had not wound
@@ -437,7 +443,8 @@ function derivePhaseRuleStatus(
     phase === "auto-think" ||
     phase === "drift" ||
     phase === "consolidate-facts" ||
-    phase === "conversation-facts-backfill"
+    phase === "conversation-facts-backfill" ||
+    phase === "connector-facts"
   ) {
     // These phases fail-open per item: a non-empty errors[] means some work
     // failed but the run completed → warn (never fails the cycle).
@@ -1206,6 +1213,29 @@ async function runPhases(
                   worthSkipped: 0,
                   spentUsd: 0,
                   budgetExhausted: false,
+                  errors: [],
+                }),
+          progress,
+          signal,
+        );
+        break;
+      }
+      case "connector-facts": {
+        // Paid, per-account opt-in; a no-op (ran:false) while no account enabled it.
+        const storage = options.storage;
+        r = await runFenced(
+          engine,
+          p,
+          () =>
+            storage
+              ? connectorFactsPhase(storage)
+              : Promise.resolve<ConnectorFactsResult>({
+                  ran: false,
+                  reason: "no storage handle",
+                  accounts: [],
+                  pagesProcessed: 0,
+                  factsWritten: 0,
+                  spentUsd: 0,
                   errors: [],
                 }),
           progress,

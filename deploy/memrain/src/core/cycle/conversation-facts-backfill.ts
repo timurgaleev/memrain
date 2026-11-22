@@ -38,6 +38,7 @@ import {
   extractFactsForPage,
   factsExtractionEnabled,
   factsExtractionOptedOut,
+  type ExtractForPageResult,
 } from "../facts-extract.ts";
 import { resolveFactsModel } from "../llm/sonnet.ts";
 import type { SonnetFn } from "../llm/sonnet.ts";
@@ -46,7 +47,7 @@ import { filterWorthwhile, worthGateEnabled } from "../synthesis/worth-gate.ts";
 import { phaseFenceCheck } from "./phase-context.ts";
 import { quarantineFilterFragment } from "../quarantine.ts";
 import { PAGE_MIRROR_PATH_SQL, notSynthesizedPageSql, pageSourcePath } from "../page-index.ts";
-import { recordSynthFailure, recordSynthSkip, clearSynthFailure } from "../synthesis/synth-failures.ts";
+import { recordSynthFailure, recordSynthSkip, clearSynthFailure, type SynthPhase } from "../synthesis/synth-failures.ts";
 
 export interface ConversationFactsBackfillOptions {
   /** Cap on pages processed per run. Default 50. */
@@ -98,7 +99,8 @@ function defaultBudgetUsd(): number {
   return Number.isFinite(n) && n > 0 ? n : 1.0;
 }
 
-interface PageRow {
+/** A page the extraction routine reads: its live row and the body hash it is watermarked on. */
+export interface FactsPageRow {
   slug: string;
   type: string;
   markdown_body: string;
@@ -144,7 +146,7 @@ async function backfillRun(
   const cap = opts.maxBudgetUsd ?? defaultBudgetUsd();
   const model = resolveFactsModel(opts.modelId, "facts_extract");
 
-  const rows = await storage.engine().query<PageRow>(
+  const rows = await storage.engine().query<FactsPageRow>(
     `SELECT p.slug, p.type, p.markdown_body, p.source_id, p.content_hash
        FROM pages p
       WHERE p.deleted_at IS NULL
@@ -247,74 +249,19 @@ async function backfillRun(
       break;
     }
     try {
-      const r = await extractFactsForPage(storage, {
-        slug: page.slug,
-        type: page.type,
-        body: page.markdown_body,
-        sourceId: page.source_id,
+      const out = await extractAndRecordPage(storage, page, {
+        phase: "facts-backfill",
+        model,
         ...(opts.sonnetFn ? { sonnetFn: opts.sonnetFn } : {}),
         ...(opts.modelId ? { modelId: opts.modelId } : {}),
         // Give each page the remaining brain-wide headroom as its per-call cap.
         maxBudgetUsd: Math.max(cap - spent, 0.000001),
       });
-      spent += r.spentUsd;
-      result.factsWritten += r.factsWritten;
+      spent += out.result.spentUsd;
+      result.factsWritten += out.result.factsWritten;
       result.pagesProcessed += 1;
-      // A page whose paid call came back unreadable writes no fact row, so the
-      // "has a written_by row" marker above never fires and the next run pays
-      // for it again. Surface it (the cycle marks the phase `warn`) instead of
-      // letting that loop bill silently forever.
-      if (r.absorbed === "parse_failure" || r.absorbed === "output_truncated") {
-        await recordSynthFailure(storage.engine(), {
-          docId: pageSourcePath(page.slug, page.source_id), phase: "facts-backfill",
-          contentHash: page.content_hash, model,
-          kind: r.absorbed === "output_truncated" ? "truncated" : "unparseable",
-        });
-        result.errors.push({
-          slug: page.slug,
-          message: `extraction absorbed: ${r.absorbed}`,
-        });
-      }
-      // A span the model declined leaves the page unfinished: it is parked
-      // like a failed read and asked again after the backoff, never memoized.
-      const declined = r.declinedRanges?.length ?? 0;
-      if (declined > 0) {
-        await recordSynthFailure(storage.engine(), {
-          docId: pageSourcePath(page.slug, page.source_id), phase: "facts-backfill",
-          contentHash: page.content_hash, model, kind: "llm_error",
-        });
-        result.errors.push({ slug: page.slug, message: `the model declined ${declined} span(s); retried after the backoff` });
-      }
-      if (r.absorbed === null && declined === 0) await clearSynthFailure(storage.engine(), pageSourcePath(page.slug, page.source_id), "facts-backfill");
-      // Facts that failed to write were never persisted: the page is not
-      // empty, so it must stay open for the next run rather than be memoized.
-      if (r.factsFailed > 0) {
-        result.errors.push({
-          slug: page.slug,
-          message: `${r.factsFailed} extracted fact(s) failed to write`,
-        });
-      }
-      // A clean read is watermarked against the body it read, so an edit
-      // re-opens the page; `zero_yield` when it wrote nothing new.
-      if (r.absorbed === null && r.factsFailed === 0 && declined === 0) {
-        const outcome = r.factsWritten === 0 ? "zero_yield" : "extracted";
-        await storage.engine().query(
-          `INSERT INTO facts_backfill_scans
-             (source_id, slug, content_hash, extractor_version, outcome, facts_skipped, model_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
-           ON CONFLICT DO NOTHING`,
-          [
-            page.source_id,
-            page.slug,
-            page.content_hash,
-            FACTS_EXTRACT_VERSION,
-            outcome,
-            r.factsSkipped,
-            resolveFactsModel(opts.modelId, "facts_extract"),
-          ],
-        );
-        if (outcome === "zero_yield") result.zeroYieldRecorded += 1;
-      }
+      for (const message of out.errors) result.errors.push({ slug: page.slug, message });
+      if (out.recorded === "zero_yield") result.zeroYieldRecorded += 1;
     } catch (e) {
       result.errors.push({
         slug: page.slug,
@@ -325,4 +272,91 @@ async function backfillRun(
 
   result.spentUsd = Number(spent.toFixed(6));
   return result;
+}
+
+export interface ExtractPageOptions {
+  /** The backoff phase a failed or declined read parks the page under. */
+  phase: SynthPhase;
+  /** The resolved extraction model: the backoff key and the watermark's model. */
+  model: string;
+  /** USD ceiling for this page's calls. */
+  maxBudgetUsd: number;
+  sonnetFn?: SonnetFn;
+  modelId?: string;
+  /** Author stamped on the written facts; omitted → the on-write writer. */
+  writtenBy?: string;
+  /** Write gate fails closed: a gate error is thrown and nothing of the batch lands. */
+  gateOnError?: "throw";
+  notabilityFilter?: "all" | "high-only";
+}
+
+export interface ExtractPageOutcome {
+  result: ExtractForPageResult;
+  /** Why the page stays open, one line per cause; empty for a clean read. */
+  errors: string[];
+  /** The watermark written for the body read, or null when the page stays open. */
+  recorded: "zero_yield" | "extracted" | null;
+}
+
+/**
+ * One page through the paid extractor, then its bookkeeping: an unreadable
+ * answer or a declined span parks the page under `phase`, a clean read clears
+ * that and writes the watermark against the body it read. Throws what the
+ * extractor throws (a gate error under `gateOnError`).
+ */
+export async function extractAndRecordPage(
+  storage: Storage,
+  page: FactsPageRow,
+  opts: ExtractPageOptions,
+): Promise<ExtractPageOutcome> {
+  const r = await extractFactsForPage(storage, {
+    slug: page.slug,
+    type: page.type,
+    body: page.markdown_body,
+    sourceId: page.source_id,
+    ...(opts.sonnetFn ? { sonnetFn: opts.sonnetFn } : {}),
+    ...(opts.modelId ? { modelId: opts.modelId } : {}),
+    ...(opts.writtenBy ? { writtenBy: opts.writtenBy } : {}),
+    ...(opts.gateOnError ? { gateOnError: opts.gateOnError } : {}),
+    ...(opts.notabilityFilter ? { notabilityFilter: opts.notabilityFilter } : {}),
+    maxBudgetUsd: opts.maxBudgetUsd,
+  });
+  const errors: string[] = [];
+  const docId = pageSourcePath(page.slug, page.source_id);
+  // A page whose paid call came back unreadable writes no fact row, so the
+  // "has a written_by row" marker above never fires and the next run pays
+  // for it again. Surface it (the cycle marks the phase `warn`) instead of
+  // letting that loop bill silently forever.
+  if (r.absorbed === "parse_failure" || r.absorbed === "output_truncated") {
+    await recordSynthFailure(storage.engine(), {
+      docId, phase: opts.phase, contentHash: page.content_hash, model: opts.model,
+      kind: r.absorbed === "output_truncated" ? "truncated" : "unparseable",
+    });
+    errors.push(`extraction absorbed: ${r.absorbed}`);
+  }
+  // A span the model declined leaves the page unfinished: it is parked
+  // like a failed read and asked again after the backoff, never memoized.
+  const declined = r.declinedRanges?.length ?? 0;
+  if (declined > 0) {
+    await recordSynthFailure(storage.engine(), {
+      docId, phase: opts.phase, contentHash: page.content_hash, model: opts.model, kind: "llm_error",
+    });
+    errors.push(`the model declined ${declined} span(s); retried after the backoff`);
+  }
+  if (r.absorbed === null && declined === 0) await clearSynthFailure(storage.engine(), docId, opts.phase);
+  // Facts that failed to write were never persisted: the page is not
+  // empty, so it must stay open for the next run rather than be memoized.
+  if (r.factsFailed > 0) errors.push(`${r.factsFailed} extracted fact(s) failed to write`);
+  // A clean read is watermarked against the body it read, so an edit
+  // re-opens the page; `zero_yield` when it wrote nothing new.
+  if (r.absorbed !== null || r.factsFailed > 0 || declined > 0) return { result: r, errors, recorded: null };
+  const outcome = r.factsWritten === 0 ? "zero_yield" : "extracted";
+  await storage.engine().query(
+    `INSERT INTO facts_backfill_scans
+       (source_id, slug, content_hash, extractor_version, outcome, facts_skipped, model_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT DO NOTHING`,
+    [page.source_id, page.slug, page.content_hash, FACTS_EXTRACT_VERSION, outcome, r.factsSkipped, opts.model],
+  );
+  return { result: r, errors, recorded: outcome };
 }

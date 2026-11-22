@@ -5,6 +5,8 @@
  * `memrain connectors redact-meetings [--source ID] [--apply --yes] [--json]`
  * `memrain connectors gmail-widen <account-id> --days N [--apply --plan-hash H] [--json]`
  *   (connectors-gmail-widen.ts)
+ * `memrain connectors facts <account-id> [--enable --cap USD | --disable | --forget [--export F]] [--apply] [--json]`
+ *   (connectors-facts.ts)
  *
  * `redact-meetings` removes online-meeting credentials (ids, passcodes, PINs,
  * join links) from connector mail, calendar, chat and meeting pages stored before the
@@ -49,6 +51,7 @@ import { sweepMeetingCredentials, type MeetingRedactSweepResult } from "../core/
 import { withStorage } from "./with-storage.ts";
 import { runRotateKek } from "./connectors-vault.ts";
 import { runGmailWiden } from "./connectors-gmail-widen.ts";
+import { runConnectorFacts } from "./connectors-facts.ts";
 
 export interface ConnectorsCmdOptions {
   /** `github`, `status`, `redact-meetings` or `rotate-kek`. */
@@ -79,6 +82,12 @@ export interface ConnectorsCmdOptions {
   /** `gmail-widen`: the new history window and the dry run's plan hash. */
   days?: string;
   planHash?: string;
+  /** `facts`: what to change, the daily cap and the `--forget` export path. */
+  enable?: boolean;
+  disable?: boolean;
+  forget?: boolean;
+  cap?: string;
+  exportPath?: string;
 }
 
 const MAX_TOKEN_FILE_BYTES = 4096;
@@ -322,14 +331,33 @@ export async function runConnectors(opts: ConnectorsCmdOptions): Promise<number>
     console.error("memrain connectors: --days and --plan-hash belong to gmail-widen only");
     return 2;
   }
+  if (opts.sub === "facts") {
+    if (opts.yes) {
+      console.error("memrain connectors facts: --yes is not used; --apply writes the change");
+      return 2;
+    }
+    return runConnectorFacts({
+      ...(opts.action !== undefined ? { accountId: opts.action } : {}),
+      ...(opts.enable ? { enable: true } : {}),
+      ...(opts.disable ? { disable: true } : {}),
+      ...(opts.forget ? { forget: true } : {}),
+      ...(opts.cap !== undefined ? { cap: opts.cap } : {}),
+      ...(opts.exportPath !== undefined ? { exportPath: opts.exportPath } : {}),
+      ...(opts.apply ? { apply: true } : {}),
+      ...(opts.dryRun ? { dryRun: true } : {}),
+      ...(opts.json ? { json: true } : {}),
+      ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+      ...(opts.storage ? { storage: opts.storage } : {}),
+    });
+  }
   if ((opts.apply || opts.yes) && opts.sub !== "redact-meetings") {
-    console.error("memrain connectors: --apply and --yes belong to redact-meetings only");
+    console.error("memrain connectors: --apply and --yes belong to redact-meetings and facts only");
     return 2;
   }
   if (opts.sub === "status") return runStatus(opts);
   if (opts.sub === "github") return runGithubSync(opts);
   if (opts.sub === "redact-meetings") return runRedactMeetings(opts);
   if (opts.sub === "rotate-kek") return runRotateKek(opts);
-  console.error("memrain connectors: subcommand required (github sync <owner/repo> | status | redact-meetings | rotate-kek | gmail-widen <account-id>)");
+  console.error("memrain connectors: subcommand required (github sync <owner/repo> | status | redact-meetings | rotate-kek | gmail-widen <account-id> | facts <account-id>)");
   return 1;
 }

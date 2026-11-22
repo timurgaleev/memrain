@@ -379,6 +379,8 @@ function printUsage(): void {
   console.log("                               (token: MEMRAIN_GITHUB_TOKEN or --token-file; exit 1 partial, 2 re-auth)");
   console.log("  connectors status [--json]   every connector account and recipe connector: state, last run");
   console.log("  connectors redact-meetings [--source ID] [--apply --yes] [--json]");
+  console.log("  connectors facts <account-id> [--enable --cap USD | --disable | --forget [--export F]] [--apply] [--json]");
+  console.log("                               paid facts from one account's mail, chat and meetings; dry run prices it");
   console.log("                               remove meeting ids, passcodes, PINs and join links from stored connector");
   console.log("                               mail and calendar pages (dry run with counts per source unless --apply)");
   console.log("  connectors rotate-kek --old-file F --new-file F [--json]   re-seal connector secrets under a new key");
@@ -2030,6 +2032,13 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (days !== undefined) opts.days = days;
       const planHash = values.get("--plan-hash");
       if (planHash !== undefined) opts.planHash = planHash;
+      const cap = values.get("--cap");
+      if (cap !== undefined) opts.cap = cap;
+      const exportPath = values.get("--export");
+      if (exportPath !== undefined) opts.exportPath = exportPath;
+      if (flags.has("--enable")) opts.enable = true;
+      if (flags.has("--disable")) opts.disable = true;
+      if (flags.has("--forget")) opts.forget = true;
       if (flags.has("--full")) opts.full = true;
       if (flags.has("--dry-run")) opts.dryRun = true;
       if (flags.has("--apply")) opts.apply = true;

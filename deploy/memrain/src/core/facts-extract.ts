@@ -51,6 +51,7 @@ import {
   type FactsAbsorbReason,
 } from "./ingest-log.ts";
 import { keepQuietClaims, keptQuiet, windowMessages } from "./fact-keep-quiet.ts";
+import { RowGateError, rowHoldVerdict } from "./write-gate-rows.ts";
 import {
   SLOT_KINDS,
   SLOT_TAG_MAX_FACTS,
@@ -750,6 +751,13 @@ export async function writeExtractedFacts(
      * model error); either way the facts are written.
      */
     tagSlots?: (candidates: SlotCandidate[]) => Promise<Array<{ dimension: string; value: string } | null> | null>;
+    /**
+     * `throw`: the write gate fails closed and a gate error ends the batch,
+     * rethrown, not counted. Every fact is assessed before any is written and
+     * the ones the gate holds are recorded first (see gateHeldFirst), so a
+     * gate error leaves no fact of the batch stored.
+     */
+    gateOnError?: "throw";
   } = {},
 ): Promise<{ written: number; skipped: number; failed: number; fact_ids: number[] }> {
   let written = 0;
@@ -828,8 +836,13 @@ export async function writeExtractedFacts(
     }
     planned.push({ f, slug, exact, validFrom });
   }
+  // Before the paid slot call: a batch the gate cannot assess stops here.
+  const order = opts.gateOnError === "throw"
+    ? await gateHeldFirst(storage, planned, { sourceId: opts.sourceId ?? "default", sourceSlug: opts.sourceSlug ?? null, principal: opts.principal ?? null })
+    : planned.map((_, i) => i);
   const slots = opts.tagSlots ? await slotsFor(storage, planned, opts.sourceId ?? "default", opts.tagSlots) : new Map();
-  for (const [i, { f, slug, validFrom }] of planned.entries()) {
+  for (const i of order) {
+    const { f, slug, validFrom } = planned[i]!;
     const slot = slots.get(i);
     try {
       // Kept quiet narrows the claim to private. A kept-quiet claim forgotten at
@@ -863,10 +876,12 @@ export async function writeExtractedFacts(
         ...(opts.dedup ? { dedup: opts.dedup } : {}),
         written_by: opts.writtenBy ?? "facts-extract",
         ...(opts.principal ? { written_by_principal: opts.principal } : {}),
+        ...(opts.gateOnError ? { gate_on_error: opts.gateOnError } : {}),
       });
       if (r.inserted) written += 1;
       if (r.inserted && r.id !== null) factIds.push(r.id);
     } catch (e) {
+      if (opts.gateOnError === "throw" && e instanceof RowGateError) throw e;
       skipped += 1;
       failed += 1;
       // The error class and code only: a message can quote the fact itself.
@@ -874,6 +889,31 @@ export async function writeExtractedFacts(
     }
   }
   return { written, skipped, failed, fact_ids: factIds };
+}
+
+/**
+ * Write order for a batch whose gate fails closed. Every fact is assessed
+ * first, with nothing recorded, so a fact the gate cannot assess stops the
+ * batch before any of it is stored (the RowGateError propagates). The facts
+ * the gate will hold go first: recording a hold is the one gate step that
+ * writes, so if it fails, no fact of the batch has been inserted yet.
+ */
+async function gateHeldFirst(
+  storage: Storage,
+  planned: ReadonlyArray<{ f: ExtractedFact; slug: string }>,
+  at: { sourceId: string; sourceSlug: string | null; principal: string | null },
+): Promise<number[]> {
+  const held: number[] = [];
+  const passed: number[] = [];
+  for (const [i, p] of planned.entries()) {
+    const verdict = await rowHoldVerdict(
+      storage.engine(),
+      { table: "entity_facts", fields: [{ field: "fact", text: p.f.fact }, { field: "context", text: "" }], slug: p.slug },
+      { newFact: { principal: at.principal, sourceId: at.sourceId, sourceSlug: at.sourceSlug, chunkId: null } },
+    );
+    (verdict === "hold" ? held : passed).push(i);
+  }
+  return [...held, ...passed];
 }
 
 /** Resolver stages that name an existing page exactly (no prefix, name-variant or fuzzy guess). */
@@ -1054,6 +1094,12 @@ export interface ExtractForPageOptions {
    * Omitted → read from the page itself (see `pageObservationDate`).
    */
   observationDate?: string | null;
+  /** Author stamped on the written facts; omitted → ON_WRITE_WRITER. */
+  writtenBy?: string;
+  /** Write gate fails closed for these facts (see writeExtractedFacts). A gate error is thrown. */
+  gateOnError?: "throw";
+  /** `high-only` writes HIGH-notability facts and drops the rest (see writeExtractedFacts). */
+  notabilityFilter?: "all" | "high-only";
 }
 
 export interface ExtractForPageResult {
@@ -1483,7 +1529,9 @@ async function extractFactsForPageRun(
     : facts;
   const w = await writeExtractedFacts(storage, attributedFacts, {
     sourceSlug: opts.slug,
-    writtenBy: ON_WRITE_WRITER,
+    writtenBy: opts.writtenBy ?? ON_WRITE_WRITER,
+    ...(opts.gateOnError ? { gateOnError: opts.gateOnError } : {}),
+    ...(opts.notabilityFilter ? { notabilityFilter: opts.notabilityFilter } : {}),
     firstParty: attribution.firstParty,
     ...(opts.sourceId ? { sourceId: opts.sourceId } : {}),
     tagSlots: budgetedSlotTagger(budget, modelId, opts.sonnetFn),

@@ -223,6 +223,36 @@ re-indexed yet is re-indexed by the cycle's mirror-pages phase; until then
 search can still return its old text. A second dry run should report 0
 pages.
 
+## Optional: facts from mail, chat and meetings
+
+Connector pages are left out of fact extraction until an account opts in.
+The `connector-facts` cycle phase then extracts facts from that account's
+mail, chat and meeting pages (never calendar entries), at most 50 pages per
+account per run, on Haiku (`MEMRAIN_CONNECTOR_FACTS_MODEL`), under the
+account's own daily dollar cap. That cap is separate from the account's sync
+cap, so a spent facts cap never stops the sync; the brain-wide
+`MEMRAIN_DAILY_BUDGET_USD` still applies. Facts are stored private, HIGH
+notability only, written by `connector-facts:<account-id>`, and an
+instruction-like fact goes to the write gate's hold queue instead of the
+brain.
+
+```bash
+docker exec deploy-memrain-1 bun run src/cli.ts connectors facts <account-id>                         # dry run: pages and estimated cost
+docker exec deploy-memrain-1 bun run src/cli.ts connectors facts <account-id> --enable --cap 1 --apply
+docker exec deploy-memrain-1 bun run src/cli.ts connectors facts <account-id> --disable --apply
+docker exec deploy-memrain-1 bun run src/cli.ts connectors facts <account-id> --forget --apply         # exports, then withdraws
+```
+
+`--enable` refuses unless `MEMRAIN_WRITE_GATE_ROWS=quarantine` (and
+`MEMRAIN_WRITE_GATE_EXTERNAL` does not lower it), `MEMRAIN_DAILY_BUDGET_USD`
+is set, the model has a price, and the account's source is a mailbox, chat or
+meeting source, so its facts are written at the external tier the gate
+checks. The cap is at most $20 a day. The phase also needs
+`MEMRAIN_FACTS_EXTRACTION=1`. `--forget --apply` writes the account's facts to
+a 0600 JSON file (`--export F`, else one in the working directory) and then
+withdraws them; a withdrawn claim is not written again by a later run, and an
+identical claim another writer stored in the same source is withdrawn with it.
+
 ## Optional: the notification webhook secret
 
 Memrain can sign the notifications it posts to a webhook of yours with an

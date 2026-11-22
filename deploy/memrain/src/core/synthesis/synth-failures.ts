@@ -25,7 +25,7 @@
  */
 import type { Engine } from "../engine/interface.ts";
 
-export type SynthPhase = "propose_takes" | "extract_atoms" | "facts-backfill" | "reflections";
+export type SynthPhase = "propose_takes" | "extract_atoms" | "facts-backfill" | "reflections" | "connector-facts";
 
 export type SynthFailureKind = "llm_error" | "unparseable" | "truncated";
 

@@ -20,6 +20,7 @@ import { consoleProgress } from "../core/output/progress.ts";
 import { phasesRunTodayUtc } from "../core/cycle/phase-runs.ts";
 import { runDeepSynthPhase } from "../core/synthesis/deep-synth.ts";
 import { backfillEnabled } from "../core/cycle/conversation-facts-backfill.ts";
+import { connectorFactsScheduled } from "../core/cycle/connector-facts.ts";
 import { cycleDaemonPause, recordCycleRun } from "../core/daemons/cycle-daemon.ts";
 import {
   tryAcquireDbLock,
@@ -168,6 +169,8 @@ export function selectTickPhases(opts: {
   inQuiet: boolean;
   synthEnabled: boolean;
   factsBackfillEnabled?: boolean;
+  /** Extraction is on and a connector account opted into connector facts. */
+  connectorFactsEnabled?: boolean;
   skipPhases: Set<string>;
   ranTodayUtc?: ReadonlySet<string>;
 }): PhaseName[] {
@@ -180,6 +183,8 @@ export function selectTickPhases(opts: {
   if (opts.factsBackfillEnabled && !opts.inQuiet && !opts.ranTodayUtc?.has("conversation-facts-backfill")) {
     base.push("conversation-facts-backfill");
   }
+  // Every tick: each account's own daily cap and page limit bound it.
+  if (opts.connectorFactsEnabled) base.push("connector-facts");
   return base.filter((p) => !opts.skipPhases.has(p));
 }
 
@@ -282,7 +287,8 @@ export function startCycleLoop(
       const ranTodayUtc =
         (synthEnabled && inQuiet && synthOnce) || (factsBackfillEnabled && !inQuiet)
           ? await phasesRunTodayUtc(storage.engine(), now) : undefined;
-      const phases = selectTickPhases({ inQuiet, synthEnabled, factsBackfillEnabled, skipPhases, ...(ranTodayUtc ? { ranTodayUtc } : {}) });
+      const connectorFactsEnabled = await connectorFactsScheduled(storage.engine());
+      const phases = selectTickPhases({ inQuiet, synthEnabled, factsBackfillEnabled, connectorFactsEnabled, skipPhases, ...(ranTodayUtc ? { ranTodayUtc } : {}) });
       const opts: CycleOptions = {
         phases,
         staleDays,

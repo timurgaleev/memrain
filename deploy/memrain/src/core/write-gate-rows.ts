@@ -272,19 +272,23 @@ export interface RowHeld {
  * tier is not the owner's is held instead: the writer must then skip its
  * insert. Null means "insert as usual" (any flag receipt is recorded after the
  * insert, as in flag mode); content the owner released before is inserted.
- * Never throws: a failure is logged and the row is stored as before.
+ * Never throws: a failure is logged and the row is stored as before — unless
+ * the writer passes `onError: "throw"`: then a failed assessment, or a row
+ * whose tier cannot be read, throws RowGateError and nothing is stored.
  */
 export async function holdIfQuarantined(
   engine: Engine,
   row: RowHoldCandidate,
   origin: RowOrigin,
   env: Record<string, string | undefined> = process.env,
+  opts: RowGateOptions = {},
 ): Promise<RowHeld | null> {
   if (env["MEMRAIN_WRITE_GATE_ROWS"]?.trim().toLowerCase() !== "quarantine") return null;
   const result = detect(row.fields);
   if (result !== null && !result.flagged) return null;
   try {
     const at = await effectiveRowTier(engine, origin);
+    if (at === null && opts.onError === "throw") throw new RowGateError(`the trust tier of a ${row.table} row could not be read`);
     if (at === null || at.tier === "owner") return null;
     const { tier, sourceId } = at;
     const gateOrigin = writeGateOrigin(tier);
@@ -307,7 +311,53 @@ export async function holdIfQuarantined(
     if (hold === null || hold.status === "released") return null;
     return { hold_id: hold.id, ref: `h${hold.id}`, status: hold.status, families: [...families] };
   } catch (e) {
+    if (opts.onError === "throw") throw e instanceof RowGateError ? e : new RowGateError(`could not assess a ${row.table} row for quarantine`, { cause: e });
     console.warn(`[write-gate] could not assess a ${row.table} row for quarantine: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   }
+}
+
+/**
+ * What `holdIfQuarantined` would do with a row, read without recording
+ * anything: `hold` (it would be held or stays dropped) or `pass` (it would be
+ * inserted). A writer that must store all of a batch or none of it asks this
+ * for every row before it writes one. Throws RowGateError when the row cannot
+ * be assessed.
+ */
+export async function rowHoldVerdict(
+  engine: Engine,
+  row: Omit<RowHoldCandidate, "payload">,
+  origin: RowOrigin,
+  env: Record<string, string | undefined> = process.env,
+): Promise<"hold" | "pass"> {
+  if (env["MEMRAIN_WRITE_GATE_ROWS"]?.trim().toLowerCase() !== "quarantine") return "pass";
+  const result = detect(row.fields);
+  if (result !== null && !result.flagged) return "pass";
+  try {
+    const at = await effectiveRowTier(engine, origin);
+    if (at === null) throw new RowGateError(`the trust tier of a ${row.table} row could not be read`);
+    if (at.tier === "owner") return "pass";
+    const gateOrigin = writeGateOrigin(at.tier);
+    if (gateOrigin === null || resolveRowGateMode(gateOrigin, at.sourceId, env) !== "quarantine") return "pass";
+    if (result !== null && holdingFamilies(gateOrigin, result.families).length === 0) return "pass";
+    const detectorVersion = result?.detector_version ?? WRITE_GATE_DETECTOR_VERSION;
+    const keyFields = row.identity === undefined ? row.fields : [...row.fields, { field: "identity", text: row.identity }];
+    const prior = await findRowHold(engine, { kind: holdKindOf(row.table), sourceId: at.sourceId, slug: row.slug, fields: keyFields, detectorVersion });
+    return prior?.status === "released" ? "pass" : "hold";
+  } catch (e) {
+    throw e instanceof RowGateError ? e : new RowGateError(`could not assess a ${row.table} row for quarantine`, { cause: e });
+  }
+}
+
+export interface RowGateOptions {
+  /**
+   * `throw`: a writer that must fail closed (the paid connector facts path)
+   * gets RowGateError instead of an insert when the row cannot be assessed.
+   */
+  onError?: "throw";
+}
+
+/** The row gate could not assess a row its writer asked to fail closed on. */
+export class RowGateError extends Error {
+  override readonly name = "RowGateError";
 }

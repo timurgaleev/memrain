@@ -1,8 +1,9 @@
 /**
- * Which pages a connector wrote. The paid phases that predate connectors
- * (the facts backfill, on-write extraction, the contextual-LLM tier) leave
- * them alone: mail, calendar, chat and meeting text is outside text, and the
- * connector pipeline extracts from it with its own extractor and caps.
+ * Which pages a connector wrote. The generic paid phases (the facts backfill,
+ * on-write extraction, the contextual-LLM tier) leave them alone: mail,
+ * calendar, chat and meeting text is outside text. Facts are extracted from
+ * it only by the opt-in connector-facts phase (cycle/connector-facts.ts), per
+ * account and under that account's own daily cap.
  *
  * A page is a connector page when its type carries the connector prefix
  * (render.ts names every kind `connector-<kind>`) or when a connector item

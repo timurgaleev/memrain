@@ -47,6 +47,7 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
   MEMRAIN_CONCEPTS_MODEL: "string",
   MEMRAIN_CONFIG_PATH: "string",
   MEMRAIN_CONNECTORS_ENABLED: "flag",
+  MEMRAIN_CONNECTOR_FACTS_MODEL: "string",
   MEMRAIN_CONNECTOR_GAP_HEAL_MINUTES: "int",
   MEMRAIN_CONNECTOR_KEK: "string",
   MEMRAIN_CONNECTOR_KEK_FILE: "string",
