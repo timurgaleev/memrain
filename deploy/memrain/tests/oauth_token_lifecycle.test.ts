@@ -591,7 +591,7 @@ describe("personal access tokens with a source and scopes", () => {
       handleAdminApi(
         new Request("http://localhost/admin/api/api-keys", { method: "POST", body: JSON.stringify(body) }),
         new URL("http://localhost/admin/api/api-keys"),
-        { storage, requireAdmin: () => true },
+        { storage, requireAdmin: () => true, sessionFresh: async () => true },
       );
     const res = await mint({ name: "laptop-2", source: "acme", read: ["beta"], scopes: ["read"] });
     expect(res?.status).toBe(200);

@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { api } from "../api";
+import { withReauth } from "../lib/passkey-ceremony.ts";
 import { ClientMembers } from "./ClientMembers";
+import { ClientGrantEditor } from "../components/ClientGrant.tsx";
 import { copyText } from "../lib/clipboard.ts";
 
 // Credentials section of the Agents page: the unified view over OAuth
@@ -35,6 +37,7 @@ export function CredentialsSection({ setError }: { setError: (s: string) => void
   const [rows, setRows] = useState<CredentialRow[]>([]);
   const [modal, setModal] = useState<null | "api-key" | "client">(null);
   const [members, setMembers] = useState<CredentialRow | null>(null);
+  const [grantFor, setGrantFor] = useState<CredentialRow | null>(null);
 
   const load = () =>
     api.agents()
@@ -63,27 +66,7 @@ export function CredentialsSection({ setError }: { setError: (s: string) => void
     if (raw === null) return;
     const trimmed = raw.trim();
     try {
-      await api.updateClientTtl(row.id, trimmed === "" || trimmed === "0" ? null : Number(trimmed));
-      await load();
-    } catch (e) {
-      setError(String((e as Error).message ?? e));
-    }
-  };
-
-  const rescope = async (row: CredentialRow) => {
-    const source = prompt(
-      `Write source id for "${row.name}":`,
-      row.source_id ?? "default",
-    );
-    if (source === null || source.trim() === "") return;
-    const readRaw = prompt(
-      "Federated read ids (comma-separated; empty = write source only):",
-      (row.federated_read ?? []).join(", "),
-    );
-    if (readRaw === null) return;
-    const readIds = readRaw.split(",").map((s) => s.trim()).filter(Boolean);
-    try {
-      await api.rescopeClient(row.id, source.trim(), readIds.length > 0 ? readIds : undefined);
+      await withReauth(() => api.updateClientTtl(row.id, trimmed === "" || trimmed === "0" ? null : Number(trimmed)));
       await load();
     } catch (e) {
       setError(String((e as Error).message ?? e));
@@ -99,7 +82,7 @@ export function CredentialsSection({ setError }: { setError: (s: string) => void
     const uris = raw.split(",").map((s) => s.trim()).filter(Boolean);
     if (uris.length === 0) return;
     try {
-      await api.setRedirectUris(row.id, uris, row.grant_revision ?? undefined);
+      await withReauth(() => api.setRedirectUris(row.id, uris, row.grant_revision ?? undefined));
       await load();
     } catch (e) {
       const msg = String((e as Error).message ?? e);
@@ -143,9 +126,9 @@ export function CredentialsSection({ setError }: { setError: (s: string) => void
                         className="btn btn-secondary"
                         style={{ fontSize: 12, marginRight: 6 }}
                         title={`source: ${r.source_id ?? "default"} · read: ${(r.federated_read ?? []).join(", ") || "—"}`}
-                        onClick={() => rescope(r)}
+                        onClick={() => setGrantFor(r)}
                       >
-                        Scope
+                        Permissions
                       </button>
                       <button className="btn btn-secondary" style={{ fontSize: 12, marginRight: 6 }} onClick={() => setTtl(r)}>TTL</button>
                       {(r.grant_types ?? []).includes("authorization_code") && (
@@ -177,6 +160,9 @@ export function CredentialsSection({ setError }: { setError: (s: string) => void
 
       {modal === "api-key" && <MintApiKeyModal onClose={() => setModal(null)} onDone={load} setError={setError} />}
       {modal === "client" && <RegisterClientModal onClose={() => setModal(null)} onDone={load} setError={setError} />}
+      {grantFor && (
+        <ClientGrantEditor clientId={grantFor.id} onClose={() => setGrantFor(null)} onSaved={() => void load()} />
+      )}
       {members && (
         <ClientMembers
           clientId={members.id}
@@ -221,7 +207,7 @@ function MintApiKeyModal({ onClose, onDone, setError }: { onClose: () => void; o
   const submit = async () => {
     setBusy(true);
     try {
-      const r = (await api.mintApiKey(name.trim())) as { name: string; token: string };
+      const r = (await withReauth(() => api.mintApiKey(name.trim()))) as { name: string; token: string };
       setMinted(r);
       onDone();
     } catch (e) {
@@ -284,7 +270,7 @@ function RegisterClientModal({ onClose, onDone, setError }: { onClose: () => voi
       if (ttl.trim() !== "") payload.token_ttl = Number(ttl.trim());
       if (source.trim() !== "") payload.source = source.trim();
       if (readIds.length > 0) payload.read = readIds;
-      const r = (await api.registerClient(payload)) as { client_id: string; client_secret: string | null };
+      const r = (await withReauth(() => api.registerClient(payload))) as { client_id: string; client_secret: string | null };
       setResult(r);
       onDone();
     } catch (e) {

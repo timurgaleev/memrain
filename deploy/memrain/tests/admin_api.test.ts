@@ -42,6 +42,8 @@ async function call(
   return handleAdminApi(req(path, init), new URL(`http://localhost:8080${path}`), {
     storage,
     requireAdmin: auth.requireAdmin,
+    sessionFresh: auth.sessionFresh,
+    signGrantPlan: auth.signGrantPlan,
     ...extra,
   });
 }
@@ -335,9 +337,14 @@ describe("admin-api credential management (authed)", () => {
 
     await registerSource(storage.engine(), { id: "acme", kind: "other", pathPrefix: "/acme" });
 
+    const preview = await call(
+      "/admin/api/rescope-client",
+      authed({ method: "POST", body: JSON.stringify({ client_id, source: "acme", dry_run: true }) }),
+    );
+    const { plan_hash, revision } = (await preview!.json()) as { plan_hash: string; revision: number };
     const res = await call(
       "/admin/api/rescope-client",
-      authed({ method: "POST", body: JSON.stringify({ client_id, source: "acme" }) }),
+      authed({ method: "POST", body: JSON.stringify({ client_id, source: "acme", expected_revision: revision, plan_hash }) }),
     );
     expect(res?.status).toBe(200);
     const body = (await res!.json()) as { ok: boolean; source_id: string; federated_read: string[] };
@@ -362,7 +369,7 @@ describe("admin-api credential management (authed)", () => {
     // Unknown source ids 400 — write source and read set alike.
     const ghost = await call(
       "/admin/api/rescope-client",
-      authed({ method: "POST", body: JSON.stringify({ client_id, source: "ghost" }) }),
+      authed({ method: "POST", body: JSON.stringify({ client_id, source: "ghost", dry_run: true }) }),
     );
     expect(ghost?.status).toBe(400);
     const ghostBody = (await ghost!.json()) as { error: string; reasons: { code: string; detail: string }[] };
@@ -371,13 +378,13 @@ describe("admin-api credential management (authed)", () => {
     expect(ghostBody.reasons[0]?.detail).toContain("ghost");
     const ghostRead = await call(
       "/admin/api/rescope-client",
-      authed({ method: "POST", body: JSON.stringify({ client_id, source: "acme", read: ["acme", "ghost"] }) }),
+      authed({ method: "POST", body: JSON.stringify({ client_id, source: "acme", read: ["acme", "ghost"], dry_run: true }) }),
     );
     expect(ghostRead?.status).toBe(400);
 
     const missing = await call(
       "/admin/api/rescope-client",
-      authed({ method: "POST", body: JSON.stringify({ client_id: "nope", source: "acme" }) }),
+      authed({ method: "POST", body: JSON.stringify({ client_id: "nope", source: "acme", dry_run: true }) }),
     );
     expect(missing?.status).toBe(404);
   });
@@ -409,16 +416,26 @@ describe("admin-api credential management (authed)", () => {
     expect(dryBody.changed).toEqual(["source_id", "federated_read", "bound_slug_prefixes"]);
     expect(await revisionOf()).toBe(0);
 
-    const ok = await rescope({ source: "acme", expected_revision: 0, bound_slug_prefixes: ["inbox"], tenant_mode: "client" });
+    // An apply replays the preview's plan with its hash.
+    const reviewed = async (payload: Record<string, unknown>) => {
+      const p = (await (await rescope({ ...payload, dry_run: true }))!.json()) as { plan_hash: string; revision: number };
+      return rescope({ ...payload, expected_revision: p.revision, plan_hash: p.plan_hash });
+    };
+    const ok = await reviewed({ source: "acme", bound_slug_prefixes: ["inbox"], tenant_mode: "client" });
     expect(ok?.status).toBe(200);
     expect(((await ok!.json()) as { revision: number }).revision).toBe(1);
 
-    const stale = await rescope({ source: "default", expected_revision: 0 });
+    const stale = await rescope({ source: "default", expected_revision: 0, plan_hash: "0".repeat(64) });
     expect(stale?.status).toBe(409);
-    expect(await stale!.json()).toEqual({ error: "grant_conflict", expected: 0, actual: 1 });
+    expect(await stale!.json()).toEqual({
+      error: "grant_conflict",
+      expected: 0,
+      actual: 1,
+      current: expect.objectContaining({ client_id, revision: 1, source_id: "acme" }),
+    });
     expect(await revisionOf()).toBe(1);
 
-    const invalid = await rescope({ source: "ghost", bound_slug_prefixes: ["NOT A SLUG"] });
+    const invalid = await rescope({ source: "ghost", bound_slug_prefixes: ["NOT A SLUG"], dry_run: true });
     expect(invalid?.status).toBe(400);
     const invalidBody = (await invalid!.json()) as { error: string; reasons: { code: string }[] };
     expect(invalidBody.error).toBe("invalid_grant");
@@ -429,7 +446,7 @@ describe("admin-api credential management (authed)", () => {
     }
 
     // null clears the fence.
-    const cleared = await rescope({ source: "acme", bound_slug_prefixes: null, expected_revision: 1 });
+    const cleared = await reviewed({ source: "acme", bound_slug_prefixes: null, expected_revision: 1 });
     expect(((await cleared!.json()) as { after: { bound_slug_prefixes: unknown } }).after.bound_slug_prefixes).toBeNull();
 
     const audit = await call(`/admin/api/grant-audit?client_id=${client_id}`, authed());

@@ -17,9 +17,11 @@ import {
   OAuthProvider,
   grantDiff,
   grantSnapshot,
+  grantWidens,
 } from "../src/core/oauth-provider.ts";
-import type { GrantMutationOptions } from "../src/core/oauth-provider.ts";
+import type { ClientGrantSnapshot, GrantMutationOptions } from "../src/core/oauth-provider.ts";
 import { registerSource } from "../src/core/sources.ts";
+import { setCredentialMinTrust } from "../src/core/token-min-trust.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -153,6 +155,9 @@ describe("rescopeClient — apply", () => {
       bound_slug_prefixes: null,
       tenant_mode: "client",
       scopes: ["read", "write"],
+      tool_surface: "full",
+      budget_usd_per_day: null,
+      min_trust: null,
     });
     expect(history[0]!.after).toEqual(res.after);
 
@@ -434,5 +439,66 @@ describe("setClientBudget — OAuth client", () => {
     const { clientId } = await register();
     await expect(provider.setClientBudget(clientId, -1)).rejects.toThrow();
     expect(await auditCount(clientId)).toBe(0);
+  });
+});
+
+describe("grantWidens", () => {
+  const base: ClientGrantSnapshot = {
+    source_id: "acme",
+    federated_read: ["acme", "beta"],
+    bound_slug_prefixes: ["inbox"],
+    tenant_mode: "client",
+    scopes: ["write"],
+    tool_surface: "starter",
+    budget_usd_per_day: 2,
+    min_trust: "member",
+  };
+  // protects: the step-up gate's classifier. fails_when: a rule stops seeing a
+  // widening (no passkey asked) or flags a narrowing (owner asked for nothing).
+  const rows: [string, Partial<ClientGrantSnapshot>, Partial<ClientGrantSnapshot>, string[]][] = [
+    ["scope added", { scopes: ["write", "admin"] }, { scopes: ["read"] }, ["scopes"]],
+    ["read source added", { federated_read: ["acme", "beta", "default"] }, { federated_read: ["acme"] }, ["federated_read"]],
+    ["write source moved", { source_id: "beta" }, {}, ["source_id"]],
+    ["prefix outside the fence", { bound_slug_prefixes: ["inbox", "people"] }, { bound_slug_prefixes: ["inbox/today"] }, ["bound_slug_prefixes"]],
+    ["tenant mode changed", { tenant_mode: "enrollment" }, {}, ["tenant_mode"]],
+    ["surface raised", { tool_surface: "full" }, { tool_surface: "verbs" }, ["tool_surface"]],
+    ["budget raised", { budget_usd_per_day: 2.5 }, { budget_usd_per_day: 1 }, ["budget_usd_per_day"]],
+    ["trust floor lowered", { min_trust: "agent" }, { min_trust: "owner" }, ["min_trust"]],
+  ];
+  for (const [name, widen, narrow, fields] of rows) {
+    test(`${name} widens; the matching narrowing does not`, () => {
+      expect(grantWidens(base, { ...base, ...widen })).toEqual(fields);
+      expect(grantWidens(base, { ...base, ...narrow })).toEqual([]);
+    });
+  }
+
+  test("clearing a cap, a floor or the fence widens; setting one on an open grant does not", () => {
+    expect(grantWidens(base, { ...base, budget_usd_per_day: null, min_trust: null, bound_slug_prefixes: null }))
+      .toEqual(["bound_slug_prefixes", "budget_usd_per_day", "min_trust"]);
+    const open: ClientGrantSnapshot = { ...base, budget_usd_per_day: null, min_trust: null, bound_slug_prefixes: null };
+    expect(grantWidens(open, { ...open, budget_usd_per_day: 1, min_trust: "agent", bound_slug_prefixes: ["inbox"] })).toEqual([]);
+    expect(grantWidens(base, base)).toEqual([]);
+  });
+
+  test("a scope the old set already implies is not a widening", () => {
+    expect(grantWidens({ ...base, scopes: ["admin"] }, { ...base, scopes: ["read", "write"] })).toEqual([]);
+  });
+});
+
+describe("setCredentialMinTrust — OAuth client", () => {
+  // protects: the trust floor is part of the grant revision, so a grant editor
+  // that previewed the old floor cannot overwrite a CLI change.
+  // fails_when: the CLI writer skips the revision bump or the audit row.
+  it("bumps the revision and writes one audit row with the floor before and after", async () => {
+    const { clientId } = await register();
+    const change = await setCredentialMinTrust(storage.raw(), clientId, "owner", { actor: "ops", via: "cli" });
+    expect(change).toMatchObject({ kind: "oauth_client", id: clientId, before: null, after: "owner" });
+    expect(Number((await clientRow(clientId)).grant_revision)).toBe(1);
+    const [row] = await provider.listGrantAudit(clientId);
+    expect(row).toMatchObject({ revision: 1, actor: "ops", via: "cli" });
+    expect((row!.before as ClientGrantSnapshot).min_trust).toBeNull();
+    expect(row!.after).toMatchObject({ min_trust: "owner", action: "set_min_trust" });
+    await expect(provider.rescopeClient(clientId, { minTrust: "agent" }, { ...CLI, expectedRevision: 0 }))
+      .rejects.toBeInstanceOf(GrantConflictError);
   });
 });

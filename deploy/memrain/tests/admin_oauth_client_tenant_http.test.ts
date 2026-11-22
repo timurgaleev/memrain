@@ -42,7 +42,7 @@ function browser(path: string, body?: unknown, headers: Record<string, string> =
 }
 
 async function send(storage: Storage, req: Request): Promise<Response> {
-  const res = await handleAdminApi(req, new URL(req.url), { storage, publicUrl: ORIGIN, requireAdmin: () => true, adminSessionId: () => "sess-byo" });
+  const res = await handleAdminApi(req, new URL(req.url), { storage, publicUrl: ORIGIN, requireAdmin: () => true, adminSessionId: () => "sess-byo", sessionFresh: async () => true });
   if (res === null) throw new Error("route not handled");
   return res;
 }

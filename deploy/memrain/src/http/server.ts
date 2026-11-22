@@ -710,6 +710,8 @@ export function startServer(opts: ServerOptions): ServerHandle {
           requireAdmin: adminAuth.requireAdmin,
           sessionCooldown: adminAuth.sessionCooldown,
           adminSessionId: adminAuth.adminSessionId,
+          sessionFresh: adminAuth.sessionFresh,
+          signGrantPlan: adminAuth.signGrantPlan,
           ...(opts.publicUrl ? { publicUrl: opts.publicUrl } : {}),
         });
         if (r2) return r2;

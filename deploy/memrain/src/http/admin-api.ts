@@ -23,19 +23,24 @@ import { assertCredentialScoped } from "../core/requester-scope.ts";
 import { createHash, randomBytes } from "node:crypto";
 import type { Storage } from "../core/storage.ts";
 import type { Engine } from "../core/engine/interface.ts";
-import { getSource } from "../core/sources.ts";
+import { getSource, listSources } from "../core/sources.ts";
 import { brainHealthMetrics } from "../core/source-health.ts";
 import { getCalibrationProfile } from "../core/synthesis/reads.ts";
 import {
+  clientGrantSnapshot,
   GrantConflictError,
   GrantNotFoundError,
+  GrantPlanChangedError,
+  GrantReauthRequiredError,
   GrantValidationError,
   isAllowedRedirectUri,
   OAuthProvider,
   resolvePatGrant,
   validateTokenEndpointAuthMethod,
 } from "../core/oauth-provider.ts";
-import type { TenantMode } from "../core/oauth-provider.ts";
+import type { GrantChange, TenantMode } from "../core/oauth-provider.ts";
+import { isToolSurface } from "../mcp/surface.ts";
+import { isTrustTier } from "../core/trust-tier.ts";
 import { normalizeScopesInput } from "../core/scope.ts";
 import { isSameOriginPost } from "./same-origin.ts";
 import { extension } from "../core/extension.ts";
@@ -72,6 +77,101 @@ export interface AdminApiDeps {
   adminSessionId?: (req: Request) => string | null;
   /** Fake model for the chat routes (tests only). */
   chatModel?: SonnetFn;
+  /**
+   * Whether the session holds a fresh passkey step-up (http/admin.ts). Unset:
+   * every grant change that widens authority is refused.
+   */
+  sessionFresh?: (req: Request) => Promise<boolean>;
+  /** Signs a grant plan with the admin secret (http/admin.ts). Unset: no grant apply. */
+  signGrantPlan?: (canonical: string) => string;
+}
+
+/** A client's grant as the editor reads it: the snapshot plus revision and labels. */
+async function clientGrantView(engine: Engine, clientId: string): Promise<Record<string, unknown> | null> {
+  const r = await engine.query<{
+    client_id: string;
+    client_name: string | null;
+    profile: string | null;
+    grant_revision: number | string;
+    source_id: string | null;
+    federated_read: string[] | null;
+    bound_slug_prefixes: string[] | null;
+    tenant_mode: string | null;
+    scope: string | null;
+    tool_surface: string | null;
+    budget_usd_per_day: unknown;
+    min_trust: string | null;
+  }>(
+    `SELECT client_id, client_name, profile, grant_revision, source_id, federated_read, bound_slug_prefixes,
+            tenant_mode, scope, tool_surface, budget_usd_per_day, min_trust
+       FROM oauth_clients WHERE client_id = $1 AND deleted_at IS NULL`,
+    [clientId],
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  return {
+    client_id: row.client_id,
+    client_name: row.client_name ?? row.client_id,
+    profile: row.profile,
+    revision: Number(row.grant_revision),
+    ...clientGrantSnapshot(row),
+  };
+}
+
+const isIdList = (v: unknown): v is string[] =>
+  Array.isArray(v) && v.every((x) => typeof x === "string" && x.length > 0);
+
+/**
+ * The grant change a rescope body names. Every field is optional and omitted
+ * means unchanged; `null` clears the fence, the budget or the trust floor.
+ */
+function parseGrantChange(body: Record<string, unknown>): GrantChange | string {
+  const change: GrantChange = {};
+  if (body.source !== undefined) {
+    if (typeof body.source !== "string" || body.source.length === 0) return "source must be a source id";
+    change.sourceId = body.source;
+  }
+  if (body.read !== undefined) {
+    if (!isIdList(body.read) || body.read.length === 0) return "read must be a non-empty array of source ids";
+    change.federatedRead = body.read;
+  }
+  // Tri-state fence: absent leaves it, null or [] clears it, a list replaces it.
+  if (body.bound_slug_prefixes === null) change.boundSlugPrefixes = [];
+  else if (body.bound_slug_prefixes !== undefined) {
+    if (!isIdList(body.bound_slug_prefixes)) return "bound_slug_prefixes must be an array of slug prefixes, or null to clear";
+    change.boundSlugPrefixes = body.bound_slug_prefixes;
+  }
+  if (body.tenant_mode !== undefined) {
+    if (body.tenant_mode !== "client" && body.tenant_mode !== "enrollment") return "tenant_mode must be 'client' or 'enrollment'";
+    change.tenantMode = body.tenant_mode as TenantMode;
+  }
+  // A list replaces the client's scopes (validated by the provider, which
+  // answers invalid_scope).
+  if (body.scopes !== undefined) {
+    if (!Array.isArray(body.scopes) || !body.scopes.every((x) => typeof x === "string")) return "scopes must be an array of scope names";
+    change.scopes = body.scopes as string[];
+  }
+  if (body.tool_surface !== undefined) {
+    if (!isToolSurface(body.tool_surface)) return "tool_surface must be full, starter or verbs";
+    change.toolSurface = body.tool_surface;
+  }
+  if (body.budget_usd_per_day !== undefined) {
+    const b = body.budget_usd_per_day;
+    if (b !== null && (typeof b !== "number" || !Number.isFinite(b) || b < 0)) {
+      return "budget_usd_per_day must be a non-negative number, or null for unlimited";
+    }
+    // The column keeps cents; a finer amount would preview and audit a value
+    // the database then rounds.
+    if (b !== null && Math.abs(b * 100 - Math.round(b * 100)) > 1e-6) {
+      return "budget_usd_per_day takes at most two decimals";
+    }
+    change.budgetUsdPerDay = b as number | null;
+  }
+  if (body.min_trust !== undefined) {
+    if (body.min_trust !== null && !isTrustTier(body.min_trust)) return "min_trust must be owner, member, agent or external, or null";
+    change.minTrust = body.min_trust as GrantChange["minTrust"];
+  }
+  return change;
 }
 
 const unauthorized = () => Response.json({ error: "Admin authentication required" }, { status: 401 });
@@ -89,6 +189,27 @@ const COOLDOWN_ALLOWED = new Set<string>([
 ]);
 const cooldownRefusal = (until: number) =>
   Response.json({ error: "cooldown", until: new Date(until).toISOString() }, { status: 403 });
+/**
+ * POSTs that mint a credential, point an existing one somewhere new or set
+ * how long its tokens live. Like a grant change that widens, they need a
+ * passkey step-up from the last five minutes (a brain with no passkey
+ * enrolled has nothing to step up with).
+ * Narrowing and revoking routes stay open so a stolen session can still be
+ * cut off quickly. rescope-client gates itself, on what the change widens.
+ */
+const STEP_UP_REQUIRED = new Set<string>([
+  "/admin/api/register-client",
+  "/admin/api/api-keys",
+  "/admin/api/enrollments",
+  "/admin/api/set-redirect-uris",
+  "/admin/api/update-client-ttl",
+]);
+
+/** 403 reauth_required unless the session holds a fresh step-up; an unwired check refuses. */
+async function stepUpRefusal(req: Request, deps: AdminApiDeps): Promise<Response | null> {
+  if ((await deps.sessionFresh?.(req)) ?? false) return null;
+  return Response.json({ error: "reauth_required" }, { status: 403 });
+}
 /** Log the real cause server-side; return a generic message — don't leak
  *  internal / SQL error text to the client (even an admin one). */
 function serverError(route: string, e: unknown): Response {
@@ -188,6 +309,10 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
     }
     const cooldown = COOLDOWN_ALLOWED.has(p) ? null : deps.sessionCooldown?.(req) ?? null;
     if (cooldown !== null) return cooldownRefusal(cooldown);
+    if (STEP_UP_REQUIRED.has(p)) {
+      const refused = await stepUpRefusal(req, deps);
+      if (refused) return refused;
+    }
   }
   const engine = deps.storage.engine();
 
@@ -590,11 +715,8 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
       return badRequest(e instanceof Error ? e.message : "invalid token_ttl");
     }
     try {
-      const r = await engine.query<{ client_id: string }>(
-        "UPDATE oauth_clients SET token_ttl = $1 WHERE client_id = $2 AND deleted_at IS NULL RETURNING client_id",
-        [ttl, body.client_id],
-      );
-      if (r.rows.length === 0) {
+      const provider = new OAuthProvider({ engine });
+      if (!(await provider.setClientTokenTtl(body.client_id, ttl, { actor: "admin", via: "admin_api" }))) {
         return Response.json({ error: `no client "${body.client_id}"` }, { status: 404 });
       }
       return Response.json({ ok: true, client_id: body.client_id, token_ttl: ttl });
@@ -603,63 +725,42 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
     }
   }
 
-  // POST /admin/api/rescope-client — change an existing client's tenancy
-  // grant without revoke + re-register, through the grant mutation service:
-  // revision-checked (`expected_revision`), previewable (`dry_run`) and
-  // audited. Already-issued tokens pick up the new grant on their next
-  // verification (the verify path JOINs the client row).
-  if (p === "/admin/api/rescope-client" && req.method === "POST") {
-    let body: {
-      client_id?: unknown;
-      source?: unknown;
-      read?: unknown;
-      bound_slug_prefixes?: unknown;
-      tenant_mode?: unknown;
-      scopes?: unknown;
-      expected_revision?: unknown;
-      dry_run?: unknown;
-    };
+  // GET /admin/api/client-grant?client_id= — one client's grant for the
+  // editor, with the sources it may pick from.
+  if (p === "/admin/api/client-grant" && req.method === "GET") {
+    const clientId = url.searchParams.get("client_id");
+    if (!clientId) return badRequest("client_id required");
     try {
-      body = (await req.json()) as typeof body;
+      const grant = await clientGrantView(engine, clientId);
+      if (!grant) return Response.json({ error: "not_found" }, { status: 404, headers: { "Cache-Control": "no-store" } });
+      const sources = (await listSources(engine)).map((s) => ({ id: s.id, name: s.description ?? s.id, federated: s.federated }));
+      return Response.json({ grant, sources }, { headers: { "Cache-Control": "no-store" } });
+    } catch (e) {
+      return serverError("client-grant", e);
+    }
+  }
+
+  // POST /admin/api/rescope-client — change an existing client's grant
+  // without revoke + re-register. Preview first (`dry_run`), which answers the
+  // plan, what it widens and a `plan_hash`; the apply then needs
+  // `expected_revision` and that `plan_hash`. The server recomputes the plan
+  // from the same partial change under the row lock and refuses a moved
+  // revision (409 grant_conflict, with the current grant) or a different plan
+  // (409 plan_changed). A widening apply also needs a fresh passkey step-up
+  // (403 reauth_required). Audited; issued tokens pick up the new grant on
+  // their next verification (the verify path JOINs the client row).
+  if (p === "/admin/api/rescope-client" && req.method === "POST") {
+    let body: Record<string, unknown>;
+    try {
+      body = (await req.json()) as Record<string, unknown>;
     } catch {
       return badRequest("invalid JSON body");
     }
+    if (body === null || typeof body !== "object" || Array.isArray(body)) return badRequest("invalid JSON body");
     if (typeof body.client_id !== "string" || body.client_id.length === 0) return badRequest("client_id required");
-    if (typeof body.source !== "string" || body.source.length === 0) return badRequest("source required");
-    const isIdList = (v: unknown): v is string[] =>
-      Array.isArray(v) && v.every((x) => typeof x === "string" && x.length > 0);
-    let federatedRead: string[] | undefined;
-    if (body.read !== undefined) {
-      if (!isIdList(body.read) || body.read.length === 0) {
-        return badRequest("read must be a non-empty array of source ids");
-      }
-      federatedRead = body.read;
-    }
-    // Tri-state fence: absent leaves it, null or [] clears it, a list replaces it.
-    let boundSlugPrefixes: string[] | undefined;
-    if (body.bound_slug_prefixes === null) boundSlugPrefixes = [];
-    else if (body.bound_slug_prefixes !== undefined) {
-      if (!isIdList(body.bound_slug_prefixes)) {
-        return badRequest("bound_slug_prefixes must be an array of slug prefixes, or null to clear");
-      }
-      boundSlugPrefixes = body.bound_slug_prefixes;
-    }
-    let tenantMode: TenantMode | undefined;
-    if (body.tenant_mode !== undefined) {
-      if (body.tenant_mode !== "client" && body.tenant_mode !== "enrollment") {
-        return badRequest("tenant_mode must be 'client' or 'enrollment'");
-      }
-      tenantMode = body.tenant_mode;
-    }
-    // Absent leaves the client's scopes; a list replaces them (validated by the
-    // provider, which answers invalid_scope).
-    let scopes: string[] | undefined;
-    if (body.scopes !== undefined) {
-      if (!Array.isArray(body.scopes) || !body.scopes.every((x) => typeof x === "string")) {
-        return badRequest("scopes must be an array of scope names");
-      }
-      scopes = body.scopes as string[];
-    }
+    const clientId = body.client_id;
+    const change = parseGrantChange(body);
+    if (typeof change === "string") return badRequest(change);
     let expectedRevision: number | undefined;
     if (body.expected_revision !== undefined) {
       if (typeof body.expected_revision !== "number" || !Number.isInteger(body.expected_revision) || body.expected_revision < 0) {
@@ -670,15 +771,34 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
     if (body.dry_run !== undefined && typeof body.dry_run !== "boolean") {
       return badRequest("dry_run must be a boolean");
     }
+    const dryRun = body.dry_run === true;
+    if (body.plan_hash !== undefined && (typeof body.plan_hash !== "string" || body.plan_hash.length === 0)) {
+      return badRequest("plan_hash must be the string a preview returned");
+    }
+    const sign = deps.signGrantPlan;
+    if (!dryRun) {
+      if (expectedRevision === undefined || body.plan_hash === undefined) {
+        return badRequest("expected_revision and plan_hash required: preview the change first (dry_run: true)");
+      }
+      if (!sign) return serverError("rescope-client", new Error("grant plan signing is not configured"));
+    }
     try {
+      // Read before the row lock: the passkey count must not run inside it (a
+      // PGLite transaction holds the only connection). The step-up could lapse
+      // or a sign-out land in the milliseconds before the lock; that window
+      // is accepted.
+      const stepUpFresh = dryRun ? undefined : ((await deps.sessionFresh?.(req)) ?? false);
       const provider = new OAuthProvider({ engine });
-      const result = await provider.rescopeClient(
-        body.client_id,
-        { sourceId: body.source, federatedRead, boundSlugPrefixes, tenantMode, scopes },
+      const result = await provider.rescopeClient(clientId, change, {
         // The admin session carries no per-person identity yet (one bootstrap
         // secret), so every admin change is attributed to the admin role.
-        { actor: "admin", via: "admin_api", expectedRevision, dryRun: body.dry_run === true },
-      );
+        actor: "admin",
+        via: "admin_api",
+        expectedRevision,
+        dryRun,
+        ...(sign ? { signPlan: sign } : {}),
+        ...(dryRun ? {} : { expectedPlanHash: body.plan_hash as string, stepUpFresh }),
+      });
       return Response.json({
         ok: true,
         client_id: result.clientId,
@@ -689,6 +809,8 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
         before: result.before,
         after: result.after,
         changed: result.changed,
+        widens: result.widens,
+        ...(result.planHash === undefined ? {} : { plan_hash: result.planHash }),
         revoked_unbound: {
           access_tokens: result.revokedUnbound.accessTokens,
           refresh_tokens: result.revokedUnbound.refreshTokens,
@@ -697,10 +819,17 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
       });
     } catch (e) {
       if (e instanceof GrantNotFoundError) {
-        return Response.json({ error: "not_found", detail: `no active client "${body.client_id}"` }, { status: 404 });
+        return Response.json({ error: "not_found", detail: `no active client "${clientId}"` }, { status: 404 });
       }
       if (e instanceof GrantConflictError) {
-        return Response.json({ error: "grant_conflict", expected: e.expected, actual: e.actual }, { status: 409 });
+        const current = await clientGrantView(engine, clientId).catch(() => null);
+        return Response.json({ error: "grant_conflict", expected: e.expected, actual: e.actual, current }, { status: 409 });
+      }
+      if (e instanceof GrantPlanChangedError) {
+        return Response.json({ error: "plan_changed" }, { status: 409 });
+      }
+      if (e instanceof GrantReauthRequiredError) {
+        return Response.json({ error: "reauth_required", widens: e.widens }, { status: 403 });
       }
       if (e instanceof GrantValidationError) {
         return Response.json({ error: "invalid_grant", reasons: e.reasons }, { status: 400 });

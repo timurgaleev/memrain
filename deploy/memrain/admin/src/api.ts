@@ -1,5 +1,6 @@
 import { normalizeToolResponse, ToolError } from "./lib/tool-result.ts";
 import { expectOk, passkeyFetch, ApiError } from "./lib/passkey-fetch.ts";
+import type { ClientGrant, GrantSource } from "./components/ClientGrant.tsx";
 
 const BASE = "";
 
@@ -56,27 +57,21 @@ export const api = {
   // The corpus counts scan whole tables; the 30 s health poll leaves them out.
   fullStats: (counts = true) => apiFetch(counts ? "/admin/api/full-stats" : "/admin/api/full-stats?counts=0"),
   agents: () => apiFetch("/admin/api/agents"),
-  mintApiKey: (name: string) =>
-    apiFetch("/admin/api/api-keys", { method: "POST", body: JSON.stringify({ name }) }),
+  // Minting and re-pointing credentials need a passkey step-up: these keep the
+  // typed reauth_required code so callers can wrap them in withReauth.
+  mintApiKey: (name: string) => sessionCall<unknown>("/admin/api/api-keys", post({ name })),
   revokeApiKey: (name: string) =>
     apiFetch("/admin/api/api-keys/revoke", { method: "POST", body: JSON.stringify({ name }) }),
-  registerClient: (payload: Record<string, unknown>) =>
-    apiFetch("/admin/api/register-client", { method: "POST", body: JSON.stringify(payload) }),
+  registerClient: (payload: Record<string, unknown>) => sessionCall<unknown>("/admin/api/register-client", post(payload)),
   updateClientTtl: (client_id: string, token_ttl: number | null) =>
-    apiFetch("/admin/api/update-client-ttl", { method: "POST", body: JSON.stringify({ client_id, token_ttl }) }),
-  rescopeClient: (client_id: string, source: string, read?: string[]) =>
-    apiFetch("/admin/api/rescope-client", { method: "POST", body: JSON.stringify({ client_id, source, ...(read ? { read } : {}) }) }),
+    sessionCall<unknown>("/admin/api/update-client-ttl", post({ client_id, token_ttl })),
   revokeClient: (client_id: string) =>
     apiFetch("/admin/api/revoke-client", { method: "POST", body: JSON.stringify({ client_id }) }),
   setRedirectUris: (client_id: string, redirect_uris: string[], expected_revision?: number) =>
-    apiFetch("/admin/api/set-redirect-uris", {
-      method: "POST",
-      body: JSON.stringify({ client_id, redirect_uris, ...(expected_revision !== undefined ? { expected_revision } : {}) }),
-    }),
+    sessionCall<unknown>("/admin/api/set-redirect-uris", post({ client_id, redirect_uris, ...(expected_revision !== undefined ? { expected_revision } : {}) })),
   enrollments: (client_id: string) =>
     apiFetch(`/admin/api/enrollments?client_id=${encodeURIComponent(client_id)}`),
-  issueEnrollment: (payload: Record<string, unknown>) =>
-    apiFetch("/admin/api/enrollments", { method: "POST", body: JSON.stringify(payload) }),
+  issueEnrollment: (payload: Record<string, unknown>) => sessionCall<unknown>("/admin/api/enrollments", post(payload)),
   revokeEnrollment: (id: string) =>
     apiFetch("/admin/api/revoke-enrollment", { method: "POST", body: JSON.stringify({ id }) }),
   revokeGrant: (id: string) =>
@@ -130,7 +125,18 @@ async function sessionCall<T = Record<string, unknown>>(path: string, init?: Req
   return expectOk(r);
 }
 
-const post = (body: unknown = {}): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
+function post(body: unknown = {}): RequestInit {
+  return { method: "POST", body: JSON.stringify(body) };
+}
+
+// The grant editor keeps typed codes (grant_conflict with the current grant,
+// plan_changed, reauth_required) so it can offer the right recovery.
+export const grantApi = {
+  clientGrant: (client_id: string) =>
+    sessionCall<{ grant: ClientGrant; sources: GrantSource[] }>(`/admin/api/client-grant?client_id=${encodeURIComponent(client_id)}`),
+  preview: <T>(payload: Record<string, unknown>) => sessionCall<T>("/admin/api/rescope-client", post(payload)),
+  apply: (payload: Record<string, unknown>) => sessionCall("/admin/api/rescope-client", post(payload)),
+};
 
 export const passkeyApi = {
   status: () => passkeyFetch<{ available?: boolean; reason?: string }>("/admin/api/passkey/status"),

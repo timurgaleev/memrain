@@ -42,6 +42,18 @@ let officeCalls = 0;
 let officeFailures = 0;
 let jobsCalls = 0;
 let jobsFail = false;
+const GRANT = {
+  client_id: "client-1", client_name: "Laptop", profile: "writer", revision: 3, source_id: "default",
+  federated_read: ["default"], bound_slug_prefixes: null, tenant_mode: "client", scopes: ["read", "write"],
+  tool_surface: "starter", budget_usd_per_day: 2, min_trust: "member",
+};
+// A source name that would run script if the editor rendered it as HTML.
+const HOSTILE_SOURCE = "<img src=x onerror=alert(1)>";
+const GRANT_FIELD: Record<string, string> = {
+  source: "source_id", read: "federated_read", bound_slug_prefixes: "bound_slug_prefixes", scopes: "scopes",
+  tool_surface: "tool_surface", budget_usd_per_day: "budget_usd_per_day", min_trust: "min_trust",
+};
+const grantApplies: Record<string, unknown>[] = [];
 const historyRequests: number[] = [];
 const server = Bun.serve({
   hostname: "127.0.0.1",
@@ -67,6 +79,26 @@ const server = Bun.serve({
     if (chatted) return chatted;
     const automated = await automationRoute(request);
     if (automated) return automated;
+    if (path === "/admin/api/client-grant") {
+      return Response.json({ grant: GRANT, sources: [{ id: "default", name: "default", federated: true }, { id: "acme", name: HOSTILE_SOURCE, federated: false }] });
+    }
+    if (path === "/admin/api/rescope-client") {
+      const body = await request.json() as Record<string, unknown>;
+      if (body.dry_run !== true) {
+        grantApplies.push(body);
+        return Response.json({ error: "grant_conflict", expected: 3, actual: 4 }, { status: 409 });
+      }
+      const after: Record<string, unknown> = { ...GRANT };
+      const changed: string[] = [];
+      for (const [k, field] of Object.entries(GRANT_FIELD)) {
+        if (k in body) { after[field] = body[k]; changed.push(field); }
+      }
+      return Response.json({
+        ok: true, dry_run: true, revision: 3, plan_hash: "f".repeat(64), before: GRANT, after, changed,
+        widens: changed.includes("tool_surface") ? ["tool_surface"] : [],
+        revoked_unbound: { access_tokens: 0, refresh_tokens: 0, codes: 0 },
+      });
+    }
     if (path === "/admin/api/jobs/watch") {
       jobsCalls += 1;
       return jobsFail ? Response.json({ error: "temporary job failure" }, { status: 503 })
@@ -957,6 +989,30 @@ try {
     await page.locator(".office-list").getByText("Librarian is indexing pages", { exact: true }).waitFor();
     await page.waitForFunction(() => !document.querySelector(".warning-bar"));
   }, { noWebGL: true });
+  await check("Grant editor previews only changed rows, drops the preview on edit and locks after a 409", "grant", async (page) => {
+    await page.getByLabel("Tool surface").selectOption("full");
+    await page.getByRole("button", { name: "Preview changes" }).click();
+    const rows = page.locator("tbody tr");
+    await rows.first().waitFor();
+    assert.equal(await rows.count(), 1);
+    assert.deepEqual(await rows.first().locator("th, td").allTextContents(), ["Tool surface", "starter", "full"]);
+    await page.getByText("applying needs passkey confirmation", { exact: false }).waitFor();
+    // Any edit after a preview discards it.
+    await page.getByLabel("Daily budget (USD)").fill("3");
+    assert.equal(await page.locator("tbody tr").count(), 0);
+    await page.getByRole("button", { name: "Preview changes" }).click();
+    await page.getByRole("button", { name: "Apply reviewed changes" }).click();
+    await page.getByRole("button", { name: "Reload current grant" }).waitFor();
+    assert.equal(await page.getByLabel("Tool surface").isDisabled(), true);
+    assert.equal(await page.getByRole("button", { name: "Preview changes" }).isDisabled(), true);
+    // The apply sends the partial change, the revision and the hash; never a snapshot.
+    assert.deepEqual(grantApplies, [{ client_id: "client-1", tool_surface: "full", budget_usd_per_day: 3, expected_revision: 3, plan_hash: "f".repeat(64) }]);
+    // Names render as text.
+    await page.getByText(HOSTILE_SOURCE, { exact: true }).waitFor();
+    assert.equal(await page.locator("img").count(), 0);
+    const source = await Bun.file(join(import.meta.dir, "../src/components/ClientGrant.tsx")).text();
+    assert.equal(source.includes("dangerouslySetInnerHTML"), false);
+  });
   await check("Approvals with nothing held says so", "approvals", async (page) => {
     automation.reset(scenario());
     await page.getByText("Nothing is waiting", { exact: false }).waitFor();

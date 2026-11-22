@@ -20,10 +20,11 @@
  * persisted.
  */
 
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
 import type { PrincipalRef } from "./auth-info.ts";
-import { isTrustTier, type TrustTier } from "./trust-tier.ts";
+import { isTrustTier, trustRank, type TrustTier } from "./trust-tier.ts";
+import { isToolSurface, type ToolSurface } from "../mcp/surface.ts";
 import { memberAccess, memberRequired, widenReadSources, writeMemberAudit } from "./members.ts";
 import { validateSlug as validatePageSlug } from "./pages.ts";
 import { INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND } from "./jobs/kinds.ts";
@@ -575,12 +576,26 @@ export interface GrantSnapshot {
 }
 
 /**
- * A requested grant change. `federatedRead` omitted defaults to `[sourceId]`.
- * `boundSlugPrefixes` is tri-state: omitted leaves the fence, `[]` clears it,
- * a list replaces it. `tenantMode` omitted leaves the mode alone.
+ * The tenancy snapshot plus the per-client limits the grant editor changes in
+ * the same revision: the tool surface, the daily spend cap and the read floor.
+ */
+export interface ClientGrantSnapshot extends GrantSnapshot {
+  tool_surface: ToolSurface;
+  /** USD per day; null when uncapped. */
+  budget_usd_per_day: number | null;
+  /** The least trusted tier the client may read; null for no floor. */
+  min_trust: TrustTier | null;
+}
+
+/**
+ * A requested grant change. Every field omitted leaves the stored value, with
+ * one exception kept from registration: `federatedRead` omitted while
+ * `sourceId` is given becomes `[sourceId]`. `boundSlugPrefixes` is
+ * tri-state: omitted leaves the fence, `[]` clears it, a list replaces it.
+ * `budgetUsdPerDay` and `minTrust` take null to clear.
  */
 export interface GrantChange {
-  sourceId: string;
+  sourceId?: string;
   federatedRead?: string[];
   boundSlugPrefixes?: string[];
   tenantMode?: TenantMode;
@@ -592,6 +607,10 @@ export interface GrantChange {
   /** Per-client token lifetimes: omitted leaves them, null clears them. */
   accessTtlSeconds?: number | null;
   refreshTtlSeconds?: number | null;
+  /** Narrows the tools the client is shown and may call. */
+  toolSurface?: ToolSurface;
+  budgetUsdPerDay?: number | null;
+  minTrust?: TrustTier | null;
 }
 
 /** Per-client token lifetimes in seconds; absent or null = the server default. */
@@ -609,16 +628,36 @@ export interface GrantMutationOptions {
   /** When set, the change applies only if the stored revision still equals it. */
   expectedRevision?: number;
   dryRun?: boolean;
+  /**
+   * Keyed signature over a plan's canonical text (`grantPlanCanonical`). When
+   * set, the result carries `planHash`; the key itself stays with the caller.
+   */
+  signPlan?: (canonical: string) => string;
+  /**
+   * An apply goes through only when the plan recomputed under the row lock
+   * signs to this value (needs `signPlan`); otherwise `plan_changed`.
+   */
+  expectedPlanHash?: string;
+  /**
+   * Whether the caller holds a fresh step-up. When false, an apply that widens
+   * the grant fails with `reauth_required`. Undefined: the caller enforces no
+   * step-up (the local CLI).
+   */
+  stepUpFresh?: boolean;
 }
 
 export interface GrantMutationResult {
   clientId: string;
   /** The revision after the change; on a dry run, the current revision. */
   revision: number;
-  before: GrantSnapshot;
-  after: GrantSnapshot;
+  before: ClientGrantSnapshot;
+  after: ClientGrantSnapshot;
   /** Grant fields whose value differs between before and after. */
-  changed: (keyof GrantSnapshot)[];
+  changed: (keyof ClientGrantSnapshot)[];
+  /** The fields the change widens (`grantWidens`); empty for a narrowing. */
+  widens: string[];
+  /** `signPlan` over this plan; absent without a signer. */
+  planHash?: string;
   dryRun: boolean;
   /**
    * Unbound codes and tokens the change deleted (on a dry run, would delete):
@@ -641,6 +680,9 @@ export type GrantReasonCode =
   | "invalid_prefix"
   | "invalid_ttl"
   | "invalid_scope"
+  | "invalid_surface"
+  | "invalid_budget"
+  | "invalid_trust"
   | "public_client_mode";
 
 export interface GrantReason {
@@ -674,6 +716,24 @@ export class GrantConflictError extends Error {
   }
 }
 
+/** The plan recomputed at apply time is not the one that was previewed. */
+export class GrantPlanChangedError extends Error {
+  readonly code = "plan_changed";
+  constructor() {
+    super("plan_changed: the grant change differs from the previewed plan");
+    this.name = "GrantPlanChangedError";
+  }
+}
+
+/** A widening apply without a fresh step-up. */
+export class GrantReauthRequiredError extends Error {
+  readonly code = "reauth_required";
+  constructor(readonly widens: string[]) {
+    super(`reauth_required: widening ${widens.join(", ")} needs a fresh passkey confirmation`);
+    this.name = "GrantReauthRequiredError";
+  }
+}
+
 export class GrantValidationError extends Error {
   readonly code = "invalid_grant";
   constructor(readonly reasons: GrantReason[]) {
@@ -689,17 +749,21 @@ export interface GrantAuditRow {
   revision: number;
   actor: string;
   via: string;
-  before: GrantSnapshot;
-  after: GrantSnapshot;
+  /** Older rows carry only the tenancy fields; current writers add the client limits. */
+  before: GrantSnapshot & Partial<ClientGrantSnapshot>;
+  after: GrantSnapshot & Partial<ClientGrantSnapshot>;
   created_at: string;
 }
 
-const GRANT_FIELDS: (keyof GrantSnapshot)[] = [
+const GRANT_FIELDS: (keyof ClientGrantSnapshot)[] = [
   "source_id",
   "federated_read",
   "bound_slug_prefixes",
   "tenant_mode",
   "scopes",
+  "tool_surface",
+  "budget_usd_per_day",
+  "min_trust",
 ];
 
 function sortedCopy(xs: string[]): string[] {
@@ -725,8 +789,76 @@ export function grantSnapshot(row: {
   };
 }
 
-export function grantDiff(before: GrantSnapshot, after: GrantSnapshot): (keyof GrantSnapshot)[] {
-  return GRANT_FIELDS.filter((f) => JSON.stringify(before[f]) !== JSON.stringify(after[f]));
+export function clientGrantSnapshot(row: Parameters<typeof grantSnapshot>[0] & {
+  tool_surface: unknown;
+  budget_usd_per_day: unknown;
+  min_trust: unknown;
+}): ClientGrantSnapshot {
+  return {
+    ...grantSnapshot(row),
+    tool_surface: isToolSurface(row.tool_surface) ? row.tool_surface : "full",
+    budget_usd_per_day: row.budget_usd_per_day == null ? null : Number(row.budget_usd_per_day),
+    min_trust: isTrustTier(row.min_trust) ? row.min_trust : null,
+  };
+}
+
+/** A field one snapshot lacks (a tenancy-only one) compares as unchanged. */
+export function grantDiff(
+  before: GrantSnapshot | ClientGrantSnapshot,
+  after: GrantSnapshot | ClientGrantSnapshot,
+): (keyof ClientGrantSnapshot)[] {
+  const b = before as Partial<ClientGrantSnapshot>;
+  const a = after as Partial<ClientGrantSnapshot>;
+  return GRANT_FIELDS.filter((f) => JSON.stringify(b[f]) !== JSON.stringify(a[f]));
+}
+
+const SURFACE_RANK: Readonly<Record<ToolSurface, number>> = { verbs: 0, starter: 1, full: 2 };
+
+/**
+ * The fields a change from `before` to `after` widens: what the client could
+ * reach, call, spend or read grows. The step-up gate keys on this, so a change
+ * that is not clearly a narrowing counts as widening.
+ */
+export function grantWidens(before: ClientGrantSnapshot, after: ClientGrantSnapshot): string[] {
+  const out: string[] = [];
+  if (after.scopes.some((s) => !hasScope(before.scopes, s))) out.push("scopes");
+  if (after.federated_read.some((id) => !before.federated_read.includes(id))) out.push("federated_read");
+  if (after.source_id !== before.source_id) out.push("source_id");
+  const fenceBefore = before.bound_slug_prefixes;
+  const fenceAfter = after.bound_slug_prefixes;
+  const underFence = (p: string): boolean =>
+    fenceBefore !== null && fenceBefore.some((q) => p === q || p.startsWith(q.endsWith("/") ? q : `${q}/`));
+  if (fenceBefore !== null && (fenceAfter === null || !fenceAfter.every(underFence))) {
+    out.push("bound_slug_prefixes");
+  }
+  if (after.tenant_mode !== before.tenant_mode) out.push("tenant_mode");
+  if (SURFACE_RANK[after.tool_surface] > SURFACE_RANK[before.tool_surface]) out.push("tool_surface");
+  if (
+    before.budget_usd_per_day !== null &&
+    (after.budget_usd_per_day === null || after.budget_usd_per_day > before.budget_usd_per_day)
+  ) {
+    out.push("budget_usd_per_day");
+  }
+  if (
+    before.min_trust !== null &&
+    (after.min_trust === null || trustRank(after.min_trust) < trustRank(before.min_trust))
+  ) {
+    out.push("min_trust");
+  }
+  return out;
+}
+
+/** The exact text a plan signature covers: client, revision and the whole after. */
+export function grantPlanCanonical(clientId: string, revision: number, after: ClientGrantSnapshot): string {
+  const ordered: Record<string, unknown> = {};
+  for (const k of Object.keys(after).sort()) ordered[k] = after[k as keyof ClientGrantSnapshot];
+  return JSON.stringify({ client_id: clientId, revision, after: ordered });
+}
+
+function samePlanHash(a: string, b: string): boolean {
+  const x = Buffer.from(a, "utf8");
+  const y = Buffer.from(b, "utf8");
+  return x.length === y.length && timingSafeEqual(x, y);
 }
 
 /**
@@ -1488,9 +1620,13 @@ export class OAuthProvider {
         refresh_ttl_seconds: number | null;
         client_secret_hash: string | null;
         scope: string | null;
+        tool_surface: string | null;
+        budget_usd_per_day: unknown;
+        min_trust: string | null;
       }>(
         `SELECT source_id, federated_read, bound_slug_prefixes, tenant_mode, grant_revision, grant_types,
-                access_ttl_seconds, refresh_ttl_seconds, client_secret_hash, scope
+                access_ttl_seconds, refresh_ttl_seconds, client_secret_hash, scope,
+                tool_surface, budget_usd_per_day, min_trust
            FROM oauth_clients
           WHERE client_id = $1 AND deleted_at IS NULL
           FOR UPDATE`,
@@ -1503,8 +1639,10 @@ export class OAuthProvider {
         throw new GrantConflictError(opts.expectedRevision, current);
       }
 
-      const federated = change.federatedRead ?? [change.sourceId];
-      const scope = await this.validateGrantChange(tx, change, federated);
+      const sourceId = change.sourceId ?? row.source_id;
+      const federated =
+        change.federatedRead ?? (change.sourceId !== undefined ? [change.sourceId] : row.federated_read ?? []);
+      const scope = await this.validateGrantChange(tx, change);
       // The same refusal register-client makes: with /authorize auto-approving,
       // a public client moved into client mode would mint tokens on its
       // client_id alone, and every sign-in would be refused from then on.
@@ -1527,21 +1665,28 @@ export class OAuthProvider {
         ]);
       }
 
-      const before = grantSnapshot(row);
+      const before = clientGrantSnapshot(row);
       const fence =
         change.boundSlugPrefixes === undefined
           ? row.bound_slug_prefixes
           : change.boundSlugPrefixes.length > 0
             ? change.boundSlugPrefixes
             : null;
-      const after = grantSnapshot({
-        source_id: change.sourceId,
+      // The locked row overlaid with only what the change names: an omitted
+      // field keeps its stored value, never a default.
+      const after = clientGrantSnapshot({
+        source_id: sourceId,
         federated_read: federated,
         bound_slug_prefixes: fence,
         tenant_mode: change.tenantMode ?? row.tenant_mode,
         scope: scope ?? row.scope,
+        tool_surface: change.toolSurface ?? row.tool_surface,
+        budget_usd_per_day: change.budgetUsdPerDay === undefined ? row.budget_usd_per_day : change.budgetUsdPerDay,
+        min_trust: change.minTrust === undefined ? row.min_trust : change.minTrust,
       });
       const changed = grantDiff(before, after);
+      const widens = grantWidens(before, after);
+      const planHash = opts.signPlan?.(grantPlanCanonical(clientId, current, after));
       const ttlsBefore = {
         accessTtlSeconds: row.access_ttl_seconds === null ? null : Number(row.access_ttl_seconds),
         refreshTtlSeconds: row.refresh_ttl_seconds === null ? null : Number(row.refresh_ttl_seconds),
@@ -1565,10 +1710,15 @@ export class OAuthProvider {
       const movesTenant =
         (changed.includes("source_id") || changed.includes("tenant_mode")) &&
         (row.grant_types ?? []).includes("authorization_code");
+      const plan = { before, after, changed, widens, ...(planHash === undefined ? {} : { planHash }) };
       if (opts.dryRun) {
         const revokedUnbound = movesTenant ? await countUnbound(tx, clientId) : NO_UNBOUND_REVOKED;
-        return { clientId, revision: current, before, after, changed, dryRun: true, revokedUnbound, ttls };
+        return { clientId, revision: current, ...plan, dryRun: true, revokedUnbound, ttls };
       }
+      if (opts.expectedPlanHash !== undefined && (planHash === undefined || !samePlanHash(planHash, opts.expectedPlanHash))) {
+        throw new GrantPlanChangedError();
+      }
+      if (opts.stepUpFresh === false && widens.length > 0) throw new GrantReauthRequiredError(widens);
 
       const setFence = change.boundSlugPrefixes !== undefined;
       const applied = await tx.query<{ revision: number }>(
@@ -1581,6 +1731,9 @@ export class OAuthProvider {
                   access_ttl_seconds = CASE WHEN $11::boolean THEN $12::integer ELSE access_ttl_seconds END,
                   refresh_ttl_seconds = CASE WHEN $13::boolean THEN $14::integer ELSE refresh_ttl_seconds END,
                   scope = COALESCE($15::text, scope),
+                  tool_surface = COALESCE($16::text, tool_surface),
+                  budget_usd_per_day = CASE WHEN $17::boolean THEN $18::numeric ELSE budget_usd_per_day END,
+                  min_trust = CASE WHEN $19::boolean THEN $20::text ELSE min_trust END,
                   grant_revision = grant_revision + 1
             WHERE client_id = $1 AND deleted_at IS NULL
             RETURNING grant_revision
@@ -1590,7 +1743,7 @@ export class OAuthProvider {
          RETURNING revision`,
         [
           clientId,
-          change.sourceId,
+          sourceId,
           federated,
           setFence && change.boundSlugPrefixes!.length > 0 ? change.boundSlugPrefixes : null,
           setFence,
@@ -1604,6 +1757,11 @@ export class OAuthProvider {
           change.refreshTtlSeconds !== undefined,
           change.refreshTtlSeconds ?? null,
           scope ?? null,
+          change.toolSurface ?? null,
+          change.budgetUsdPerDay !== undefined,
+          change.budgetUsdPerDay ?? null,
+          change.minTrust !== undefined,
+          change.minTrust ?? null,
         ],
       );
       const revision = applied.rows[0]?.revision;
@@ -1612,7 +1770,7 @@ export class OAuthProvider {
       if (revision === undefined) throw new Error(`grant write for "${clientId}" affected no row`);
       const revokedUnbound = movesTenant ? await deleteUnbound(tx, clientId) : NO_UNBOUND_REVOKED;
       if (scope !== undefined) await narrowIssuedTokens(tx, clientId, after.scopes);
-      return { clientId, revision: Number(revision), before, after, changed, dryRun: false, revokedUnbound, ttls };
+      return { clientId, revision: Number(revision), ...plan, dryRun: false, revokedUnbound, ttls };
     });
   }
 
@@ -1620,11 +1778,7 @@ export class OAuthProvider {
    * Collect every reason a grant change is invalid; throw when there is any.
    * Returns the normalized scope string when the change sets scopes.
    */
-  private async validateGrantChange(
-    tx: Engine,
-    change: GrantChange,
-    federated: string[],
-  ): Promise<string | undefined> {
+  private async validateGrantChange(tx: Engine, change: GrantChange): Promise<string | undefined> {
     const reasons: GrantReason[] = [];
     let scope: string | undefined;
     if (change.scopes !== undefined) {
@@ -1634,20 +1788,32 @@ export class OAuthProvider {
         reasons.push({ code: "invalid_scope", detail: e instanceof Error ? e.message : String(e) });
       }
     }
-    if (federated.length === 0) {
+    // Only the sources the change names are checked: a stored id whose source
+    // was removed since must not block an unrelated edit.
+    const named = change.federatedRead ?? (change.sourceId !== undefined ? [change.sourceId] : undefined);
+    if (named !== undefined && named.length === 0) {
       reasons.push({ code: "empty_read_set", detail: "the read set must name at least one source" });
     }
-    const ids = Array.from(new Set([change.sourceId, ...federated]));
-    const known = await tx.query<{ id: string }>(
-      "SELECT id FROM sources WHERE id = ANY($1::text[])",
-      [ids],
-    );
+    const ids = Array.from(new Set([...(change.sourceId === undefined ? [] : [change.sourceId]), ...(named ?? [])]));
+    const known = ids.length === 0
+      ? { rows: [] as { id: string }[] }
+      : await tx.query<{ id: string }>("SELECT id FROM sources WHERE id = ANY($1::text[])", [ids]);
     const knownIds = new Set(known.rows.map((r) => r.id));
     for (const id of ids) {
       if (!knownIds.has(id)) {
         const role = id === change.sourceId ? "write" : "read";
         reasons.push({ code: "unknown_source", detail: `${role} source "${id}" is not registered` });
       }
+    }
+    if (change.toolSurface !== undefined && !isToolSurface(change.toolSurface)) {
+      reasons.push({ code: "invalid_surface", detail: "tool surface must be full, starter or verbs" });
+    }
+    const budget = change.budgetUsdPerDay;
+    if (budget !== undefined && budget !== null && (!Number.isFinite(budget) || budget < 0 || budget > 99_999_999.99)) {
+      reasons.push({ code: "invalid_budget", detail: "daily budget must be a non-negative USD amount that fits NUMERIC(10,2), or null" });
+    }
+    if (change.minTrust !== undefined && change.minTrust !== null && !isTrustTier(change.minTrust)) {
+      reasons.push({ code: "invalid_trust", detail: "trust floor must be owner, member, agent or external, or null" });
     }
     for (const p of change.boundSlugPrefixes ?? []) {
       try {
@@ -1671,6 +1837,96 @@ export class OAuthProvider {
     }
     if (reasons.length > 0) throw new GrantValidationError(reasons);
     return scope;
+  }
+
+  /**
+   * Set one client's legacy per-token TTL (`token_ttl`, seconds; null for the
+   * server default). Revision-bumped and audited like every grant writer.
+   * False when no active client has that id.
+   */
+  async setClientTokenTtl(clientId: string, ttl: number | null, who: GrantActor): Promise<boolean> {
+    return this.auditedClientUpdate(clientId, who, "set_token_ttl", "token_ttl = $6::integer", [ttl], { token_ttl: ttl });
+  }
+
+  /**
+   * Record which grant profile a client was expanded from and the tool surface
+   * it sets. The profile grants nothing itself, but the surface is part of the
+   * grant, so this is revision-bumped and audited too.
+   */
+  async setClientProfile(
+    clientId: string,
+    profile: { profile: string; catalogVersion: number; toolSurface: ToolSurface },
+    who: GrantActor,
+  ): Promise<boolean> {
+    return this.auditedClientUpdate(
+      clientId,
+      who,
+      "set_profile",
+      "profile = $6, profile_catalog_version = $7::integer, tool_surface = $8",
+      [profile.profile, profile.catalogVersion, profile.toolSurface],
+      { profile: profile.profile, profile_catalog_version: profile.catalogVersion, tool_surface: profile.toolSurface },
+    );
+  }
+
+  /**
+   * One client column write under the row lock, with the revision bump and
+   * the audit row in the same statement. `setSql` names its values from `$6`.
+   * The audit `before` carries the prior value of every `detail` key.
+   */
+  private async auditedClientUpdate(
+    clientId: string,
+    who: GrantActor,
+    action: string,
+    setSql: string,
+    params: unknown[],
+    detail: Record<string, unknown>,
+  ): Promise<boolean> {
+    return this.engine.transaction(async (tx) => {
+      const locked = await tx.query<Record<string, unknown> & {
+        source_id: unknown;
+        federated_read: unknown;
+        bound_slug_prefixes: unknown;
+        tenant_mode: unknown;
+        scope: unknown;
+        tool_surface: unknown;
+        budget_usd_per_day: unknown;
+        min_trust: unknown;
+      }>(
+        // scope: operator-only an operator grant write locks one client row by id
+        `SELECT source_id, federated_read, bound_slug_prefixes, tenant_mode, scope, tool_surface,
+                budget_usd_per_day, min_trust, token_ttl, profile, profile_catalog_version
+           FROM oauth_clients
+          WHERE client_id = $1 AND deleted_at IS NULL
+          FOR UPDATE`,
+        [clientId],
+      );
+      const row = locked.rows[0];
+      if (!row) return false;
+      const snapshot = clientGrantSnapshot(row);
+      const prior: Record<string, unknown> = {};
+      for (const k of Object.keys(detail)) prior[k] = k === "tool_surface" ? snapshot.tool_surface : (row[k] ?? null);
+      const applied = await tx.query<{ revision: number }>(
+        `WITH u AS (
+           UPDATE oauth_clients SET ${setSql}, grant_revision = grant_revision + 1
+            WHERE client_id = $1 AND deleted_at IS NULL
+            RETURNING grant_revision
+         )
+         INSERT INTO oauth_grant_audit (client_id, revision, actor, via, before, after)
+         SELECT $1, u.grant_revision, $2, $3, $4::text::jsonb, $5::text::jsonb FROM u
+         RETURNING revision`,
+        [
+          clientId,
+          who.actor,
+          who.via,
+          JSON.stringify({ ...snapshot, ...prior }),
+          JSON.stringify({ ...snapshot, ...detail, action }),
+          ...params,
+        ],
+      );
+      // The row is locked, so the UPDATE cannot miss it.
+      if (applied.rows[0]?.revision === undefined) throw new Error(`${action} for "${clientId}" affected no row`);
+      return true;
+    });
   }
 
   /** A client's grant history, newest first. Grant fields only, no secrets. */
@@ -2529,8 +2785,11 @@ export class OAuthProvider {
         tenant_mode: string | null;
         scope: string | null;
         budget_usd_per_day: unknown;
+        tool_surface: string | null;
+        min_trust: string | null;
       }>(
-        `SELECT source_id, federated_read, bound_slug_prefixes, tenant_mode, scope, budget_usd_per_day
+        `SELECT source_id, federated_read, bound_slug_prefixes, tenant_mode, scope, budget_usd_per_day,
+                tool_surface, min_trust
            FROM oauth_clients
           WHERE client_id = $1 AND deleted_at IS NULL
           FOR UPDATE`,
@@ -2538,7 +2797,7 @@ export class OAuthProvider {
       );
       const row = locked.rows[0];
       if (!row) return false;
-      const snapshot = grantSnapshot(row);
+      const snapshot = clientGrantSnapshot(row);
       const applied = await tx.query<{ revision: number }>(
         `WITH u AS (
            UPDATE oauth_clients SET budget_usd_per_day = $2, grant_revision = grant_revision + 1
@@ -2553,10 +2812,7 @@ export class OAuthProvider {
           usdPerDay,
           who.actor,
           who.via,
-          JSON.stringify({
-            ...snapshot,
-            budget_usd_per_day: row.budget_usd_per_day == null ? null : Number(row.budget_usd_per_day),
-          }),
+          JSON.stringify(snapshot),
           JSON.stringify({ ...snapshot, action: "set_budget", budget_usd_per_day: usdPerDay }),
         ],
       );

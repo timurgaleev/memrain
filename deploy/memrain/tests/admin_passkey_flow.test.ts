@@ -102,7 +102,7 @@ class Browser {
     const req = this.request(path, o);
     const url = new URL(req.url);
     const res = (await auth.handleAuthRoute(req, url))
-      ?? (await handleAdminApi(req, url, { storage, requireAdmin: auth.requireAdmin, sessionCooldown: auth.sessionCooldown, publicUrl: ORIGIN }))
+      ?? (await handleAdminApi(req, url, { storage, requireAdmin: auth.requireAdmin, sessionCooldown: auth.sessionCooldown, sessionFresh: auth.sessionFresh, publicUrl: ORIGIN }))
       ?? new Response("Not Found", { status: 404 });
     this.absorb(res);
     return res;
@@ -879,7 +879,8 @@ describe("step-up, revoke and cooldown", () => {
     const owner = new Browser();
     const { soft } = await enroll(owner, await bearerLink());
     expect(owner.signedIn()).toBe(true);
-    // A new client connects an agent on day one.
+    // A new client connects an agent on day one (minting takes one step-up).
+    expect((await reauth(owner, soft)).status).toBe(200);
     expect((await owner.post("/admin/api/api-keys", { name: "day-one" })).status).not.toBe(403);
     expect((await owner.post("/admin/api/register-client", { name: "Day one agent" })).status).not.toBe(403);
     const list = await json(await owner.call("/admin/api/passkeys"));
@@ -888,6 +889,8 @@ describe("step-up, revoke and cooldown", () => {
     // The exemption is stored, so a fresh sign-in keeps it.
     const again = new Browser("198.51.100.150");
     expect((await login(again, soft)).status).toBe(200);
+    // Minting needs a step-up; with it, nothing else (no cooldown) refuses.
+    expect((await reauth(again, soft)).status).toBe(200);
     expect((await again.post("/admin/api/api-keys", { name: "after-login" })).status).not.toBe(403);
     // A second link while a passkey exists is the theft case: cooldown applies.
     const second = new Browser("198.51.100.151");

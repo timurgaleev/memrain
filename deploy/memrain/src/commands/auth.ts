@@ -109,7 +109,7 @@ import {
 import { patNameSpendConflict } from "../core/budget.ts";
 import { bindCredential, existingMember } from "../core/members.ts";
 import { assertCredentialScoped } from "../core/requester-scope.ts";
-import { resolveGrantProfile, type ResolvedGrantProfile } from "../core/grant-profiles.ts";
+import { resolveGrantProfile } from "../core/grant-profiles.ts";
 import { isTrustTier, TRUST_TIERS, type TrustTier } from "../core/trust-tier.ts";
 import { setCredentialMinTrust } from "../core/token-min-trust.ts";
 import {
@@ -256,14 +256,6 @@ async function withProvider<T>(
   });
 }
 
-/** Record which profile a client's grant was expanded from; it grants nothing itself. */
-async function recordClientProfile(storage: Storage, clientId: string, profile: ResolvedGrantProfile): Promise<void> {
-  await storage.raw().query(
-    `UPDATE oauth_clients SET profile = $2, profile_catalog_version = $3, tool_surface = $4 WHERE client_id = $1`,
-    [clientId, profile.profile, profile.catalogVersion, profile.toolSurface],
-  );
-}
-
 async function registerClient(name: string, rest: string[]): Promise<void> {
   if (!name) throw new Error("Usage: auth register-client <name> [flags]");
   const { flags } = parseFlags(rest);
@@ -338,7 +330,7 @@ async function registerClient(name: string, rest: string[]): Promise<void> {
     );
     if (profile) {
       try {
-        await recordClientProfile(storage, registered.clientId, profile);
+        await p.setClientProfile(registered.clientId, profile, { actor: cliActor(), via: "cli" });
       } catch (err) {
         // The secret is never shown on this path, so a client left live here
         // could only be a key nobody holds.
@@ -623,7 +615,7 @@ function parseFloorArg(raw: string): TrustTier | null {
 async function setMinTrust(target: string, value: string): Promise<void> {
   if (!target || value === undefined) throw new Error("Usage: auth min-trust <client_id|token_name> <owner|member|agent|external|none>");
   const tier = parseFloorArg(value);
-  const change = await withProvider((_p, storage) => setCredentialMinTrust(storage.raw(), target, tier));
+  const change = await withProvider((_p, storage) => setCredentialMinTrust(storage.raw(), target, tier, { actor: cliActor(), via: "cli" }));
   console.log(JSON.stringify({ ...change, note: "Takes effect on the credential's next request." }, null, 2));
 }
 

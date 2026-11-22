@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "../api";
+import { withReauth } from "../lib/passkey-ceremony.ts";
 
 // The people on one connector: each enrollment code pinned to the client (or
 // open to any enrollment-mode client), whether it was redeemed, whether it was
@@ -69,7 +70,7 @@ export function ClientMembers({
   const issue = async (payload: Record<string, unknown>) => {
     setBusy(true);
     try {
-      setIssued((await api.issueEnrollment(payload)) as Issued);
+      setIssued((await withReauth(() => api.issueEnrollment(payload))) as Issued);
       setSource("");
       setLabel("");
       await load();

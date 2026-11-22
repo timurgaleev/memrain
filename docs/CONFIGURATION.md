@@ -787,7 +787,31 @@ the before/after diff and the current revision), then apply it with
 `grant_conflict` and writes nothing. `memrain auth grant-history <client_id>`
 shows who changed the grant and when; the admin API exposes the same through
 `POST /admin/api/rescope-client` (`dry_run`, `expected_revision`) and
-`GET /admin/api/grant-audit?client_id=`.
+`GET /admin/api/grant-audit?client_id=`. A client's daily budget
+(`auth set-budget`) and read floor (`auth min-trust`) are part of the same
+revision and audit trail.
+
+The admin panel's grant editor (Agents → Credentials → Permissions) edits a
+client's sources, write fence, scopes, tool surface, daily budget and trust
+floor. **Preview changes** sends `dry_run: true` and shows the changed rows,
+what the change does to issued tokens, and which fields it widens; it also
+returns a `plan_hash`, an HMAC over the client id, revision and resulting
+grant, keyed from the admin secret. **Apply reviewed changes** resends the same
+partial change with `expected_revision` and that `plan_hash`; the server
+recomputes the plan under the row lock and refuses with `409 grant_conflict` if
+the revision moved (the response carries the current grant) or
+`409 plan_changed` if the plan differs. A change that widens authority (a new
+scope, source or read source, a looser fence, a tenant-mode change, a wider
+tool surface, a higher or removed budget, a lower or removed trust floor) needs
+a passkey confirmation from the last five minutes (`403 reauth_required`); a
+narrowing does not, and a brain with no passkey enrolled needs none. The same
+step-up guards registering a client, minting an API key, issuing an enrollment,
+changing a client's redirect URIs and setting its token TTL. On an
+enrollment-mode client, tokens issued from an enrollment keep that
+enrollment's sources and its own daily budget when it has one. A bootstrap-token sign-in counts as a
+step-up for its first ten minutes. Grant
+profiles are presets recorded for audit; they do not limit what the editor may
+set.
 
 The `actor` on an audit row is a label, not an authenticated identity. The CLI
 records `MEMRAIN_OPERATOR` (else `USER`, else `cli`), which whoever runs the

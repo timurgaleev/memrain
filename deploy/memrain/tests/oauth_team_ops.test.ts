@@ -394,6 +394,7 @@ describe("admin API: enrollments and member grants", () => {
     const res = await handleAdminApi(new Request(`http://localhost:8080${path}`, init), new URL(`http://localhost:8080${path}`), {
       storage,
       requireAdmin: auth.requireAdmin,
+      sessionFresh: auth.sessionFresh,
     });
     return res!;
   }

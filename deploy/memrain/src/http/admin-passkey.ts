@@ -149,6 +149,11 @@ export interface PasskeyRoutes {
   exclusive<T>(fn: () => Promise<T>): Promise<T>;
   /** Forget every pending challenge and grant (sign-out-everywhere). */
   clearEphemeral(): void;
+  /**
+   * True when the session confirmed a passkey within REAUTH_WINDOW_MS, or when
+   * no passkey is enrolled and so there is nothing to step up with.
+   */
+  sessionFresh(s: AdminSession): Promise<boolean>;
 }
 
 /** When a session's cooldown ends, or null when it has none. */
@@ -1132,6 +1137,6 @@ export function createPasskeyRoutes(deps: PasskeyRouteDeps): PasskeyRoutes {
     grants.clear();
   }
 
-  return { handle, clearEphemeral, exclusive };
+  return { handle, clearEphemeral, exclusive, sessionFresh: async (s) => sessionFresh(s) };
 }
 

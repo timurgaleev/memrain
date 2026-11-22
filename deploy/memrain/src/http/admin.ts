@@ -22,7 +22,7 @@
  * `/admin/auth/:nonce`, `/admin/api/sign-out-everywhere`) + `requireAdmin`. The
  * data endpoints (A2) and the embedded SPA (B/C) build on top.
  */
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { RateLimiter } from "../mcp/rate_limit.ts";
 import { resolveClientKey } from "./client-key.ts";
 import { isSameOriginPost } from "./same-origin.ts";
@@ -53,7 +53,11 @@ const APPROVAL_PARAM = "memrain_approval";
 const APPROVAL_PARAMS = [APPROVAL_PARAM, LEGACY_APPROVAL_PARAM] as const;
 const APPROVAL_TTL_MS = 5 * 60 * 1000; // the click and the redirect that follows it
 // An operator session counts as freshly authenticated this long after sign-in,
-// for the passkey routes that demand a step-up.
+// for every route that demands a step-up (passkey management, minting
+// credentials, widening a grant). Longer than a passkey step-up's five
+// minutes on purpose: signing in with the bootstrap secret is itself a proof
+// of the root credential, and after this window the operator steps up with a
+// passkey like anyone else.
 const OPERATOR_FRESH_MS = 10 * 60 * 1000;
 
 /**
@@ -262,6 +266,17 @@ export interface AdminAuth {
   sessionCooldown(req: Request): number | null;
   /** The id of the live admin session the request carries, or null. */
   adminSessionId(req: Request): string | null;
+  /**
+   * True when the request's session may make a step-up change: it confirmed a
+   * passkey within the reauth window, or no passkey is enrolled to confirm
+   * with. False without a live session.
+   */
+  sessionFresh(req: Request): Promise<boolean>;
+  /**
+   * HMAC over a grant plan, keyed from the admin secret. A page script can ask
+   * the server to sign a plan it previews, never sign an edited plan itself.
+   */
+  signGrantPlan(canonical: string): string;
 }
 
 const cooldownRefusal = (until: number): Response =>
@@ -602,5 +617,21 @@ export function createAdminAuth(opts: AdminAuthOptions): AdminAuth {
   }
 
   const adminSessionId = (req: Request): string | null => liveSession(req)?.id ?? null;
-  return { requireAdmin, consumeAuthorizeApproval, handleAuthRoute, sessionCooldown, adminSessionId };
+  async function sessionFresh(req: Request): Promise<boolean> {
+    const s = liveSession(req);
+    if (!s) return false;
+    // Without passkey sign-in mounted no passkey can exist to step up with.
+    return passkey ? passkey.sessionFresh(s.session) : true;
+  }
+  const planKey = createHmac("sha256", bootstrapHash).update("memrain grant plan v1").digest();
+  const signGrantPlan = (canonical: string): string => createHmac("sha256", planKey).update(canonical).digest("hex");
+  return {
+    requireAdmin,
+    consumeAuthorizeApproval,
+    handleAuthRoute,
+    sessionCooldown,
+    adminSessionId,
+    sessionFresh,
+    signGrantPlan,
+  };
 }

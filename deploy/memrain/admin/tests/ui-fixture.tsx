@@ -9,6 +9,7 @@ import { OfficePage } from "../src/pages/Office.tsx";
 import { AskPage } from "../src/pages/Ask.tsx";
 import { parseHash } from "../src/lib/route.ts";
 import { CommandPalette } from "../src/components/CommandPalette.tsx";
+import { ClientGrantEditor } from "../src/components/ClientGrant.tsx";
 
 // Ask follows the hash like the real App does, so a thread link and a
 // source link both land where they would in the panel.
@@ -41,6 +42,7 @@ const VIEWS: Record<string, () => React.ReactElement> = {
   office: () => <OfficePage />,
   ask: () => <AskFixture />,
   palette: () => <PaletteFixture />,
+  grant: () => <ClientGrantEditor clientId="client-1" onClose={() => {}} onSaved={() => {}} />,
 };
 
 const root = createRoot(document.getElementById("root")!);
