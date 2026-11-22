@@ -1,0 +1,11 @@
+# Size ceilings for skills over the 16384-byte cap (bytes of SKILL.md).
+# Checked by `memrain skillpack lint` (rule skill-too-large). A skill with no
+# row here is capped at 16384 bytes; a row exists only for a skill above that.
+# A ceiling is the size the skill had when the row was written, so it only
+# goes down: a skill that grows cuts something first, and raising a ceiling
+# is a reviewer-visible edit to this file. Once a skill drops under the cap
+# the lint warns that its row is stale; delete it then.
+# Columns (tab-separated): skill	max_bytes	note
+cold-start	18740	seeded at today's size, due a diet
+maintain	16543	seeded at today's size, due a diet
+setup	22053	seeded at today's size, due a diet

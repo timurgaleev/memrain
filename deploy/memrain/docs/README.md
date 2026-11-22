@@ -79,6 +79,8 @@ tsvector. Embeddings: Bedrock Titan v2 (1024-dim).
 | `check-resolvable [--limit N] [--threshold P]` | wikilink coverage report; exits 1 when orphan-rate exceeds `P` % |
 | `skillify "<prompt>" [--out P] [--slug S] [--dry-run]` | draft a skill `*.md` via Bedrock Claude Haiku + deterministic linter |
 | `skillpack [--out P]` | bundle skills as tar.gz with manifest (for downstream agent loaders that consume skill packs) |
+| `skillpack lint [--json] [--dir P]` | every tool, command, subcommand, flag and tool-call argument a skill names exists; skills stay under 16 KB unless `skill-budgets.tsv` gives a ceiling |
+| `skillpack check [--json] [--dir P] [--strict] [--fix]` | the pack as a routing tree: resolver rows, reachability, trigger overlaps and gaps, routing-eval cases, shared rules copied into skills; `--fix` rewrites the safe copies, `--strict` fails on warnings |
 | `jobs {list\|stats\|show\|retry\|cancel}` | inspect / reset / cancel rows in the durable job queue |
 | `friction {analyze\|propose-fix}` | counts + recents (`analyze`); Claude-Haiku-suggested skill-text edits (`propose-fix`) |
 | `migrate-engine --from X --to Y` | copy every table between Engine adapters, then verify counts and content hashes (exit 1 on mismatch) |

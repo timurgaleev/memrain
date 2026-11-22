@@ -5,6 +5,7 @@ description: Check identity and duplicates before creating a brain page from new
 triggers:
   - "check before creating a page"
   - "check ingest duplicates"
+  - "is this already in the brain"
 tools:
   - resolve_slugs
   - search

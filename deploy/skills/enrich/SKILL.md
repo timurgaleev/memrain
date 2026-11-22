@@ -46,10 +46,6 @@ This skill guarantees:
 
 > **Convention:** See `conventions/quality.md` (via `get_skill conventions/quality`) for Iron Law back-linking.
 
-Every mention of a person or company with a brain page MUST create a back-link
-FROM that entity's page TO the page mentioning them. An unlinked mention is a
-broken brain. See `_brain-filing-rules.md` for format.
-
 ## Philosophy
 
 A brain page should read like an intelligence dossier, not a LinkedIn scrape.
@@ -60,7 +56,7 @@ they building, what makes them tick, where are they headed.
 
 > **Convention:** see `conventions/quality.md` (via `get_skill conventions/quality`) for citation formats and source precedence.
 
-When sources conflict, note the contradiction with both citations.
+> **Convention:** see `_brain-filing-rules.md` (via `get_skill _brain-filing-rules`) for Citation Requirements.
 
 ## When To Enrich
 

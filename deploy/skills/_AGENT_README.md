@@ -19,6 +19,7 @@ exist, the layout is the same:
 ```
 skills/
   _AGENT_README.md          ← you are here
+  _resolver.md              ← every skill and its triggers in one table
   _brain-filing-rules.md    ← where to file brain pages (read on every write)
   _output-rules.md          ← output quality standards (no LLM slop, exact phrasing)
   _friction-protocol.md     ← log friction via the log_friction tool
@@ -56,8 +57,10 @@ keyword expansion) is fine on top. When a trigger matches strongly, invoke
 the skill — fetch its full body via `get_skill <slug>` and follow the
 workflow described there.
 
-Routing lives in frontmatter. Do NOT look for a managed-block routing table
-in any other file.
+Routing lives in frontmatter. `get_skill _resolver` serves the same routing
+as one table, generated from that frontmatter, plus disambiguation rules for
+requests two skills could take. If the table and a skill's frontmatter ever
+disagree, the frontmatter wins.
 
 ## Skill anatomy
 
@@ -106,15 +109,12 @@ current bundle. A locally scaffolded copy DOES NOT change automatically —
 after an upgrade it becomes a snapshot you compare against.
 
 On every cold start with a scaffolded copy, or any time the operator
-mentions an upgrade, run:
-
-```bash
-memrain skillpack
-```
-
-That sweeps every bundled skill and reports per-skill `identical / differs
-/ missing` against the local files. For each `differs`, inspect the diff,
-then decide per file:
+mentions an upgrade, compare each local file with the served one
+(`get_skill <slug>` prints the canonical body) and sort it into `identical`,
+`differs` or `missing`. Host-side, `memrain skillpack --out <path>` bundles
+the whole pack as a tar.gz whose `.manifest.json` lists the sha256 of every
+file, so a full copy can be checked in one pass. For each `differs`, inspect
+the diff, then decide per file:
 
 - **Local edit was intentional.** Keep your version. The server bundle is
   reference, not law.

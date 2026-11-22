@@ -317,7 +317,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
     "skillopt",
     new Set(["--candidate", "--epsilon", "--max-usd", "--repeats", "--skill", "--split"]),
   ],
-  ["skillpack", new Set(["--dir", "--json", "--out"])],
+  ["skillpack", new Set(["--dir", "--fix", "--json", "--out", "--strict"])],
   [
     "migrate-engine",
     new Set([
@@ -391,7 +391,7 @@ export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = ne
     ]),
   ],
   ["--apply", new Set(["embed", "import", "mirror-adopt", "erase", "atoms-retire", "purge-leftovers", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors", "member", "sources"])],
-  ["--fix", new Set(["lint"])],
+  ["--fix", new Set(["lint", "skillpack"])],
 ]);
 
 export interface ParsedArgs {
@@ -415,6 +415,20 @@ export interface ParseArgsOptions {
  * given no value. The CLI prints the message and exits non-zero.
  */
 export class UnknownFlagError extends Error {}
+
+/**
+ * Whether `cmd` accepts `flag`, by the same rules `validateFlags` applies;
+ * undefined when the command has no row of its own. The skill pack lint asks
+ * this of every flag a skill writes, so a skill passes exactly when the
+ * dispatcher would accept the flag.
+ */
+export function commandAcceptsFlag(cmd: string, flag: string): boolean | undefined {
+  const accepted = COMMAND_FLAGS.get(cmd);
+  if (accepted === undefined) return undefined;
+  if (UNIVERSAL_FLAGS.has(flag)) return true;
+  if (flag === "--json" && JSON_GUARDED_COMMANDS.has(cmd)) return true;
+  return accepted.has(flag);
+}
 
 /** Validate the parsed flags against the vocabulary of the command being run. */
 export function validateFlags(parsed: ParsedArgs): void {
@@ -440,9 +454,8 @@ export function validateFlags(parsed: ParsedArgs): void {
 
   const seen = [...parsed.flags, ...parsed.values.keys()];
   for (const flag of seen) {
-    if (UNIVERSAL_FLAGS.has(flag)) continue;
-    if (flag === "--json" && cmd !== undefined && JSON_GUARDED_COMMANDS.has(cmd)) continue;
-    if (accepted === undefined ? KNOWN_FLAGS.has(flag) : accepted.has(flag)) continue;
+    const ok = (cmd === undefined ? undefined : commandAcceptsFlag(cmd, flag)) ?? KNOWN_FLAGS.has(flag);
+    if (ok) continue;
     // Suggest only flags the CURRENT command accepts: suggesting a flag that
     // would itself be refused is worse than suggesting nothing.
     const hint = nearest(flag, accepted ?? KNOWN_FLAGS);

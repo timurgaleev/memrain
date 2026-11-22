@@ -51,8 +51,6 @@ This skill guarantees:
 
 > **Convention:** See `conventions/quality.md` (via `get_skill conventions/quality`) for Iron Law back-linking.
 
-Every mention of a person or company with a brain page MUST create a back-link.
-
 ## Phases
 
 ### Phase 1: Identify format and fetch

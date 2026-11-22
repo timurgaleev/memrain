@@ -126,15 +126,25 @@ container; a red run fails the workflow.
 ### Skills
 
 - Edit skills only in `deploy/skills/`. The plugin's copies
-  (`plugins/memrain/skills/`), the routing table `deploy/skills/_resolver.md`
+  (`plugins/memrain/skills/`), the skill table in `deploy/skills/_resolver.md`
   and the hash list `deploy/skills/skills.lock.json` are generated: run
   `bun scripts/generate-plugin-tree.ts` in `deploy/memrain` after any skill
-  change (`--check` reports drift without writing).
+  change (`--check` reports drift without writing). The resolver's text
+  outside the generated block (its head and the disambiguation rules) is
+  written by hand and kept.
 - `deploy/skills/plugin-lanes.json` records which skills ship in the plugin,
   which are host-side only, and which are MCP prompts, each with a reason.
 - A skill declares only tools the server registers and names only `memrain`
-  commands that exist (`memrain skillpack lint`), and ships a
-  `routing-eval.jsonl` whose cases route to it.
+  commands, subcommands and flags that exist (`memrain skillpack lint`), and
+  ships a `routing-eval.jsonl` whose cases route to it. `memrain skillpack
+  check` then checks the pack as a whole: every skill has a resolver row and
+  a trigger only it answers to, no trigger has two owners, the routing cases
+  still land, and no skill copies a rule from `conventions/` or the `_*.md`
+  docs instead of pointing at it (`--fix` replaces the copies that are safe
+  to replace; commit first, it only writes unmodified tracked files).
+- A `SKILL.md` over 16 KB fails the lint unless `deploy/skills/skill-budgets.tsv`
+  gives it a ceiling. Ceilings only go down: a skill that grows cuts
+  something first, and raising one is a reviewer-visible edit to that file.
 - Write a skill to the anatomy in `deploy/skills/_AGENT_README.md` ("Skill
   anatomy"): frontmatter contract, convention pointers, `## Contract`, a
   numbered workflow, `## Output Format`, `## When it fails`,

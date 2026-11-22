@@ -1,6 +1,7 @@
 /**
  * Regenerate what is derived from deploy/skills: the plugin's skills folder,
- * the resolver page and the lock file.
+ * the generated block of the resolver page (its hand-written text is kept)
+ * and the lock file.
  *
  *   bun scripts/generate-plugin-tree.ts           # write
  *   bun scripts/generate-plugin-tree.ts --check   # exit 1 and list drift
@@ -41,10 +42,11 @@ if (errors.length > 0) {
 }
 
 const resolverPath = join(pack, RESOLVER_FILE);
-const resolver = renderResolver(pack, lanes);
+const resolverNow = current(resolverPath);
+const resolver = renderResolver(pack, lanes, resolverNow);
 if (check) {
   const drift = diffPluginTree(pack, plugin).map((p) => `plugins/memrain/skills/${p}`);
-  if (current(resolverPath) !== resolver) drift.push(`deploy/skills/${RESOLVER_FILE}`);
+  if (resolverNow !== resolver) drift.push(`deploy/skills/${RESOLVER_FILE}`);
   if (current(join(pack, LOCK_FILE)) !== renderLock(pack)) drift.push(`deploy/skills/${LOCK_FILE}`);
   if (drift.length > 0) {
     for (const p of drift) console.error(`out of date: ${p}`);

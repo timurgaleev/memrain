@@ -152,11 +152,7 @@ synthesis-tier pass to surface recurring themes, and writes pattern pages to
 `personal/patterns/<theme>` when enough reflections (default 3) support a
 pattern.
 
-**Quality bar (Iron Law for synthesis):**
-1. Quote the user verbatim. Do not paraphrase memorable phrasings.
-2. Cross-reference compulsively: every new page MUST have at least one wikilink.
-3. Slug discipline: lowercase alphanumeric and hyphens only. NO underscores, NO file extensions.
-4. Edited transcripts produce NEW slugs (content-hash suffix changes) — never silently overwrite.
+> **Filing rule:** synthesis output meets the "Iron Law for synthesize output" in `_brain-filing-rules.md` (via `get_skill _brain-filing-rules`): verbatim quotes, cross-links, slug discipline, new slugs for edited transcripts.
 
 **Trust boundary:** synthesis writes are confined to an explicit allow-list of
 page-path prefixes (reflections, originals, patterns, people timelines). Even

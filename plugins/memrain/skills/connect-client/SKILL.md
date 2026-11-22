@@ -5,6 +5,7 @@ description: Connect a Memrain MCP client using the matching client guide and ve
 triggers:
   - "connect a memrain client"
   - "set up a memrain connector"
+  - "configure an mcp client for memrain"
 tools:
   - whoami
   - list_skills

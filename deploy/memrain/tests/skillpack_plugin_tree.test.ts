@@ -14,6 +14,8 @@ import { OPERATOR_ONLY_TOOLS } from "../src/mcp/visibility.ts";
 import { getBrainSkill, listSkillCatalog } from "../src/core/skillpack/brain-resident.ts";
 import {
   LOCK_FILE,
+  RESOLVER_BEGIN,
+  RESOLVER_END,
   RESOLVER_FILE,
   diffPluginTree,
   readPluginLanes,
@@ -165,8 +167,47 @@ describe("generated pack files", () => {
     }
   });
 
-  it("the resolver is the render of the frontmatter, not a hand edit", () => {
-    expect(readFileSync(join(PACK_DIR, RESOLVER_FILE), "utf8")).toBe(renderResolver(PACK_DIR, readPluginLanes(PACK_DIR)));
+  it("the resolver's table is the render of the frontmatter, not a hand edit", () => {
+    const committed = readFileSync(join(PACK_DIR, RESOLVER_FILE), "utf8");
+    expect(committed).toBe(renderResolver(PACK_DIR, readPluginLanes(PACK_DIR), committed));
+    expect(committed).toContain(RESOLVER_BEGIN);
+    expect(committed).toContain("## Disambiguation rules");
+  });
+
+  it("keeps the hand-written text around the generated block, run after run", () => {
+    const lanes = readPluginLanes(PACK_DIR);
+    const page = `# Mine\n\nhand head\n\n${RESOLVER_BEGIN}\nstale table\n${RESOLVER_END}\n\nhand tail\n`;
+    const once = renderResolver(PACK_DIR, lanes, page);
+    expect(once.startsWith("# Mine\n\nhand head\n\n")).toBe(true);
+    expect(once.endsWith(`${RESOLVER_END}\n\nhand tail\n`)).toBe(true);
+    expect(once).not.toContain("stale table");
+    expect(once).toContain("| `query` |");
+    expect(once).toContain("| `conventions/untrusted-content` |");
+    expect(renderResolver(PACK_DIR, lanes, once)).toBe(once);
+  });
+
+  it("writes the default head only when there is no page, and refuses a page without sound markers", () => {
+    const lanes = readPluginLanes(PACK_DIR);
+    const fresh = renderResolver(PACK_DIR, lanes, null);
+    expect(fresh.startsWith("# Skill Resolver\n")).toBe(true);
+    expect(fresh).toContain(RESOLVER_END);
+    for (const broken of [
+      "# a hand-written page with no markers\n",
+      `${RESOLVER_BEGIN}\nno end\n`,
+      `${RESOLVER_END}\nno begin\n`,
+      `${RESOLVER_END}\n${RESOLVER_BEGIN}\n`,
+      `${RESOLVER_BEGIN}\n${RESOLVER_END}\n${RESOLVER_BEGIN}\n${RESOLVER_END}\n`,
+    ]) {
+      expect(() => renderResolver(PACK_DIR, lanes, broken)).toThrow("generated block");
+    }
+  });
+
+  it("lists every trigger of a skill, not only the first few", () => {
+    const resolver = readFileSync(join(PACK_DIR, RESOLVER_FILE), "utf8");
+    for (const s of listSkillCatalog({ skillsDir: PACK_DIR }).skills) {
+      const row = resolver.split("\n").find((l) => l.startsWith(`| \`${s.slug}\` |`)) ?? "";
+      expect(row.split("\", \"").length, s.slug).toBe(s.triggers.length);
+    }
   });
 
   it("the resolver is served through get_skill and is not listed as a skill", () => {

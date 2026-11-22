@@ -4,6 +4,7 @@ description: Route content to specialized ingestion skills. Detects input type a
 triggers:
   - "ingest this"
   - "save this to brain"
+  - "add this to my brain"
 tools:
   - search
   - page_get
@@ -38,20 +39,9 @@ Ingest meetings, articles, media, documents, and conversations into the brain.
 
 > **Convention:** See `conventions/quality.md` (via `get_skill conventions/quality`) for Iron Law back-linking.
 
-Every mention of a person or company with a brain page MUST create a back-link
-FROM that entity's page TO the page mentioning them. An unlinked mention is a
-broken brain. See `skills/_brain-filing-rules.md` for format.
-
 ## Citation Requirements (MANDATORY)
 
-Every fact written to a brain page must carry an inline `[Source: ...]` citation.
-
-- **User's statements:** `[Source: User, {context}, YYYY-MM-DD]`
-- **Meeting data:** `[Source: Meeting "{title}", YYYY-MM-DD]`
-- **Email/message:** `[Source: email from {name} re: {subject}, YYYY-MM-DD]`
-- **Web content:** `[Source: {publication}, {URL}, YYYY-MM-DD]`
-- **Social media:** `[Source: X/@handle, YYYY-MM-DD](URL)` (include link)
-- **Synthesis:** `[Source: compiled from {sources}]`
+> **Convention:** see `conventions/quality.md` (via `get_skill conventions/quality`): every fact written to a brain page carries an inline `[Source: ...]` citation, in the format for its source kind.
 
 ## Phases
 

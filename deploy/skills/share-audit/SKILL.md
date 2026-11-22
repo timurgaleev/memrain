@@ -5,6 +5,7 @@ description: Operator review of the pages a proposed team or pilot grant would e
 triggers:
   - "audit a proposed share"
   - "review team exposure"
+  - "what would this grant expose"
 tools:
   - whoami
   - page_list

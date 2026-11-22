@@ -6,8 +6,9 @@
  * derived from it and committed, so a reviewer sees them change:
  *   - `plugins/memrain/skills/<slug>/` for every skill in the plugin lane of
  *     `plugin-lanes.json` (both hosts read that one folder);
- *   - `_resolver.md`, the routing table rendered from each skill's
- *     frontmatter, served through `get_skill _resolver`;
+ *   - the generated block of `_resolver.md`, the routing table rendered from
+ *     each skill's frontmatter, served through `get_skill _resolver` (the
+ *     page's hand-written text around the block is kept);
  *   - `skills.lock.json`, the sha256 of every pack file.
  * `scripts/generate-plugin-tree.ts` writes them; the tests compare the
  * committed copies with a fresh render, so a skill edited without
@@ -188,32 +189,89 @@ function firstSentence(text: string): string {
   return sentence.length > 220 ? `${sentence.slice(0, 217)}...` : sentence;
 }
 
-/** The resolver page, rendered from every routable skill's frontmatter. */
-export function renderResolver(skillsDir: string, lanes: PluginLanes): string {
+export const RESOLVER_BEGIN = "<!-- BEGIN GENERATED: skill table, from frontmatter by scripts/generate-plugin-tree.ts -->";
+export const RESOLVER_END = "<!-- END GENERATED: skill table -->";
+
+/** The `|`-table rows of the generated block: one per routable skill. */
+function skillRows(skillsDir: string, lanes: PluginLanes): string[] {
   const starter = new Set(lanes.starter);
-  const rows = listSkillCatalog({ skillsDir }).skills.map((s) => {
+  return listSkillCatalog({ skillsDir }).skills.map((s) => {
     const ships = Object.hasOwn(lanes.plugin, s.slug)
       ? "plugin"
       : Object.hasOwn(lanes.operator_only, s.slug) ? "operator only" : "brain";
     const lane = starter.has(s.slug) ? `${ships}, prompt` : ships;
-    const triggers = s.triggers.slice(0, 4).map((t) => `"${cell(t)}"`).join(", ");
+    const triggers = s.triggers.map((t) => `"${cell(t)}"`).join(", ");
     return `| \`${s.slug}\` | ${firstSentence(s.description)} | ${triggers} | ${s.mutating ? "yes" : "no"} | ${lane} |`;
   });
+}
+
+/** A shared doc's label: its frontmatter description, else its first heading. */
+function docLabel(text: string): string {
+  const description = parseSkillFrontmatter(text)?.description;
+  if (description) return firstSentence(description);
+  const heading = text.split("\n").find((l) => l.startsWith("# "));
+  return heading === undefined ? "" : cell(heading.slice(2));
+}
+
+/** One row per shared rule a skill defers to: `_*.md` and `conventions/*.md`. */
+function sharedRuleRows(skillsDir: string): string[] {
+  const docs: string[] = [];
+  for (const name of readdirSync(skillsDir).sort()) {
+    if (name.startsWith("_") && name.endsWith(".md") && name !== RESOLVER_FILE) docs.push(name);
+  }
+  const conventions = join(skillsDir, "conventions");
+  if (existsSync(conventions)) {
+    for (const name of readdirSync(conventions).sort()) {
+      if (name.endsWith(".md")) docs.push(`conventions/${name}`);
+    }
+  }
+  return docs.map((rel) => {
+    const label = docLabel(readFileSync(join(skillsDir, rel), "utf8"));
+    return `| \`${rel.slice(0, -3)}\` | ${label} |`;
+  });
+}
+
+function generatedBlock(skillsDir: string, lanes: PluginLanes): string[] {
   return [
-    "# Skill Resolver",
-    "",
-    "Generated from each skill's frontmatter by `scripts/generate-plugin-tree.ts`",
-    "in `deploy/memrain`; edit the skills, not this page.",
-    "",
-    "Match the request against a skill's triggers and purpose, then read it with",
-    "`get_skill` and its slug. Writes: the skill changes the brain. Ships in:",
-    "plugin (also copied into the Claude Code and Codex plugin), operator only",
-    "(host-side work, never in the plugin), brain (served by the brain only);",
-    "prompt marks the skills also offered as MCP prompts.",
+    RESOLVER_BEGIN,
     "",
     "| Skill | Use it for | Triggers | Writes | Ships in |",
     "|---|---|---|---|---|",
-    ...rows,
+    ...skillRows(skillsDir, lanes),
     "",
-  ].join("\n");
+    "Shared rules the skills defer to, each read with `get_skill <slug>`:",
+    "",
+    "| Slug | Rule |",
+    "|---|---|",
+    ...sharedRuleRows(skillsDir),
+    "",
+    RESOLVER_END,
+  ];
+}
+
+const DEFAULT_RESOLVER_HEAD = [
+  "# Skill Resolver",
+  "",
+  "The skill table below is generated from each skill's frontmatter by",
+  "`scripts/generate-plugin-tree.ts` in `deploy/memrain`; edit the skills, not",
+  "the table. Text outside the generated block is written by hand and kept.",
+  "",
+];
+
+/**
+ * The resolver page: the hand-written text of `current` with its generated
+ * block re-rendered from every routable skill's frontmatter. No page gets the
+ * default head and the block. A page without exactly one begin marker before
+ * one end marker is refused: guessing which text is hand-written would drop
+ * someone's edit.
+ */
+export function renderResolver(skillsDir: string, lanes: PluginLanes, current: string | null = null): string {
+  const block = generatedBlock(skillsDir, lanes).join("\n");
+  if (current === null) return [...DEFAULT_RESOLVER_HEAD, block, ""].join("\n");
+  const at = current.indexOf(RESOLVER_BEGIN);
+  const endAt = current.indexOf(RESOLVER_END);
+  if (current.split(RESOLVER_BEGIN).length !== 2 || current.split(RESOLVER_END).length !== 2 || endAt < at) {
+    throw new Error(`${RESOLVER_FILE}: the generated block needs exactly one ${RESOLVER_BEGIN} before one ${RESOLVER_END}`);
+  }
+  return current.slice(0, at) + block + current.slice(endAt + RESOLVER_END.length);
 }

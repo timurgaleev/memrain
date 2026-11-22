@@ -56,12 +56,12 @@ describe("lintSkillpack", () => {
       "beta/SKILL.md": skill(
         "beta",
         "[page_get]",
-        `Run \`memex skillpack check\` first.\n\n${FENCE}bash\nmemex frobnicate --all\n${FENCE}`,
+        `Run \`memex skillpack frobnicate\` first.\n\n${FENCE}bash\nmemex frobnicate --all\n${FENCE}`,
       ),
     });
     const rules = lintSkillpack(dir).issues.map((i) => `${i.rule} ${i.detail} @${i.line}`);
     expect(rules).toEqual([
-      "unknown-cli-subcommand memrain skillpack check @11",
+      "unknown-cli-subcommand memrain skillpack frobnicate @11",
       "unknown-cli-command memrain frobnicate @14",
     ]);
   });
@@ -195,11 +195,78 @@ describe("lintSkillpack", () => {
       "unknown-tool-arg @15",
     ]);
     expect(extractCliReferences("`memrain doctor` then `memex status` then `memrain jobs list`")).toEqual([
-      { command: "doctor", subcommand: null, line: 1 },
-      { command: "status", subcommand: null, line: 1 },
-      { command: "jobs", subcommand: "list", line: 1 },
+      { command: "doctor", subcommand: null, flags: [], line: 1 },
+      { command: "status", subcommand: null, flags: [], line: 1 },
+      { command: "jobs", subcommand: "list", flags: [], line: 1 },
     ]);
     expect(extractCliReferences("`xmemrain doctor` and `memraindoctor`")).toEqual([]);
+  });
+
+  it("flags a CLI flag the command does not read, and only that", () => {
+    const dir = writePack("flags", {
+      "nu/SKILL.md": skill(
+        "nu",
+        "[page_get]",
+        [
+          "Run `memex reindex --stale` and `memrain reindex --dryrun` now.",
+          `${FENCE}bash`,
+          "memrain search --k 5 --frobnicate \"q\" | head --lines 3   # memrain doctor --bogus",
+          "memrain doctor --json && memrain status --per-source --verbos",
+          `${FENCE}`,
+          "`memrain call search --args '{\"query\": \"a --not-a-flag\"}'`",
+          "`memrain jobs submit <kind> --payload '{}' --priority 1`",
+          "`memrain capture --title=\"x\" --file <path> --<flag> --help`",
+          "`memrain eval gate --max-drop=0.02` then `memrain version --json`",
+        ].join("\n"),
+      ),
+    });
+    const r = lintSkillpack(dir);
+    expect(r.ok).toBe(false);
+    expect(r.issues.map((i) => `${i.rule} ${i.detail} @${i.line}`)).toEqual([
+      "unknown-cli-flag memrain reindex --stale @11",
+      "unknown-cli-flag memrain reindex --dryrun (did you mean --dry-run?) @11",
+      "unknown-cli-flag memrain search --frobnicate @13",
+      "unknown-cli-flag memrain status --verbos @14",
+    ]);
+  });
+
+  it("reads flags only up to the next command on the line", () => {
+    expect(extractCliReferences("`memrain doctor --json memrain status --per-source`")).toEqual([
+      { command: "doctor", subcommand: null, flags: ["--json"], line: 1 },
+      { command: "status", subcommand: null, flags: ["--per-source"], line: 1 },
+    ]);
+    expect(extractCliReferences("`memrain search 'it --is quoted' --k=5`")).toEqual([
+      { command: "search", subcommand: null, flags: ["--k"], line: 1 },
+    ]);
+    expect(extractCliReferences("`memrain reindex --stale=\"x y\" \"--not-a-flag\"`")).toEqual([
+      { command: "reindex", subcommand: null, flags: ["--stale"], line: 1 },
+    ]);
+  });
+
+  it("caps a skill at 16 KB unless skill-budgets.tsv gives it a ceiling", () => {
+    const big = (name: string, bytes: number): string => {
+      const head = skill(name, "[page_get]", "");
+      return head + "x".repeat(bytes - Buffer.byteLength(head));
+    };
+    const over = writePack("size-over", { "big/SKILL.md": big("big", 16_385) });
+    expect(lintSkillpack(over).issues).toEqual([
+      { slug: "big", rule: "skill-too-large", detail: "16385 bytes, over the 16384-byte cap (no row in skill-budgets.tsv)", line: 1 },
+    ]);
+    const capped = writePack("size-row", {
+      "big/SKILL.md": big("big", 17_000),
+      "huge/SKILL.md": big("huge", 18_001),
+      "small/SKILL.md": big("small", 2_000),
+      "skill-budgets.tsv": "# skill\tmax_bytes\tnote\nbig\t17000\tseeded\nhuge\t18000\tseeded\nsmall\t20000\told\ngone\t20000\told\nbad row\nbig\t17500\tagain\n",
+    });
+    const r = lintSkillpack(capped);
+    expect(r.ok).toBe(false);
+    expect(r.issues).toEqual([
+      { slug: "skill-budgets.tsv", rule: "skill-budget-invalid", detail: "expected <skill> TAB <max bytes> TAB <note>", line: 6 },
+      { slug: "skill-budgets.tsv", rule: "skill-budget-invalid", detail: "big has a row already", line: 7 },
+      { slug: "huge", rule: "skill-too-large", detail: "18001 bytes, over its 18000-byte ceiling in skill-budgets.tsv", line: 1 },
+      { slug: "skill-budgets.tsv", rule: "skill-budget-stale", detail: "small is 2000 bytes, under the 16384-byte cap: delete its row", line: 4, severity: "warn" },
+      { slug: "skill-budgets.tsv", rule: "skill-budget-stale", detail: "gone names no skill: delete its row", line: 5, severity: "warn" },
+    ]);
   });
 
   it("reports a SKILL.md it cannot read instead of skipping it", () => {
@@ -289,6 +356,13 @@ describe("extractCliReferences cost", () => {
     expect(large / Math.max(small, 0.05)).toBeLessThan(10);
   }, 60_000);
 
+  it("stays linear on chained command lines full of flags, quotes and placeholders", () => {
+    const build = (k: number): string => `\`${"memrain doctor --json 'a memrain b' <x> --y=\"z ".repeat(2 ** k)}\``;
+    const small = best(build(13));
+    const large = best(build(15));
+    expect(large / Math.max(small, 0.05)).toBeLessThan(10);
+  }, 60_000);
+
   it("stays linear on backtick runs of mixed lengths that never pair", () => {
     const build = (n: number): string =>
       Array.from({ length: n }, (_, i) => `${"`".repeat((i % 50) + 1)}memex doctor `).join("");
@@ -341,7 +415,7 @@ describe("memrain skillpack lint (CLI)", () => {
 
   it("exits 1 with parseable JSON on a bad pack and 0 on a clean one", () => {
     const bad = writePack("cli-bad", {
-      "zeta/SKILL.md": skill("zeta", "[not_a_tool]", "Run `memex skillpack check`."),
+      "zeta/SKILL.md": skill("zeta", "[not_a_tool]", "Run `memex skillpack frobnicate`."),
     });
     const clean = writePack("cli-clean", {
       "eta/SKILL.md": skill("eta", "[page_get]", "Run `memex doctor`."),

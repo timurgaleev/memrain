@@ -77,7 +77,7 @@ import { runReports } from "./commands/reports.ts";
 import { runSpend, runSpendResume } from "./commands/spend.ts";
 import { runAgentCli } from "./commands/agent.ts";
 import { runSkilloptCli } from "./commands/skillopt.ts";
-import { runSkillpack, runSkillpackLint } from "./commands/skillpack.ts";
+import { runSkillpack, runSkillpackCheck, runSkillpackLint } from "./commands/skillpack.ts";
 import { runMigrateEngine } from "./commands/migrate-engine.ts";
 import { runCache } from "./commands/cache.ts";
 import { runCall } from "./commands/call.ts";
@@ -294,6 +294,10 @@ function printUsage(): void {
   console.log("                               score skill routing on the pack benchmark (needs MEMRAIN_SKILLOPT_ENABLED=1); exit 3 = candidate rejected");
   console.log("  skillpack [--out PATH]       bundle deploy/skills/ as a tar.gz with manifest");
   console.log("  skillpack lint [--json] [--dir PATH]");
+  console.log("                               every tool, command, flag and size a skill names is real");
+  console.log("  skillpack check [--json] [--dir PATH] [--strict] [--fix]");
+  console.log("                               skill tree: resolver coverage, reachability, trigger overlaps and gaps,");
+  console.log("                               routing-eval cases, copied shared rules (--fix rewrites the safe copies)");
   console.log("                               check every tool and memrain command the skill pack names exists");
   console.log("  migrate-engine --from X --to Y [--dry-run|--verify-only] [--allow-dropped-columns] [--tables a,b] [--pglite-path P] [--to-pglite-path P2] [--postgres-url U]");
   console.log("                               copy data between Engine adapters");
@@ -1752,6 +1756,25 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       return await runSkilloptCli(opts);
     }
     case "skillpack": {
+      // --fix and --strict belong to `check`; the lint and the bundle would
+      // silently ignore them.
+      if (positional[0] !== "check") {
+        for (const f of ["--fix", "--strict"]) {
+          if (flags.has(f)) {
+            console.error(`memrain skillpack: ${f} is only read by 'skillpack check'`);
+            return 1;
+          }
+        }
+      }
+      if (positional[0] === "check") {
+        const checkOpts: Parameters<typeof runSkillpackCheck>[0] = {};
+        const dir = values.get("--dir");
+        if (dir) checkOpts.dir = dir;
+        if (flags.has("--json")) checkOpts.json = true;
+        if (flags.has("--strict")) checkOpts.strict = true;
+        if (flags.has("--fix")) checkOpts.fix = true;
+        return runSkillpackCheck(checkOpts);
+      }
       if (positional[0] === "lint") {
         const lintOpts: Parameters<typeof runSkillpackLint>[0] = {};
         const dir = values.get("--dir");
@@ -1760,7 +1783,7 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
         return runSkillpackLint(lintOpts);
       }
       if (positional[0] !== undefined) {
-        console.error(`memrain skillpack: unknown subcommand '${positional[0]}' (expected: lint)`);
+        console.error(`memrain skillpack: unknown subcommand '${positional[0]}' (expected: lint, check)`);
         return 1;
       }
       const out = values.get("--out");

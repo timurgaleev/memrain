@@ -45,9 +45,7 @@ This skill guarantees:
 
 ## Iron Law: Back-Linking (MANDATORY)
 
-Every mention of a person or company with a brain page MUST create a back-link
-FROM that entity's page TO the page mentioning them. An unlinked mention is a
-broken brain. See conventions/quality.md for format.
+> **Convention:** see `conventions/quality.md` (via `get_skill conventions/quality`) for Back-Linking.
 
 ## Phases
 

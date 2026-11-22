@@ -4,7 +4,9 @@
  * Agents follow served skills literally, so every MCP tool a skill declares
  * and every `memrain <cmd> [<sub>]` it tells an agent to run must exist (the
  * pre-rename `memex <cmd>` spelling in stored skill pages counts too). The
- * lint checks both against the real surfaces (OPERATIONS and CLI_COMMANDS).
+ * lint checks both against the real surfaces (OPERATIONS and CLI_COMMANDS),
+ * and every `--flag` on such a command line against what the dispatcher
+ * accepts for that command (COMMAND_FLAGS, via commandAcceptsFlag).
  * Tool-call examples (`tool_name {json}`, `memrain call tool '{json}'`) are
  * checked too: dispatch refuses undeclared argument keys, so an example that
  * uses one teaches the agent a call that always fails.
@@ -14,11 +16,15 @@
  * skills is an error, one skill's trigger inside another's is a warning.
  * A skill that declares an operator-only tool is a warning: tenants are
  * served the skill but refused the tool.
+ * A skill loads whole on every task that uses it, so a routable skill file
+ * over 16 KB needs a ceiling row in `skill-budgets.tsv`, and stays under it.
  */
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readSkillText } from "./read-text.ts";
 import { CLI_COMMANDS, type CliCommandSpec } from "../../cli-commands.ts";
+import { COMMAND_FLAGS, commandAcceptsFlag } from "../../cli-args.ts";
+import { nearest } from "../did-you-mean.ts";
 import { OPERATIONS } from "../../mcp/operations.ts";
 import { OPERATOR_ONLY_TOOLS } from "../../mcp/visibility.ts";
 import { parseSkillFrontmatter } from "./frontmatter.ts";
@@ -31,10 +37,14 @@ export type SkillLintRule =
   | "unknown-tool"
   | "unknown-cli-command"
   | "unknown-cli-subcommand"
+  | "unknown-cli-flag"
   | "unknown-call-tool"
   | "unknown-tool-arg"
   | "trigger-overlap"
   | "operator-only-tool"
+  | "skill-too-large"
+  | "skill-budget-invalid"
+  | "skill-budget-stale"
   | "unreadable";
 
 export interface SkillLintIssue {
@@ -68,6 +78,8 @@ export interface SkillLintOptions {
 export interface CliReference {
   command: string;
   subcommand: string | null;
+  /** `--flag` words on the same command line, without `=value`. */
+  flags: string[];
   line: number;
 }
 
@@ -142,8 +154,69 @@ function readTokens(text: string, from: number, count: number): string[] {
   return tokens;
 }
 
+/** Characters that end a shell command when they open a word. */
+const SHELL_STOPS = new Set(["|", ";", "&", ">", "<", ")", "#", "`"]);
+
+const FLAG_RE = /^--[a-z][a-z0-9-]*$/;
+
+/**
+ * The `--flags` of the command line starting at `from`, and where the line
+ * ends: at a shell separator, a comment, or an unquoted `memrain`/`memex`
+ * word (the next command). Quote-aware, so a flag-looking word inside a
+ * quoted argument (`--args '{"q": "a --b"}'`) is not a flag, and a quoted
+ * `memrain ...` is part of this line, not a command of its own. `<word>`
+ * placeholders are words, not redirections. Reads each character once.
+ */
+function scanFlags(text: string, from: number): { flags: string[]; end: number } {
+  const flags: string[] = [];
+  let i = from;
+  while (i < text.length) {
+    const c = text[i]!;
+    if (c === " " || c === "\t") {
+      i++;
+      continue;
+    }
+    const placeholder = c === "<" && /[a-z]/i.test(text[i + 1] ?? "");
+    if (SHELL_STOPS.has(c) && !placeholder) break;
+    const start = i;
+    let word = "";
+    let quoted = false;
+    while (i < text.length) {
+      const ch = text[i]!;
+      if (ch === "'" || ch === "\"") {
+        // A quoted argument is not a flag; a quoted value (`--k="5"`) is.
+        if (i === start) quoted = true;
+        i++;
+        while (i < text.length && text[i] !== ch) i++;
+        i++;
+        continue;
+      }
+      if (ch === " " || ch === "\t") break;
+      if (ch === "<" && /[a-z]/i.test(text[i + 1] ?? "")) {
+        while (i < text.length && text[i] !== ">" && text[i] !== " ") i++;
+        if (text[i] === ">") i++;
+        word += "<";
+        continue;
+      }
+      if (SHELL_STOPS.has(ch) && ch !== "#") break;
+      word += ch;
+      i++;
+    }
+    if (!quoted && CLI_WORDS.includes(word as (typeof CLI_WORDS)[number])) return { flags, end: start };
+    if (quoted || !word.startsWith("--")) continue;
+    const eq = word.indexOf("=");
+    const flag = stripTrailingPunctuation(eq === -1 ? word : word.slice(0, eq));
+    if (FLAG_RE.test(flag)) flags.push(flag);
+  }
+  return { flags, end: i };
+}
+
 function scanCode(text: string, line: number, out: CliReference[]): void {
+  // A `memrain` inside an earlier command's quoted argument is part of that
+  // command line, not a reference of its own.
+  let consumedUntil = 0;
   for (const { at: k, end } of occurrences(text, CLI_WORDS)) {
+    if (k < consumedUntil) continue;
     if (text[end] !== " ") continue;
     if (k > 0 && isWordChar(text[k - 1])) continue;
     const [first = "", second = ""] = readTokens(text, end + 1, 2);
@@ -153,7 +226,13 @@ function scanCode(text: string, line: number, out: CliReference[]): void {
     // punctuation closed the reference, so the next word is prose.
     const closed = command.length !== first.length;
     const sub = closed ? "" : stripTrailingPunctuation(second);
-    out.push({ command, subcommand: isCommandWord(sub) ? sub : null, line });
+    let flags: string[] = [];
+    if (!closed) {
+      const scanned = scanFlags(text, end + 1);
+      flags = scanned.flags;
+      consumedUntil = scanned.end;
+    }
+    out.push({ command, subcommand: isCommandWord(sub) ? sub : null, flags, line });
   }
 }
 
@@ -379,12 +458,31 @@ function checkReferences(
       });
       continue;
     }
-    if (ref.subcommand === null || spec.freePositional) continue;
-    if (spec.subcommands.includes(ref.subcommand)) continue;
+    if (ref.subcommand !== null && !spec.freePositional && !spec.subcommands.includes(ref.subcommand)) {
+      issues.push({
+        slug,
+        rule: "unknown-cli-subcommand",
+        detail: `memrain ${ref.command} ${ref.subcommand}`,
+        line: ref.line,
+      });
+    }
+    checkFlags(slug, ref, issues);
+  }
+}
+
+/**
+ * Every flag the dispatcher would refuse for this command: the lint asks the
+ * same question `validateFlags` answers at run time. A command with no flag
+ * row of its own is not checked.
+ */
+function checkFlags(slug: string, ref: CliReference, issues: SkillLintIssue[]): void {
+  for (const flag of ref.flags) {
+    if (commandAcceptsFlag(ref.command, flag) !== false) continue;
+    const hint = nearest(flag, COMMAND_FLAGS.get(ref.command) ?? []);
     issues.push({
       slug,
-      rule: "unknown-cli-subcommand",
-      detail: `memrain ${ref.command} ${ref.subcommand}`,
+      rule: "unknown-cli-flag",
+      detail: `memrain ${ref.command} ${flag}${hint === null ? "" : ` (did you mean ${hint}?)`}`,
       line: ref.line,
     });
   }
@@ -515,6 +613,92 @@ function readText(file: string, slug: string, issues: SkillLintIssue[], skillsDi
   }
 }
 
+/** Bytes a routable skill may hold without a row in the budgets file. */
+export const SKILL_SIZE_CAP = 16_384;
+export const SKILL_BUDGETS_FILE = "skill-budgets.tsv";
+
+interface SkillBudget {
+  max: number;
+  line: number;
+}
+
+/**
+ * Read `skill-budgets.tsv`: `<slug> TAB <max bytes> TAB <note>` per line, `#`
+ * comments and blank lines skipped. A bad or repeated row is an error, not a
+ * skip: a typo there would otherwise lift the cap silently.
+ */
+function readBudgets(skillsDir: string, issues: SkillLintIssue[]): Map<string, SkillBudget> {
+  const budgets = new Map<string, SkillBudget>();
+  const file = join(skillsDir, SKILL_BUDGETS_FILE);
+  if (!existsSync(file)) return budgets;
+  const lines = readFileSync(file, "utf8").split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const raw = (lines[i] ?? "").replace(/\r$/, "");
+    if (raw.trim() === "" || raw.startsWith("#")) continue;
+    const [slug = "", max = "", note = ""] = raw.split("\t");
+    const bad = (detail: string): void => {
+      issues.push({ slug: SKILL_BUDGETS_FILE, rule: "skill-budget-invalid", detail, line: i + 1 });
+    };
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(slug) || !/^[1-9]\d{0,6}$/.test(max) || note.trim() === "") {
+      bad("expected <skill> TAB <max bytes> TAB <note>");
+    } else if (budgets.has(slug)) {
+      bad(`${slug} has a row already`);
+    } else {
+      budgets.set(slug, { max: Number(max), line: i + 1 });
+    }
+  }
+  return budgets;
+}
+
+/** The size ceiling: 16 KB, or the skill's row in the budgets file. */
+function checkSize(
+  slug: string,
+  bytes: number,
+  budgets: ReadonlyMap<string, SkillBudget>,
+  issues: SkillLintIssue[],
+): void {
+  const row = budgets.get(slug);
+  if (row === undefined) {
+    if (bytes <= SKILL_SIZE_CAP) return;
+    issues.push({
+      slug,
+      rule: "skill-too-large",
+      detail: `${bytes} bytes, over the ${SKILL_SIZE_CAP}-byte cap (no row in ${SKILL_BUDGETS_FILE})`,
+      line: 1,
+    });
+    return;
+  }
+  if (bytes > row.max) {
+    issues.push({
+      slug,
+      rule: "skill-too-large",
+      detail: `${bytes} bytes, over its ${row.max}-byte ceiling in ${SKILL_BUDGETS_FILE}`,
+      line: 1,
+    });
+  }
+}
+
+/** Rows the default cap now covers, or that name no skill: advice, not failure. */
+function checkStaleBudgets(
+  budgets: ReadonlyMap<string, SkillBudget>,
+  sizes: ReadonlyMap<string, number>,
+  issues: SkillLintIssue[],
+): void {
+  for (const [slug, row] of budgets) {
+    const bytes = sizes.get(slug);
+    if (bytes !== undefined && bytes > SKILL_SIZE_CAP) continue;
+    issues.push({
+      slug: SKILL_BUDGETS_FILE,
+      rule: "skill-budget-stale",
+      detail: bytes === undefined
+        ? `${slug} names no skill: delete its row`
+        : `${slug} is ${bytes} bytes, under the ${SKILL_SIZE_CAP}-byte cap: delete its row`,
+      line: row.line,
+      severity: "warn",
+    });
+  }
+}
+
 function declaredParams(): Map<string, ReadonlySet<string>> {
   return new Map(OPERATIONS.map((o) => [o.name, new Set(Object.keys(o.params))]));
 }
@@ -537,6 +721,8 @@ export function lintSkillpack(skillsDir: string, opts: SkillLintOptions = {}): S
   }
   const issues: SkillLintIssue[] = [];
   const triggerLines: SkillTriggerLines[] = [];
+  const budgets = readBudgets(skillsDir, issues);
+  const sizes = new Map<string, number>();
   let skills = 0;
   const names = readdirSync(skillsDir).sort();
   for (const name of names) {
@@ -570,9 +756,13 @@ export function lintSkillpack(skillsDir: string, opts: SkillLintOptions = {}): S
     skills++;
     const text = readText(file, slug, issues, skillsDir);
     if (text === null) continue;
+    const bytes = Buffer.byteLength(text);
+    sizes.set(slug, bytes);
     const triggers = lintSkillFile(slug, text, surfaces, issues);
     if (triggers !== null) triggerLines.push(triggers);
+    checkSize(slug, bytes, budgets, issues);
   }
   checkTriggerOverlap(triggerLines, issues);
+  checkStaleBudgets(budgets, sizes, issues);
   return { ok: !issues.some((i) => i.severity !== "warn"), skills, issues };
 }

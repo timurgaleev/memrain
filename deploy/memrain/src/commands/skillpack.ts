@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { lintSkillpack } from "../core/skillpack/lint.ts";
+import { checkSkillTree } from "../core/skillpack/tree-check.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SKILLS_DIR = resolve(__dirname, "..", "..", "..", "skills");
@@ -121,6 +122,46 @@ export async function runSkillpack(opts: SkillpackOptions = {}): Promise<void> {
       2,
     ),
   );
+}
+
+export interface SkillpackCheckOptions {
+  /** Pack to check. Default MEMRAIN_SKILLS_DIR, then deploy/skills. */
+  dir?: string;
+  json?: boolean;
+  strict?: boolean;
+  fix?: boolean;
+}
+
+/**
+ * `memrain skillpack check [--json] [--dir PATH] [--strict] [--fix]` — the pack
+ * as a routing tree: resolver coverage, reachability, trigger overlaps and
+ * gaps, routing-eval cases, and shared rules copied into skills. Returns the
+ * exit code: 1 on any error (any warning too under --strict).
+ */
+export function runSkillpackCheck(opts: SkillpackCheckOptions = {}): number {
+  const envDir = process.env.MEMRAIN_SKILLS_DIR?.trim();
+  const dir = opts.dir ?? (envDir || DEFAULT_SKILLS_DIR);
+  const report = checkSkillTree(dir, { fix: opts.fix, strict: opts.strict });
+  if (opts.json) {
+    console.log(JSON.stringify(report));
+    return report.ok ? 0 : 1;
+  }
+  for (const i of [...report.errors, ...report.warnings]) {
+    const where = i.line === undefined ? i.slug : `${i.slug}:${i.line}`;
+    console.log(`${i.severity === "error" ? "error" : "warn "}  ${where}  ${i.rule}  ${i.message}\n       fix: ${i.action}`);
+  }
+  for (const f of report.fixes) {
+    console.log(`${f.status === "applied" ? "fixed" : "kept "}  ${f.slug}:${f.line}  ${f.doc}${f.reason ? `  (${f.reason})` : ""}`);
+  }
+  if (report.fixes.some((f) => f.status === "applied")) {
+    console.log("skill files changed: run `bun scripts/generate-plugin-tree.ts` in deploy/memrain to refresh the plugin tree and lock");
+  }
+  const s = report.summary;
+  console.log(
+    `skillpack check: ${report.skills} skills, ${s.reachable} reachable, ${s.overlaps} overlap(s), ${s.gaps} gap(s), `
+    + `routing ${s.routing.correct}/${s.routing.total}; ${report.errors.length} error(s), ${report.warnings.length} warning(s)`,
+  );
+  return report.ok ? 0 : 1;
 }
 
 export interface SkillpackLintOptions {
