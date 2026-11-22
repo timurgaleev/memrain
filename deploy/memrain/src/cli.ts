@@ -1756,16 +1756,8 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       return await runSkilloptCli(opts);
     }
     case "skillpack": {
-      // --fix and --strict belong to `check`; the lint and the bundle would
-      // silently ignore them.
-      if (positional[0] !== "check") {
-        for (const f of ["--fix", "--strict"]) {
-          if (flags.has(f)) {
-            console.error(`memrain skillpack: ${f} is only read by 'skillpack check'`);
-            return 1;
-          }
-        }
-      }
+      // --fix and --strict reach here only on `check`: validateFlags refuses
+      // them on `lint` and the bundle (SUBCOMMAND_FLAGS).
       if (positional[0] === "check") {
         const checkOpts: Parameters<typeof runSkillpackCheck>[0] = {};
         const dir = values.get("--dir");

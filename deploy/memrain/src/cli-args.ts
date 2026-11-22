@@ -417,16 +417,27 @@ export interface ParseArgsOptions {
 export class UnknownFlagError extends Error {}
 
 /**
+ * Flags of a command that only one of its subcommands reads; the others would
+ * ignore them. validateFlags refuses them there, and the skill lint follows suit.
+ */
+export const SUBCOMMAND_FLAGS: ReadonlyMap<string, ReadonlyMap<string, string>> = new Map([
+  ["skillpack", new Map([["--fix", "check"], ["--strict", "check"]])],
+]);
+
+/**
  * Whether `cmd` accepts `flag`, by the same rules `validateFlags` applies;
  * undefined when the command has no row of its own. The skill pack lint asks
  * this of every flag a skill writes, so a skill passes exactly when the
- * dispatcher would accept the flag.
+ * dispatcher would accept the flag. `sub` is the first positional; a flag
+ * that only one subcommand reads (SUBCOMMAND_FLAGS) is refused on the others.
  */
-export function commandAcceptsFlag(cmd: string, flag: string): boolean | undefined {
+export function commandAcceptsFlag(cmd: string, flag: string, sub: string | null = null): boolean | undefined {
   const accepted = COMMAND_FLAGS.get(cmd);
   if (accepted === undefined) return undefined;
   if (UNIVERSAL_FLAGS.has(flag)) return true;
   if (flag === "--json" && JSON_GUARDED_COMMANDS.has(cmd)) return true;
+  const only = SUBCOMMAND_FLAGS.get(cmd)?.get(flag);
+  if (only !== undefined && only !== sub) return false;
   return accepted.has(flag);
 }
 
@@ -453,9 +464,14 @@ export function validateFlags(parsed: ParsedArgs): void {
   }
 
   const seen = [...parsed.flags, ...parsed.values.keys()];
+  const sub = parsed.positional[0] ?? null;
   for (const flag of seen) {
-    const ok = (cmd === undefined ? undefined : commandAcceptsFlag(cmd, flag)) ?? KNOWN_FLAGS.has(flag);
+    const ok = (cmd === undefined ? undefined : commandAcceptsFlag(cmd, flag, sub)) ?? KNOWN_FLAGS.has(flag);
     if (ok) continue;
+    const only = cmd === undefined ? undefined : SUBCOMMAND_FLAGS.get(cmd)?.get(flag);
+    if (only !== undefined) {
+      throw new UnknownFlagError(`memrain ${cmd}: ${flag} is only read by '${cmd} ${only}'`);
+    }
     // Suggest only flags the CURRENT command accepts: suggesting a flag that
     // would itself be refused is worse than suggesting nothing.
     const hint = nearest(flag, accepted ?? KNOWN_FLAGS);

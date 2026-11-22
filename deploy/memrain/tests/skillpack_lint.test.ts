@@ -230,6 +230,20 @@ describe("lintSkillpack", () => {
     ]);
   });
 
+  it("refuses a flag on a subcommand that does not read it, as the CLI does", () => {
+    const dir = writePack("sub-flags", {
+      "xi/SKILL.md": skill(
+        "xi",
+        "[page_get]",
+        "Run `memrain skillpack check --fix --strict`, never `memrain skillpack lint --fix` or `memrain skillpack --strict`.",
+      ),
+    });
+    expect(lintSkillpack(dir).issues.map((i) => `${i.rule} ${i.detail}`)).toEqual([
+      "unknown-cli-flag memrain skillpack --fix (only 'skillpack check' reads it)",
+      "unknown-cli-flag memrain skillpack --strict (only 'skillpack check' reads it)",
+    ]);
+  });
+
   it("reads flags only up to the next command on the line", () => {
     expect(extractCliReferences("`memrain doctor --json memrain status --per-source`")).toEqual([
       { command: "doctor", subcommand: null, flags: ["--json"], line: 1 },

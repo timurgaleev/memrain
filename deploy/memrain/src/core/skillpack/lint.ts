@@ -23,7 +23,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readSkillText } from "./read-text.ts";
 import { CLI_COMMANDS, type CliCommandSpec } from "../../cli-commands.ts";
-import { COMMAND_FLAGS, commandAcceptsFlag } from "../../cli-args.ts";
+import { COMMAND_FLAGS, SUBCOMMAND_FLAGS, commandAcceptsFlag } from "../../cli-args.ts";
 import { nearest } from "../did-you-mean.ts";
 import { OPERATIONS } from "../../mcp/operations.ts";
 import { OPERATOR_ONLY_TOOLS } from "../../mcp/visibility.ts";
@@ -477,12 +477,16 @@ function checkReferences(
  */
 function checkFlags(slug: string, ref: CliReference, issues: SkillLintIssue[]): void {
   for (const flag of ref.flags) {
-    if (commandAcceptsFlag(ref.command, flag) !== false) continue;
-    const hint = nearest(flag, COMMAND_FLAGS.get(ref.command) ?? []);
+    if (commandAcceptsFlag(ref.command, flag, ref.subcommand) !== false) continue;
+    const only = SUBCOMMAND_FLAGS.get(ref.command)?.get(flag);
+    const hint = only === undefined ? nearest(flag, COMMAND_FLAGS.get(ref.command) ?? []) : null;
+    const note = only !== undefined
+      ? ` (only '${ref.command} ${only}' reads it)`
+      : hint === null ? "" : ` (did you mean ${hint}?)`;
     issues.push({
       slug,
       rule: "unknown-cli-flag",
-      detail: `memrain ${ref.command} ${flag}${hint === null ? "" : ` (did you mean ${hint}?)`}`,
+      detail: `memrain ${ref.command} ${flag}${note}`,
       line: ref.line,
     });
   }

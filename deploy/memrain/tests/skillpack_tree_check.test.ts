@@ -6,7 +6,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { checkSkillTree } from "../src/core/skillpack/tree-check.ts";
@@ -233,6 +233,17 @@ describe("skillpack check --fix", () => {
     expect(checkSkillTree(dir, { fix: true }).fixes).toEqual([]);
   });
 
+  it("never runs the checked repository's fsmonitor hook", () => {
+    const dir = pack("fix-fsmonitor", `## Back-links\n\n${COPY}`);
+    commitAll(dir);
+    const marker = join(root, "fsmonitor-ran");
+    const hook = join(root, "fsmonitor-hook.sh");
+    writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+    git(dir, "config", "core.fsmonitor", hook);
+    expect(checkSkillTree(dir, { fix: true }).fixes.map((f) => f.status)).toEqual(["applied"]);
+    expect(existsSync(marker)).toBe(false);
+  });
+
   it("drops a copy that sits right under a pointer to the same doc", () => {
     const dir = pack("fix-under-pointer", `> **Convention:** see \`conventions/quality.md\` for back-links.\n\n${COPY}\n\n## Next`);
     commitAll(dir);
@@ -316,5 +327,8 @@ describe("memrain skillpack check (CLI)", () => {
     expect(lint.status).toBe(1);
     expect(lint.stderr).toContain("only read by 'skillpack check'");
     expect(run("lint", "--dir", clean, "--strict").status).toBe(1);
+    expect(run("--strict").status).toBe(1);
+    // ...and check itself takes both.
+    expect(run("check", "--dir", clean, "--strict", "--fix").status).toBe(0);
   }, 60_000);
 });

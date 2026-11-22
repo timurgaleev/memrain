@@ -375,7 +375,9 @@ export type FileGate = "ok" | "symlink" | "not_regular" | "untracked" | "modifie
 /**
  * Whether `file` may be rewritten: a regular file inside `skillsDir`, no
  * symbolic link on the way to it, tracked and unmodified in version control.
- * Arguments go to the tool as an array, so a file name cannot reach a shell.
+ * Arguments go to the tool as an array, so a file name cannot reach a shell,
+ * and the repository's own fsmonitor hook is switched off: `--dir` may name a
+ * checkout whose config would otherwise run a program of its choosing.
  */
 export function fileGate(skillsDir: string, file: string): FileGate {
   const root = realpathSync(skillsDir);
@@ -395,7 +397,7 @@ export function fileGate(skillsDir: string, file: string): FileGate {
     if (i === parts.length - 1 && !st.isFile()) return "not_regular";
   }
   const run = (args: string[]) =>
-    spawnSync("git", ["-C", dirname(path), ...args, "--", basename(path)], { encoding: "utf8" });
+    spawnSync("git", ["-c", "core.fsmonitor=false", "-C", dirname(path), ...args, "--", basename(path)], { encoding: "utf8" });
   const tracked = run(["ls-files", "--error-unmatch"]);
   if (tracked.error !== undefined) return "no_repository";
   if (tracked.status !== 0) {
