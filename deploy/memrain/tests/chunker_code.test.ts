@@ -80,10 +80,32 @@ describe("chunkCode (TypeScript)", () => {
     expect(repo.body).not.toContain("Saves.");
     expect(repo.body).not.toContain("@logged");
     expect(repo.body).toContain("private cache = makeCache();");
-    expect(repo.body.endsWith("// Members: save, load")).toBe(true);
-    // The field stays on its own line: line 5 of the file is line 5 of the class's text.
+    expect(repo.body.endsWith("} // Members: save, load")).toBe(true);
+    // The field stays on its own line: line 5 of the file is line 5 of the class's text,
+    // and the member list adds no line past the class's end.
     expect(repo.body.split("\n")[4]).toBe("  private cache = makeCache();");
-    expect(r.symbols.find((s) => s.name === "save")!.body).toBe("save(): void { write(); }");
+    expect(repo.body.split("\n").length).toBe(repo.endLine - repo.startLine + 1);
+    // A member chunk starts at its decorators.
+    const save = r.symbols.find((s) => s.name === "save")!;
+    expect(save.body).toBe("@logged\n  save(): void { write(); }");
+    expect(save.startLine).toBe(3);
+  });
+
+  // Value: protects=a decorator such as a route stays searchable and its call stays in the call graph;
+  // fails_when=the class blanks the decorator while the member chunk starts below it, so it is in no chunk.
+  it("keeps a Python member's decorators in the member's chunk", async () => {
+    const src = `class Users:
+    @router.get("/users")
+    def list_users(self):
+        return []
+`;
+    const r = await chunkCode(src, "users.py", "python");
+    const cls = r.symbols.find((s) => s.name === "Users")!;
+    const member = r.symbols.find((s) => s.name === "list_users")!;
+    expect(cls.body).not.toContain("@router");
+    expect(member.body.startsWith('@router.get("/users")')).toBe(true);
+    expect(member.startLine).toBe(2);
+    expect(cls.body.split("\n").length).toBe(cls.endLine - cls.startLine + 1);
   });
 
   // Value: protects=a helper nested in a function stays in that function's chunk instead of being chunked

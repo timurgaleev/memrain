@@ -135,6 +135,21 @@ describe("extractCodeEntities (nested code)", () => {
   });
 });
 
+describe("extractCodeEntities (decorators)", () => {
+  // Value: protects=a decorator's call (a route registration) is credited to the decorated method at the
+  // decorator's line; fails_when=the decorator falls between the class and member chunks and its call is lost.
+  it("credits a member decorator's call to the member", async () => {
+    const src = `class Users:
+    @router.get("/users")
+    def list_users(self):
+        return []
+`;
+    const { entities } = await entitiesFor(src, "src/users.py", "python");
+    const callers = entities.filter((e) => e.type === "code-caller").map((e) => `${e.name}@${e.surfaceForm}`);
+    expect(callers).toContain("get@src/users.py:2:list_users");
+  });
+});
+
 describe("extractCodeEntities (Python)", () => {
   it("emits caller/callee edges for a Python call site", async () => {
     const src = `def alpha():

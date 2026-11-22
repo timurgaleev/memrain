@@ -139,6 +139,28 @@ function jsLeadingRun(node: TSNode): { startIndex: number; comments: string[] } 
 }
 
 /**
+ * Where a symbol's own text starts: its decorators are part of it
+ * (`@router.get("/users")` is the route, and its call belongs to the
+ * function). A Python decorated definition starts at its wrapper; a JS/TS
+ * class member at the decorators above it. Returns the offset and its row.
+ */
+function symbolStart(node: TSNode, lang: CodeLanguage): { index: number; row: number } {
+  if (lang === "python") {
+    const at = node.parent?.type === "decorated_definition" ? node.parent : node;
+    return { index: at.startIndex, row: at.startPosition.row };
+  }
+  let at: TSNode = node;
+  if (lang === "typescript" || lang === "tsx") {
+    let sib = node.previousNamedSibling;
+    while (sib && sib.type === "decorator") {
+      at = sib;
+      sib = sib.previousNamedSibling;
+    }
+  }
+  return { index: at.startIndex, row: at.startPosition.row };
+}
+
+/**
  * Where a class member's text starts once its decorators and doc comment are
  * counted in: the member chunk carries all three (its doc comment in
  * `docComment`), so the class chunk leaves them out too.
@@ -169,8 +191,9 @@ const MEMBER_LIST_MAX = 20;
 
 /**
  * A class's own text: its source with each member's text blanked out (line
- * breaks kept, so every line of what remains keeps its line number), then the
- * member list.
+ * breaks kept, so every line of what remains keeps its line number), and the
+ * member list as a comment on its last line, so the text still spans exactly
+ * the class's lines.
  */
 function scopeText(source: string, start: number, end: number, members: readonly MemberRange[], lang: CodeLanguage): string {
   let text = "";
@@ -183,7 +206,8 @@ function scopeText(source: string, start: number, end: number, members: readonly
   }
   text += source.slice(at, end);
   const names = members.map((m) => m.name).slice(0, MEMBER_LIST_MAX).join(", ");
-  return `${text}\n\n${lineComment(lang)} Members: ${names}`;
+  const lastLine = text.slice(text.lastIndexOf("\n") + 1);
+  return `${text}${lastLine.trim().length > 0 ? " " : ""}${lineComment(lang)} Members: ${names}`;
 }
 
 /** Strip Python string quoting (prefixes r/b/f/u + ' '' ''' " "" """). */
@@ -451,12 +475,13 @@ function visitSymbols(
 
     let nextOwner = owner;
     if (emittedName && emittedKind) {
+      const start = symbolStart(bodyNode, lang);
       const symbol: CodeSymbol = {
         name: emittedName,
         kind: emittedKind,
-        body: source.slice(bodyNode.startIndex, bodyNode.endIndex),
+        body: source.slice(start.index, bodyNode.endIndex),
         // tree-sitter rows are 0-based; convert to 1-based for SQL.
-        startLine: bodyNode.startPosition.row + 1,
+        startLine: start.row + 1,
         endLine: bodyNode.endPosition.row + 1,
         enclosing:
           enclosingPath.length > 0
@@ -469,7 +494,7 @@ function visitSymbols(
       owner?.members.push({ start: memberStart(bodyNode, lang), end: bodyNode.endIndex, name: emittedName });
       // A function-like symbol is a leaf: whatever is nested in it stays in its body.
       if (emittedKind !== "class") continue;
-      const scope: Scope = { symbol, start: bodyNode.startIndex, end: bodyNode.endIndex, members: [] };
+      const scope: Scope = { symbol, start: start.index, end: bodyNode.endIndex, members: [] };
       scopes.push(scope);
       nextOwner = scope;
     }
@@ -513,11 +538,18 @@ function moduleSymbol(root: TSNode, source: string, filename: string, lang: Code
   let hasCall = false;
   while (stack.length) {
     const node = stack.pop()!;
+    // A decorated definition is one declaration, decorators included: their
+    // calls belong to the symbol's chunk, not the module's.
+    if (lang === "python" && node.type === "decorated_definition") {
+      ranges.push({ start: node.startIndex, end: node.endIndex });
+      continue;
+    }
     const declaration = SYMBOL_NODE_TYPES[lang].has(node.type) && symbolName(node, lang);
     const arrow = (lang === "typescript" || lang === "tsx") && arrowBindingFromLexicalDecl(node);
     if (declaration || arrow || IMPORT_NODE_TYPES_PER_LANG[lang].has(node.type)) {
       const wrapper = node.parent?.type === "export_statement" ? node.parent : node;
-      ranges.push({ start: wrapper.startIndex, end: wrapper.endIndex });
+      const start = wrapper === node ? symbolStart(node, lang).index : wrapper.startIndex;
+      ranges.push({ start, end: wrapper.endIndex });
       continue;
     }
     if (calls.has(node.type)) hasCall = true;
