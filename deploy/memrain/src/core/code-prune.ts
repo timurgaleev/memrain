@@ -5,7 +5,7 @@
  * a removed file's document, chunks, vectors, mentions and call edges stay
  * live, and its symbols keep answering `search` and every `code_*` tool. This
  * pass soft-deletes those documents (`documents.deleted_at`, purged after the
- * shared 72 h TTL) and writes one `code_prunes` row each (migration 192): the
+ * shared 72 h TTL) and writes one `code_prunes` row each (migration 190): the
  * pass, the time, the root and the reason. Nothing is hard-deleted here, and
  * the chunks, vectors and edges stay in place, so `restoreCodePrunes` brings a
  * document back exactly as it was.
@@ -173,11 +173,11 @@ async function planRoot(engine: Engine, root: string): Promise<RootPlan> {
     // scope: operator-only provenance of documents this root's plan already selected
     const restored = await engine.query<{ document_id: string }>(
       `SELECT document_id FROM (
-         SELECT DISTINCT ON (document_id) document_id, restored_by
+         SELECT DISTINCT ON (document_id) document_id, restored_by, hold_released_at
            FROM code_prunes
           WHERE document_id = ANY($1::text[])
           ORDER BY document_id, id DESC) latest
-        WHERE restored_by = 'cli'`,
+        WHERE restored_by = 'cli' AND hold_released_at IS NULL`,
       [missing.map((m) => m.id)],
     );
     const heldIds = new Set(restored.rows.map((r) => r.document_id));
@@ -350,6 +350,47 @@ export async function restoreCodePrunes(
     out.restored = [...revivedIds].sort();
   });
   return out;
+}
+
+/**
+ * Documents the operator restored whose hold on the automatic pass is still on.
+ * The sweep releases a hold once it sees the document's file again: from then
+ * on a deletion of that file is an ordinary one.
+ */
+export async function heldCodePruneDocIds(engine: Engine): Promise<Set<string>> {
+  // scope: operator-only read by the operator's code sweep
+  const r = await engine.query<{ document_id: string }>(
+    `SELECT DISTINCT document_id FROM code_prunes
+      WHERE restored_by = 'cli' AND hold_released_at IS NULL`,
+  );
+  return new Set(r.rows.map((row) => row.document_id));
+}
+
+/** Release the operator's hold on `documentId`: its file is present again. */
+export async function releaseCodePruneHold(engine: Engine, documentId: string): Promise<void> {
+  await engine.query(
+    `UPDATE code_prunes SET hold_released_at = NOW()
+      WHERE document_id = $1 AND restored_by = 'cli' AND hold_released_at IS NULL`,
+    [documentId],
+  );
+}
+
+/**
+ * Pruned documents past `ttlHours` the purge must keep for now: their file is
+ * back (or cannot be checked), and only a code sweep re-reads and revives a
+ * pruned document. A file still missing lets the purge go ahead.
+ */
+export async function codePrunesKeptFromPurge(engine: Engine, ttlHours: number): Promise<string[]> {
+  // scope: operator-only the purge cycle phase runs for the whole brain
+  const r = await engine.query<{ document_id: string; source_path: string }>(
+    `SELECT p.document_id, p.source_path
+       FROM code_prunes p
+       JOIN documents d ON d.id = p.document_id AND d.deleted_at = p.pruned_at
+      WHERE p.restored_at IS NULL
+        AND d.deleted_at <= NOW() - ($1 || ' hours')::interval`,
+    [String(ttlHours)],
+  );
+  return r.rows.filter((row) => fileState(row.source_path) !== "missing").map((row) => row.document_id);
 }
 
 /** Documents retired by a prune whose deletion is still the prune's (restorable, not yet purged). */

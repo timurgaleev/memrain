@@ -15,7 +15,7 @@ import { registerSource } from "../src/core/sources.ts";
 import { keywordSearch } from "../src/core/search/keyword.ts";
 import { codeDefs } from "../src/core/code-graph.ts";
 import { getChunksForSource } from "../src/core/chunks-read.ts";
-import { restoreDocuments, softDeleteDocuments } from "../src/core/destructive-guard.ts";
+import { purgeExpiredDocuments, restoreDocuments, softDeleteDocuments } from "../src/core/destructive-guard.ts";
 import { codePruneAutoEnabled, restoreCodePrunes } from "../src/core/code-prune.ts";
 import { runCodePrune } from "../src/commands/code-prune.ts";
 import { _resetParsersForTests } from "../src/core/chunkers/parsers.ts";
@@ -110,6 +110,48 @@ describe("code sweep prune", () => {
     expect(again.prune?.pruned).toBe(0);
     expect(again.prune?.roots[0]?.held).toBe(1);
     expect((await docOf(fileOf(dir, 0)))!.deleted_at).toBeNull();
+  });
+
+  // Value: protects=the operator's hold ends once the file is seen again, so a later real deletion is pruned;
+  // fails_when=a document restored once is exempt from the automatic pass forever.
+  it("releases the operator's hold once the sweep sees the file again", async () => {
+    const dir = makeRepo("kilo", 6);
+    await sweepCodeRoots(storage, { paths: [dir], prune: true });
+    unlinkSync(fileOf(dir, 0));
+    const sweepId = (await sweepCodeRoots(storage, { paths: [dir], prune: true })).prune!.sweep_id!;
+    await restoreCodePrunes(storage.engine(), { sweepId }, "cli");
+    expect((await sweepCodeRoots(storage, { paths: [dir], prune: true })).prune?.roots[0]?.held).toBe(1);
+
+    writeFileSync(fileOf(dir, 0), body("kilo", 0));
+    await sweepCodeRoots(storage, { paths: [dir], prune: true });
+    unlinkSync(fileOf(dir, 0));
+    const r = await sweepCodeRoots(storage, { paths: [dir], prune: true });
+    expect(r.prune?.roots[0]?.held).toBe(0);
+    expect(r.prune?.pruned).toBe(1);
+    expect((await docOf(fileOf(dir, 0)))!.deleted_at).not.toBeNull();
+  });
+
+  // Value: protects=a returned file keeps its document through the purge until a sweep revives it, while a
+  // still-missing one is purged on time; fails_when=the purge deletes a pruned document whose file is back.
+  it("keeps a pruned document from the purge while its file is back", async () => {
+    const dir = makeRepo("lima", 10);
+    await sweepCodeRoots(storage, { paths: [dir], prune: true });
+    unlinkSync(fileOf(dir, 0));
+    unlinkSync(fileOf(dir, 1));
+    expect((await sweepCodeRoots(storage, { paths: [dir], prune: true })).prune?.pruned).toBe(2);
+    const back = (await docOf(fileOf(dir, 0)))!.id;
+    const gone = (await docOf(fileOf(dir, 1)))!.id;
+    writeFileSync(fileOf(dir, 0), body("lima", 0));
+
+    await purgeExpiredDocuments(storage.engine(), 0);
+    expect(await docOf(fileOf(dir, 1))).toBeUndefined();
+    expect((await docOf(fileOf(dir, 0)))?.id).toBe(back);
+    expect(gone).not.toBe(back);
+
+    const r = await sweepCodeRoots(storage, { paths: [dir], prune: true });
+    expect(r.restored).toBe(1);
+    expect((await docOf(fileOf(dir, 0)))!.deleted_at).toBeNull();
+    expect((await codeDefs(storage.engine(), "limaFn0")).count).toBe(1);
   });
 
   // Value: protects=an unmounted checkout never wipes the index; fails_when=a missing root reads as "every file deleted".
@@ -258,5 +300,18 @@ describe("code sweep prune", () => {
     const r = await sweepCodeRoots(storage, { paths: [dir], prune: false });
     expect(r.prune).toBeUndefined();
     expect(await liveDocs(dir)).toBe(6);
+  });
+
+  // Value: protects=a file that returns is revived even after pruning was switched off; fails_when=the switch
+  // also stops the revive and strands a document an earlier pass retired.
+  it("revives a returned file with pruning off", async () => {
+    const dir = makeRepo("mike", 6);
+    await sweepCodeRoots(storage, { paths: [dir], prune: true });
+    unlinkSync(fileOf(dir, 2));
+    expect((await sweepCodeRoots(storage, { paths: [dir], prune: true })).prune?.pruned).toBe(1);
+    writeFileSync(fileOf(dir, 2), body("mike", 2));
+    const r = await sweepCodeRoots(storage, { paths: [dir], prune: false });
+    expect(r.restored).toBe(1);
+    expect((await docOf(fileOf(dir, 2)))!.deleted_at).toBeNull();
   });
 });

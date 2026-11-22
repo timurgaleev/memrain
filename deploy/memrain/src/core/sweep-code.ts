@@ -25,7 +25,9 @@ import { backfillDocumentSources, loadRereadGuard, type StoredDocument } from ".
 import { LEGACY_DATA_DIR } from "./brand.ts";
 import {
   codePruneAutoEnabled,
+  heldCodePruneDocIds,
   openCodePruneDocIds,
+  releaseCodePruneHold,
   pruneCodeRoots,
   restoreCodePrunes,
   type CodePruneResult,
@@ -247,9 +249,13 @@ async function sweepCodeRootsInner(
   let embeddingDeferred = 0;
   const prune = opts.prune ?? codePruneAutoEnabled();
   // Documents a prune retired whose deletion is still the prune's: when the
-  // walk meets one's file again, it is made live before the mtime check (the
-  // indexer never revives a deleted document by itself).
-  const pruned = prune ? await openCodePruneDocIds(storage.raw()) : new Set<string>();
+  // walk meets one's file again, it is re-indexed and made live (the indexer
+  // never revives a deleted document by itself). Loaded even with pruning off,
+  // so turning the switch off never strands a document an earlier pass retired.
+  const pruned = await openCodePruneDocIds(storage.raw());
+  // Documents the operator restored, held back from the automatic pass until
+  // the walk sees their file again.
+  const held = await heldCodePruneDocIds(storage.raw());
   const evidence: CodeWalkEvidence[] = [];
 
   for (const root of opts.paths) {
@@ -292,6 +298,14 @@ async function sweepCodeRootsInner(
       // document is re-indexed first (the write keeps it deleted) and made live
       // only once that succeeded; its old chunks never come back on their own.
       const returned = pruned.has(id);
+      if (held.has(id)) {
+        held.delete(id);
+        try {
+          await releaseCodePruneHold(storage.raw(), id);
+        } catch (e) {
+          result.errors.push({ path: file.path, message: `releasing a prune hold failed: ${(e as Error).message}` });
+        }
+      }
       const lastIndexed = stored?.lastIndexedMtime ?? null;
       const forcedByChunker = staleChunkerIds?.has(id) ?? false;
       if (forcedByChunker) seenStaleIds!.add(id);

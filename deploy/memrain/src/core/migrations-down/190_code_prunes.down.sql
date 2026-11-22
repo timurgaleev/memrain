@@ -1,0 +1,24 @@
+-- 190_code_prunes.down.sql — undo migration 190.
+--
+--   bun run src/cli.ts apply-migrations --down 190 --yes
+--   psql "$URL" -v ON_ERROR_STOP=1 -1 -f 190_code_prunes.down.sql
+--
+-- Drops the prune provenance. Documents a code sweep retired stay soft-deleted
+-- and are purged on the usual schedule; without this table they can only be
+-- restored one by one through the generic document restore. It refuses, and
+-- changes nothing, unless 190 is the latest migration.
+
+SET LOCAL lock_timeout = '10s';
+SELECT pg_advisory_xact_lock(hashtext('memrain:migrations'));
+
+DO $down$
+BEGIN
+  IF (SELECT max(id) FROM migrations) IS DISTINCT FROM 190 THEN
+    RAISE EXCEPTION '190 down: migration 190 is not the latest applied migration';
+  END IF;
+END
+$down$;
+
+DROP TABLE IF EXISTS code_prunes;
+
+DELETE FROM migrations WHERE id = 190;

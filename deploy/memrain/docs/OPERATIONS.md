@@ -185,8 +185,10 @@ bun run src/cli.ts code restore doc_0123456789abcdef
 `--paths CSV` overrides `MEMRAIN_CODE_PATHS`. A restore works until the purge
 removes the document 72 hours after the prune; it reports a document deleted
 again by something else as `superseded` and leaves it deleted. The automatic
-pass leaves a document you restored to `code prune --apply`; a file that comes
-back is restored by the next sweep.
+pass leaves a document you restored to `code prune --apply` until a sweep sees
+its file again. A file that comes back is re-indexed and restored by the next
+sweep, even with `MEMRAIN_CODE_PRUNE=0`, and the purge keeps its document past
+the 72 hours until then.
 
 ## Re-build the index after RDS loss
 

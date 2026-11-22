@@ -48,8 +48,9 @@ notes).
 When a file is deleted from the repository, the next code sweep soft-deletes
 its document, so its symbols leave search and the code tools. Each one is
 recorded with the pass that removed it, and `memrain code restore` brings it
-back with its chunks and vectors until the purge removes it 72 hours later; a
-file that comes back is restored by the sweep itself. The sweep does nothing
+back with its chunks and vectors until the purge removes it 72 hours later. A
+file that comes back is re-read and restored by the next sweep, and the purge
+keeps its document until then. The sweep does nothing
 when a root is missing, empty or only partly readable, and it holds back a
 pass that would remove a large share of a root for `memrain code prune` to
 review, because a failed mount looks exactly like a mass deletion.
