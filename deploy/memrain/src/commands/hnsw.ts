@@ -1,8 +1,9 @@
 /**
- * `memrain hnsw <status|sweep|rebuild>` — manual HNSW index lifecycle ops over the
- * ported `core/vector-index.ts` manager. Postgres-only in effect (every op
- * no-ops on PGLite); the recovery path for an index left invalid by an aborted
- * `CREATE INDEX CONCURRENTLY` or an OOM mid-build.
+ * `memrain hnsw <status|sweep|rebuild>` — manual HNSW index lifecycle ops over
+ * `core/vector-index.ts`; the recovery path for an index left invalid by an
+ * aborted build or an OOM mid-build. `rebuild` drops and rebuilds the
+ * embeddings index in one transaction (not CONCURRENTLY): vector search waits
+ * for the build, keyword search keeps serving. status/sweep are Postgres-only.
  */
 import { loadConfig } from "../core/config.ts";
 import { Storage } from "../core/storage.ts";
@@ -63,8 +64,8 @@ export async function runHnsw(
         }));
         console.log(
           res.rebuilt
-            ? `hnsw rebuild: ${EMBEDDINGS_HNSW_INDEX} rebuilt (temp ${res.tempName})`
-            : `hnsw rebuild: skipped (engine=${engine.kind}, an active build may be in flight — pass --force)`,
+            ? `hnsw rebuild: ${EMBEDDINGS_HNSW_INDEX} rebuilt`
+            : `hnsw rebuild: skipped (an active build is in flight — pass --force)`,
         );
         break;
       }

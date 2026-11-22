@@ -186,6 +186,9 @@ describe("checkInvalidIndexes", () => {
     expect(r.ok).toBe(false);
     expect(r.status).toBe("fail");
     expect(r.detail).toContain("doctor_test_idx");
+    // A concurrent HNSW rebuild holds two graphs; the advice is the non-concurrent rebuild.
+    expect(r.detail).toContain("memrain hnsw rebuild");
+    expect(r.detail).not.toContain("REINDEX INDEX CONCURRENTLY");
   });
 });
 

@@ -2,12 +2,9 @@
  * pgvector HNSW index lifecycle manager.
  *
  * The HNSW index lifecycle surface for memrain's stack:
- *   - `Engine` (query/exec/transaction). CONCURRENTLY routes through
- *     `engine.exec` — its simple-query protocol runs a single statement outside
- *     any transaction, which is exactly what `CREATE INDEX CONCURRENTLY` needs
- *     (`engine.query` uses the extended protocol, which CONCURRENTLY rejects).
+ *   - `Engine` (query/exec/transaction).
  *   - memrain's real HNSW index: `embeddings_vector_idx` on `embeddings(vector)`
- *     (migration 001).
+ *     (migration 001; halfvec since 191).
  *   - RDS — the external-maintenance detector matches the managed app names
  *     memrain could see (rdsadmin / autovacuum / pg_cron).
  *
@@ -15,17 +12,17 @@
  *   - checkActiveBuild:   pre-op probe of pg_stat_activity.
  *   - dropZombieIndexes:  sweep of indisvalid=false indexes, guarded against an
  *                         in-flight build (an aborted CONCURRENTLY leaves one).
- *   - dropAndRebuild:     atomic-swap rebuild — build a temp index CONCURRENTLY,
- *                         then DROP old + RENAME temp in one transaction. If the
- *                         build fails, the old index stays intact and search
- *                         keeps serving.
+ *   - dropAndRebuild:     drop and rebuild in one transaction, never
+ *                         CONCURRENTLY, no parallel workers. If the build fails
+ *                         the transaction rolls back and the old index stays.
  *   - monitorBuild:       poll progress of a long-running build.
  *
- * All Postgres-only; every function no-ops (or returns empty) on PGLite, which
- * is single-connection and has no pg_stat_activity / concurrent-build surface.
+ * The probes are Postgres-only and no-op (or return empty) on PGLite, which is
+ * single-connection and has no pg_stat_activity; dropAndRebuild runs on both.
  */
 import type { Engine } from "./engine/interface.ts";
 import type { EmbeddingVectorType } from "./embedding-column.ts";
+import { resolveLockTimeout, resolveMigrationStatementTimeout } from "./migrate.ts";
 
 /**
  * ef_search must cover the requested ANN candidate pool: pgvector's HNSW scan
@@ -165,55 +162,64 @@ export async function dropZombieIndexes(
 }
 
 /**
- * Atomic-swap rebuild: build a new index with a temp name CONCURRENTLY, then
- * DROP old + RENAME temp in one transaction. If the CONCURRENTLY build fails
- * (OOM, timeout, connection drop), the old index is intact and search keeps
- * serving — the caller can retry.
+ * Rebuild an HNSW index in place: drop it (and any leftover of an interrupted
+ * rebuild: `_rebuild_*`, REINDEX CONCURRENTLY's `_ccnew`/`_ccold`) and build it
+ * again, all in one transaction. Never CONCURRENTLY and without parallel
+ * workers: a concurrent build keeps the old and the new graph alive at once,
+ * and parallel workers each take their own memory — together that exhausted a
+ * 1 GB instance. The cost is an ACCESS EXCLUSIVE lock on the table for the
+ * build: vector search and embedding writes wait (minutes on a large brain);
+ * queries that never read the table, keyword and title search, keep serving.
+ * A failed build (OOM, timeout, dropped connection) rolls back with the old
+ * index intact, so the caller can retry.
  */
 export async function dropAndRebuild(
   engine: Engine,
   spec: IndexSpec,
   opts: { reason: string; force?: boolean } = { reason: "manual" },
-): Promise<{ rebuilt: boolean; tempName: string }> {
-  if (engine.kind !== "postgres") {
-    return { rebuilt: false, tempName: spec.name };
-  }
-
+): Promise<{ rebuilt: boolean }> {
   const active = await checkActiveBuild(engine, spec.name);
   if (active.active && !opts.force) {
     console.error(
       `[hnsw] dropAndRebuild ${spec.name} aborted: active build pid ${active.pid} ` +
         `(${active.application_name ?? "unknown"}). Pass force to proceed anyway.`,
     );
-    return { rebuilt: false, tempName: spec.name };
+    return { rebuilt: false };
   }
 
-  // Deterministic-friendly temp suffix: the current max index generation + 1
-  // would need a probe; a pid+epoch suffix is unique enough and avoids Date in
-  // hot code. We read the DB clock so the name is stable per rebuild attempt.
-  const clock = await engine.query<{ ms: string }>(
-    `SELECT (extract(epoch from clock_timestamp()) * 1000)::bigint::text AS ms`,
-  );
-  const ts = clock.rows[0]?.ms ?? "0";
-  const tempName = `${spec.name}_rebuild_${ts}`;
   const where = spec.condition ? ` WHERE ${spec.condition}` : "";
-
-  console.error(`[hnsw] rebuild ${spec.name} → ${tempName} (reason=${opts.reason})`);
-
-  // Build the new index CONCURRENTLY. exec() = simple protocol → single
-  // statement outside a transaction, which CONCURRENTLY requires.
-  await engine.exec(
-    `CREATE INDEX CONCURRENTLY IF NOT EXISTS "${tempName}" ON ${spec.table} USING ${spec.using}${where}`,
+  const lockTimeout = resolveLockTimeout();
+  const stmtTimeout = resolveMigrationStatementTimeout();
+  console.error(
+    `[hnsw] rebuild ${spec.name} (reason=${opts.reason}) — vector search on ${spec.table} waits until it finishes`,
   );
 
-  // Atomic swap.
   await engine.transaction(async (tx) => {
-    await tx.exec(`DROP INDEX IF EXISTS "${spec.name}"`);
-    await tx.exec(`ALTER INDEX "${tempName}" RENAME TO "${spec.name}"`);
+    // The connection's interactive statement_timeout would kill the build.
+    await tx.exec(`SET LOCAL statement_timeout = '${stmtTimeout}'`);
+    await tx.exec(`SET LOCAL lock_timeout = '${lockTimeout}'`);
+    await tx.exec("SET LOCAL max_parallel_maintenance_workers = 0");
+    const r = await tx.query<{ relname: string }>(
+      `SELECT c.relname::text AS relname
+         FROM pg_index i
+         JOIN pg_class c ON c.oid = i.indexrelid
+        WHERE i.indrelid = to_regclass($1)
+          AND (c.relname = $2 OR c.relname LIKE $3 OR c.relname LIKE $4 OR c.relname LIKE $5)`,
+      [spec.table, spec.name, `${likeEscape(spec.name)}\\_rebuild\\_%`, `${likeEscape(spec.name)}\\_ccnew%`, `${likeEscape(spec.name)}\\_ccold%`],
+    );
+    for (const row of r.rows) {
+      // Identifier read back from the catalog, not caller input.
+      await tx.exec(`DROP INDEX IF EXISTS "${row.relname}"`);
+    }
+    await tx.exec(`CREATE INDEX "${spec.name}" ON ${spec.table} USING ${spec.using}${where}`);
   });
 
   console.error(`[hnsw] rebuild complete: ${spec.name}`);
-  return { rebuilt: true, tempName };
+  return { rebuilt: true };
+}
+
+function likeEscape(s: string): string {
+  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 
 export interface BuildProgress {

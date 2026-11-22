@@ -60,11 +60,6 @@ describe("PGLite no-op guards", () => {
     expect(r.dropped).toEqual([]);
   });
 
-  it("dropAndRebuild reports not-rebuilt (postgres-only)", async () => {
-    const r = await dropAndRebuild(storage.engine(), embeddingsHnswSpec("halfvec"));
-    expect(r.rebuilt).toBe(false);
-    expect(r.tempName).toBe("embeddings_vector_idx");
-  });
 
   it("monitorBuild returns immediately", async () => {
     let calls = 0;
@@ -72,6 +67,39 @@ describe("PGLite no-op guards", () => {
       calls++;
     });
     expect(calls).toBe(0);
+  });
+});
+
+describe("dropAndRebuild", () => {
+  // Value: protects=the rebuild replaces the index in place, without CONCURRENTLY or parallel workers, and
+  // clears what an interrupted rebuild left; fails_when=a second index survives (two graphs in memory), the
+  // opclass is wrong, or the build statement goes back to CONCURRENTLY.
+  it("drops the index and rebuild leftovers and builds one index, non-concurrently", async () => {
+    const e = storage.engine();
+    await e.exec(`CREATE INDEX embeddings_vector_idx_ccnew ON embeddings USING hnsw (vector halfvec_cosine_ops)`);
+    await e.exec(`CREATE INDEX embeddings_vector_idx_rebuild_1 ON embeddings USING hnsw (vector halfvec_cosine_ops)`);
+    const statements: string[] = [];
+    const recording: typeof e = {
+      ...e,
+      kind: e.kind,
+      query: (sql, params) => e.query(sql, params),
+      exec: (sql) => e.exec(sql),
+      transaction: (fn) => e.transaction((tx) => fn({
+        ...tx,
+        kind: tx.kind,
+        query: (sql, params) => tx.query(sql, params),
+        exec: (sql) => { statements.push(sql); return tx.exec(sql); },
+      })),
+    };
+    expect((await dropAndRebuild(recording, embeddingsHnswSpec("halfvec"), { reason: "test" })).rebuilt).toBe(true);
+    const idx = await e.query<{ name: string; opclass: string }>(
+      `SELECT c.relname::text AS name, o.opcname::text AS opclass
+         FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_opclass o ON o.oid = i.indclass[0]
+        WHERE i.indrelid = 'embeddings'::regclass AND c.relname LIKE 'embeddings_vector%'`);
+    expect(idx.rows).toEqual([{ name: EMBEDDINGS_HNSW_INDEX, opclass: "halfvec_cosine_ops" }]);
+    expect(statements).toContain("SET LOCAL max_parallel_maintenance_workers = 0");
+    expect(statements.some(s => /CONCURRENTLY/i.test(s))).toBe(false);
+    expect(await vectorSearch(e, Array.from({ length: 1024 }, () => 0.01), 5)).toEqual([]);
   });
 });
 

@@ -248,8 +248,9 @@ export async function checkSchemaVersion(
  * present but NEVER uses it for query planning, so the HNSW vector arm (or any
  * indexed lookup) silently falls back to a sequential scan with no error — a
  * quiet retrieval-quality regression. Flips ok:false so it surfaces in `doctor`
- * instead of hiding as slow searches. Recover by rebuilding the index (a manual
- * `CREATE INDEX CONCURRENTLY` + drop of the invalid one). Read-only.
+ * instead of hiding as slow searches. Recover by rebuilding the index:
+ * `memrain hnsw rebuild` for the embeddings HNSW (non-concurrent — a concurrent
+ * HNSW build holds two graphs and exhausted a 1 GB instance). Read-only.
  */
 export async function checkInvalidIndexes(
   engine: Engine,
@@ -272,7 +273,7 @@ export async function checkInvalidIndexes(
   return {
     ok: false,
     status: "fail",
-    detail: `${bad.length} invalid index(es) — Postgres ignores these, so lookups silently seq-scan: ${names}. Recover with \`REINDEX INDEX CONCURRENTLY <name>\` (online, no write lock)`,
+    detail: `${bad.length} invalid index(es) — Postgres ignores these, so lookups silently seq-scan: ${names}. Recover the embeddings HNSW with \`memrain hnsw rebuild\` (non-concurrent: vector search pauses for the build, keyword search keeps serving; never REINDEX CONCURRENTLY an HNSW index on a small instance), any other index with \`REINDEX INDEX <name>\``,
   };
 }
 
