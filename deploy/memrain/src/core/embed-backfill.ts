@@ -650,10 +650,19 @@ async function embedPage(
             // embed call can leave this id holding different text: the insert
             // only lands while the chunk still holds the text that was embedded
             // (FOR SHARE: a concurrent re-index's delete is waited for, not
-            // raced).
+            // raced). A code input is also built from the doc comment and the
+            // symbol, which change without the body (a reworded comment, a
+            // renamed class), so they must still match too.
             engine.query<{ fresh: number; inserted: number }>(
               `WITH cur AS (
-                 SELECT id FROM chunks WHERE id = $1 AND content = $6 FOR SHARE
+                 SELECT id FROM chunks
+                  WHERE id = $1 AND content = $6
+                    AND ($8::boolean IS NOT TRUE OR (
+                      doc_comment IS NOT DISTINCT FROM $9
+                      AND symbol_name IS NOT DISTINCT FROM $10
+                      AND symbol_type IS NOT DISTINCT FROM $11
+                      AND parent_symbol_path IS NOT DISTINCT FROM $12::text[]))
+                  FOR SHARE
                ), ins AS (
                  INSERT INTO embeddings (chunk_id, vector, model, embedding_signature, input_hash)
                  SELECT cur.id, $2${vectorCast}, $3, $4, $7 FROM cur
@@ -679,6 +688,11 @@ async function embedPage(
                   tier: row.contextual_embedded && !code ? "deterministic" : "none",
                   input: embedInput(row, code),
                 }),
+                code,
+                row.doc_comment,
+                row.symbol_name,
+                row.symbol_type,
+                row.parent_symbol_path,
               ],
             ),
           BULK_RETRY_OPTS,

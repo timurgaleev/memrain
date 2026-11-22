@@ -174,6 +174,23 @@ describe("runEmbedBackfill kind code", () => {
     expect(again.embeddings).toBe(2);
   });
 
+  // Value: protects=a vector lands only for the input it was embedded from; fails_when=a re-index that changes
+  // only a chunk's doc comment during the paid call keeps the old vector and input hash; why_new=the code input
+  // now includes the doc comment and symbol; seam=embed
+  it("drops a vector whose chunk's doc comment changed during the call", async () => {
+    const embed = async (t: string) => {
+      if (t === inputOf(CODE_CHUNKS[0]!)) {
+        await storage.engine().query("UPDATE chunks SET doc_comment = '/** reworded */' WHERE id = 'doc_code_c0'");
+      }
+      return deterministicEmbed(t);
+    };
+    const r = await runEmbedBackfill(storage.engine(), { kind: "code", embed, maxUsd: 1, concurrency: 1 });
+    expect(r.stale).toBe(1);
+    expect(r.embedded).toBe(2);
+    const left = await storage.engine().query("SELECT 1 FROM embeddings WHERE chunk_id = 'doc_code_c0'");
+    expect(left.rows).toEqual([]);
+  });
+
   // Value: protects=a code run never deletes prose vectors through the signature swap;
   // fails_when=MEMRAIN_REEMBED_ON_SIGNATURE_CHANGE reaches a code run; why_new=Codex plan review; seam=env
   it("ignores the signature-swap switch", async () => {
