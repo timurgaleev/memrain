@@ -47,6 +47,8 @@ export interface GmailWorld {
   thread?: (threadId: string) => GmailAnswer | undefined;
   /** Answer that replaces `messages.list`, when it returns one. */
   list?: (query: URLSearchParams) => GmailAnswer | undefined;
+  /** Answer for `users.settings.sendAs.list`; a listing with no aliases when absent. */
+  sendAs?: GmailAnswer;
   /** Largest page `messages.list` answers, whatever maxResults asks. */
   pageSize?: number;
   /** The Gmail API refuses the access token (401). */
@@ -113,6 +115,7 @@ export function gmailFetch(world: GmailWorld): FetchFn {
 
     const p = url.pathname;
     if (p === "/gmail/v1/users/me/profile") return answer(world.profile);
+    if (p === "/gmail/v1/users/me/settings/sendAs") return answer(world.sendAs ?? { status: 200, body: { sendAs: [] } });
     if (p === "/gmail/v1/users/me/history") {
       return answer(world.history(url.searchParams.get("startHistoryId") ?? "", url.searchParams.get("pageToken")));
     }
@@ -146,6 +149,11 @@ export function gmailFetch(world: GmailWorld): FetchFn {
 /** The `messages.list` queries of a recorded run, in order. */
 export function listCalls(world: GmailWorld): URLSearchParams[] {
   return world.calls.filter(c => c.url.pathname === "/gmail/v1/users/me/messages").map(c => c.url.searchParams);
+}
+
+/** How many `users.settings.sendAs.list` calls a recorded run made. */
+export function sendAsCalls(world: GmailWorld): number {
+  return world.calls.filter(c => c.url.pathname === "/gmail/v1/users/me/settings/sendAs").length;
 }
 
 /** The thread ids a recorded run fetched, in order. */

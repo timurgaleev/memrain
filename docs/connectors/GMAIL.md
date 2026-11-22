@@ -178,6 +178,12 @@ after a thread's last message by default
   people page is linked to it; nobody new is created. Newsletters, auto-replies,
   mailing lists and machine senders (no-reply, postmaster, notification
   addresses) link nobody.
+- Your send-as aliases (Gmail settings, "Send mail as") count as your own
+  address: mail to an alias can owe you a reply on the open-loops list, and
+  an alias is never linked as a person. Memrain reads the alias list on the
+  first run and again at most once a day; if Google refuses the list, the one
+  it has keeps being used. Learning an alias rewrites no page; a thread picks
+  it up the next time it changes.
 - Everything is outside text: stored marked as untrusted, passed through the
   write gate for outside sources, and read back inside a trust frame. A
   credential in a mail (a sign-in token, a reset link with a key) is cut out

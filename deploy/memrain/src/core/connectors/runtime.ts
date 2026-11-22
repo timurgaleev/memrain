@@ -272,7 +272,7 @@ export function connectorRuntime(storage: Storage, opts: ConnectorRuntimeOptions
           await enrichConnectorPage(st, {
             page: { slug: item.slug, title: item.title, externalId: item.externalId, truth: item.truth ?? {}, ...item.enrich },
             sourceId: account.sourceId,
-            ownAddresses: ownAddresses(account.accountLabel!, account.config),
+            ownAddresses: item.enrich.ownAddresses ?? ownAddresses(account.accountLabel!, account.config),
             peopleSourceIds: peopleSources(account.sourceId),
           });
           // The page's reply state, for the loops_sweep daemon; free, no model.

@@ -194,10 +194,15 @@ export const PROVIDER_USER_ID = "provider_user_id";
  */
 export const PASTED_TOKEN = "pasted_token";
 
-/** The account's own addresses, lowercased: its mailbox address first, then its label. */
+/** The account config key holding a Gmail account's send-as aliases (google/send-as.ts). */
+export const SENDAS_ALIASES = "sendas_aliases";
+
+/** The account's own addresses, lowercased: its mailbox address first, then its label, then its send-as aliases. */
 export function ownAddresses(accountLabel: string, config?: Readonly<Record<string, unknown>>): string[] {
   const mailbox = config?.[MAILBOX_ADDRESS];
-  const all = [typeof mailbox === "string" ? mailbox : "", accountLabel].map(a => a.trim().toLowerCase()).filter(a => a !== "");
+  const aliases = config?.[SENDAS_ALIASES];
+  const all = [typeof mailbox === "string" ? mailbox : "", accountLabel, ...(Array.isArray(aliases) ? aliases.filter((a): a is string => typeof a === "string") : [])]
+    .map(a => a.trim().toLowerCase()).filter(a => a !== "");
   return [...new Set(all)];
 }
 

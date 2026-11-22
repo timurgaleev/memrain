@@ -4,7 +4,9 @@
  * engines. A question someone sent the account opens a reply-owed loop; a
  * question the account sent from an alias opens a waiting-on loop through
  * Gmail's SENT label; a newsletter, a no-reply Reply-To mailing and a calendar
- * invitation each ask a question and open nothing.
+ * invitation each ask a question and open nothing. A question sent to one of
+ * the account's send-as aliases owes a reply too, unless it is older than the
+ * open window.
  */
 import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { randomBytes } from "node:crypto";
@@ -91,6 +93,40 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         ["unanswered_inbound", "Carol Diaz <carol@example.com>"],
         ["unanswered_outbound", "Eve Ng <eve@example.net>"],
       ]);
+    } finally { await db.close(); }
+  });
+
+  // Value: protects=mail to a send-as alias owes a reply like mail to the account; fails_when=the Gmail render context leaves the aliases out (toMe stays false), or the 14-day open window is lost; why_new=aliases are new; seam=real sync, runtime and loop sweep. Regression proof: red before send-as aliases (opened 0).
+  it("a question sent to a send-as alias opens a reply-owed loop; an old one does not", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      await registerSource(e, { id: SOURCE, kind: "mailbox", pathPrefix: "mail/" });
+      const account = await createAccount(e, { sourceId: SOURCE, provider: "google", services: ["gmail"], principalRef: "admin:operator", accountLabel: OWNER });
+      await storeCredential(e, kek, account, { access_token: GOOGLE_ACCESS_TOKEN, refresh_token: "1//test-refresh" }, {
+        scopes: ["email", GOOGLE_GMAIL_READONLY, "openid"], expiresAt: new Date(T0 + 3_000_000),
+      });
+      await setAccountEnabled(e, account.id, true);
+
+      const providers = new ProviderRegistry();
+      providers.register(googleProvider());
+      const alias = "Owner.Alias@Example.org";
+      const messages = [
+        plainMessage("a1", "ta", T0 - 2 * DAY, { "From": "Frank Moss <frank@example.com>", "To": `Owner <${alias}>`, "Subject": "Keys", "Message-ID": "<a1@example.com>" },
+          "Can you drop the keys off on Monday?"),
+        plainMessage("a2", "tb", T0 - 30 * DAY, { "From": "Gina Ruiz <gina@example.com>", "To": `Owner <${alias}>`, "Subject": "Old", "Message-ID": "<a2@example.com>" },
+          "Could you send the old invoice?"),
+      ];
+      const w: GmailWorld = { messages, profile: "profile", history: () => "historyEmpty", sendAs: { status: 200, body: { sendAs: [{ sendAsEmail: OWNER }, { sendAsEmail: alias }] } }, calls: [] };
+      const rt = connectorRuntime(db.storage, {
+        kek, providers, fetch: gmailFetch(w), env: ENV, now: () => T0, sleep: async () => {},
+        embedFn: async (t: string) => deterministicEmbed(t),
+      });
+      const loaded = (await rt.loadAccount(account.id))!;
+      expect((await runConnectorSync(db.storage, loaded, rt.depsFor(loaded))).status).toBe("success");
+      expect(Number((await e.query<{ n: number }>(`SELECT count(*)::int AS n FROM loop_threads WHERE source_id = $1`, [SOURCE])).rows[0]!.n)).toBe(2);
+      expect(await sweepLoops(e, SOURCE, new Date(T0))).toMatchObject({ opened: 1 });
+      expect((await listLoops(e, [SOURCE])).map(l => [l.loop_type, l.counterparty])).toEqual([["unanswered_inbound", "Frank Moss <frank@example.com>"]]);
     } finally { await db.close(); }
   });
 });

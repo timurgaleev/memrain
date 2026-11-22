@@ -42,6 +42,11 @@
  * soft delete, under the mass-delete guard). Attachments are receipts only;
  * nothing is downloaded. Every header and body is outside text.
  *
+ * The account's own addresses are its label and its send-as aliases
+ * (send-as.ts, refreshed at most daily on a run's first page): mail to an
+ * alias is mail to the account. They decide reply state and who is linked,
+ * never what a page says, so learning an alias rewrites no page.
+ *
  * Size: a thread response past GMAIL_MAX_THREAD_BYTES is not read into
  * memory. The thread becomes a failed item held at once with the reason
  * `too_large` (the owner sees it among held items); it is never treated as
@@ -56,11 +61,13 @@ import type { ConnectorClient, ConnectorResponse } from "../client.ts";
 import { renderMailThread } from "../render.ts";
 import { retentionDays } from "../retention.ts";
 import { syncItemFromPage } from "../sync-item.ts";
-import type { ConnectorContext, MailMessage, MailThread } from "../model.ts";
+import { ownAddresses, SENDAS_ALIASES, type ConnectorContext, type MailMessage, type MailThread } from "../model.ts";
 import type { PageResult, SyncAccount, SyncAdapter, SyncItem } from "../sync-engine.ts";
 import type { AdapterContext } from "../providers.ts";
+import type { Engine } from "../../engine/interface.ts";
 import { decodeEncodedWords } from "../mime-text.ts";
 import { attachmentReceipts, calendarMethod, extractBody, isAutoSubmitted, parseAddress, parseAddressList, partHeader, type GmailMimePart } from "./gmail-mime.ts";
+import { refreshSendAs, storedSendAs } from "./send-as.ts";
 
 /** The account service this adapter syncs. */
 export const GOOGLE_GMAIL_SERVICE = "gmail";
@@ -284,7 +291,17 @@ type ThreadOutcome =
   | { kind: "stop"; response: ConnectorResponse };
 
 class Adapter implements SyncAdapter {
-  constructor(private readonly account: SyncAccount, private readonly now: () => number, private readonly env: NodeJS.ProcessEnv) {}
+  /** The account's send-as aliases for this run (send-as.ts); the stored list until the run's first page refreshes it. */
+  private aliases: string[];
+
+  constructor(
+    private readonly account: SyncAccount,
+    private readonly now: () => number,
+    private readonly env: NodeJS.ProcessEnv,
+    private readonly engine: Engine | null,
+  ) {
+    this.aliases = storedSendAs(account.config);
+  }
 
   streams(): string[] {
     return (this.account.services ?? []).includes(GOOGLE_GMAIL_SERVICE) ? [GMAIL_STREAM] : [];
@@ -319,6 +336,7 @@ class Adapter implements SyncAdapter {
 
   async page({ client, stream, cursor, page }: Parameters<SyncAdapter["page"]>[0]): Promise<PageResult> {
     if (stream !== GMAIL_STREAM) throw new Error(`gmail adapter has no stream ${stream}`);
+    if (page === 0 && this.engine !== null) this.aliases = await refreshSendAs(client, this.engine, this.account, this.now());
     const st = parseGmailCursor(cursor);
     if (st === null || st.historyId === null) return this.anchor(client, st);
     if (st.pending !== null) return this.pendingPage(client, st, st.pending);
@@ -482,9 +500,12 @@ class Adapter implements SyncAdapter {
     const listedAt = listedIds === undefined
       ? []
       : messages.map(rawMessage).filter((m): m is RawMessage => m !== null && listedIds.has(m.id)).map(m => m.internalDateMs);
-    const ctx: ConnectorContext = { service: "gmail", accountLabel: this.account.accountLabel ?? "" };
+    const label = this.account.accountLabel ?? "";
+    const own = ownAddresses(label, { ...this.account.config, [SENDAS_ALIASES]: this.aliases });
+    const ctx: ConnectorContext = { service: "gmail", accountLabel: label, ownAddresses: own };
     try {
-      return { kind: "item", item: syncItemFromPage(renderMailThread(ctx, normalized.thread), version, { enrich: true }), listedAt };
+      const item = syncItemFromPage(renderMailThread(ctx, normalized.thread), version, { enrich: true });
+      return { kind: "item", item: item.enrich ? { ...item, enrich: { ...item.enrich, ownAddresses: own } } : item, listedAt };
     } catch (e) {
       // The message can quote mail text; only the error's kind is kept.
       return { kind: "item", item: { externalId: threadId, version, failure: { code: "render_failed", message: `the thread could not be rendered (${e instanceof Error ? e.name : "error"})` } }, listedAt };
@@ -493,5 +514,5 @@ class Adapter implements SyncAdapter {
 }
 
 export function googleGmailAdapter(account: SyncAccount, opts: Partial<AdapterContext> = {}): SyncAdapter {
-  return new Adapter(account, opts.now ?? Date.now, opts.env ?? process.env);
+  return new Adapter(account, opts.now ?? Date.now, opts.env ?? process.env, opts.engine ?? null);
 }

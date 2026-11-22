@@ -129,6 +129,12 @@ export interface ItemEnrichment {
   bulk: boolean;
   /** Reply state the loop sweep judges (loops/signals.ts). */
   loop?: LoopSignals;
+  /**
+   * The account's own addresses the adapter rendered with, when it learned
+   * more of them during the run (Gmail send-as aliases) than the account
+   * row read at the start holds; enrichment never links these.
+   */
+  ownAddresses?: readonly string[];
 }
 
 /** One provider item, rendered and ready to store. */
