@@ -117,7 +117,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         plainMessage("a2", "tb", T0 - 30 * DAY, { "From": "Gina Ruiz <gina@example.com>", "To": `Owner <${alias}>`, "Subject": "Old", "Message-ID": "<a2@example.com>" },
           "Could you send the old invoice?"),
       ];
-      const w: GmailWorld = { messages, profile: "profile", history: () => "historyEmpty", sendAs: { status: 200, body: { sendAs: [{ sendAsEmail: OWNER }, { sendAsEmail: alias }] } }, calls: [] };
+      const w: GmailWorld = { messages, profile: "profile", history: () => "historyEmpty", sendAs: { status: 200, body: { sendAs: [{ sendAsEmail: OWNER, isPrimary: true }, { sendAsEmail: alias, verificationStatus: "accepted" }] } }, calls: [] };
       const rt = connectorRuntime(db.storage, {
         kek, providers, fetch: gmailFetch(w), env: ENV, now: () => T0, sleep: async () => {},
         embedFn: async (t: string) => deterministicEmbed(t),

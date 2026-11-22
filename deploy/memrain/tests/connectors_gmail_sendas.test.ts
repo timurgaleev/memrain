@@ -19,7 +19,7 @@ import { runConnectorSync } from "../src/core/connectors/sync-engine.ts";
 import { connectorRuntime } from "../src/core/connectors/runtime.ts";
 import { ownAddresses } from "../src/core/connectors/model.ts";
 import { GOOGLE_GMAIL_READONLY, googleProvider } from "../src/core/connectors/google/provider.ts";
-import { MAX_SENDAS_ALIASES, parseSendAs } from "../src/core/connectors/google/send-as.ts";
+import { aliasesFrom, MAX_SENDAS_ALIASES, parseSendAs } from "../src/core/connectors/google/send-as.ts";
 import type { FetchFn } from "../src/core/connectors/client.ts";
 import { _resetLimitersForTesting } from "../src/core/connectors/limiter.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
@@ -40,22 +40,32 @@ const ENV: NodeJS.ProcessEnv = {
   MEMRAIN_GOOGLE_OAUTH_CLIENT_ID: "env-client.apps.googleusercontent.com",
   MEMRAIN_GOOGLE_OAUTH_CLIENT_SECRET: "env-client-secret-value",
 };
-const SENDAS_TWO = { status: 200, body: { sendAs: [{ sendAsEmail: "Owner.Alias@Example.ORG" }, { sendAsEmail: "" }, { sendAsEmail: "Help@Example.NET" }, { sendAsEmail: "not an address" }, { displayName: "no address" }] } };
+const PRIMARY = { sendAsEmail: OWNER, isPrimary: true };
+const accepted = (sendAsEmail: string) => ({ sendAsEmail, verificationStatus: "accepted" });
+const listing = (...sendAs: unknown[]) => ({ status: 200, body: { sendAs } });
+const SENDAS_TWO = listing(PRIMARY, accepted("Owner.Alias@Example.ORG"), accepted(""), accepted("Help@Example.NET"), accepted("not an address"),
+  { displayName: "no address", verificationStatus: "accepted" }, { sendAsEmail: "someone.else@example.org", verificationStatus: "pending" }, { sendAsEmail: "nostatus@example.org" });
 
 beforeEach(() => _resetLimitersForTesting());
 afterEach(() => _resetLimitersForTesting());
 
 describe("send-as listing", () => {
-  // Value: protects=only bare addresses become own addresses; fails_when=an empty, display-name or malformed entry is stored; why_new=no parser existed; seam=pure function.
-  it("keeps valid addresses only, lowercased and deduplicated, capped", () => {
-    expect(parseSendAs(SENDAS_TWO.body)).toEqual(["owner.alias@example.org", "help@example.net"]);
+  // Value: protects=only the primary address and verified aliases become own addresses; fails_when=an empty, malformed, pending or unverified entry is stored; why_new=no parser existed; seam=pure function. Regression proof (pending alias): red before the verificationStatus check.
+  it("keeps the primary and verified aliases only, valid, lowercased and deduplicated, capped", () => {
+    expect(parseSendAs(SENDAS_TWO.body)).toEqual([OWNER, "owner.alias@example.org", "help@example.net"]);
     expect(parseSendAs({})).toBeNull();
     expect(parseSendAs({ sendAs: [] })).toEqual([]);
-    expect(parseSendAs({ sendAs: ["a@@b.org", "a@b@c.org", "Name <x@y.org>", "x@localhost", "ok@b.org"].map(sendAsEmail => ({ sendAsEmail })) })).toEqual(["ok@b.org"]);
+    expect(parseSendAs({ sendAs: ["a@@b.org", "a@b@c.org", "Name <x@y.org>", "x@localhost", "ok@b.org"].map(accepted) })).toEqual(["ok@b.org"]);
     expect(parseSendAs({ sendAs: "x" })).toBeNull();
     expect(parseSendAs(null)).toBeNull();
-    const many = { sendAs: Array.from({ length: 80 }, (_, i) => ({ sendAsEmail: `a${i}@example.org` })) };
-    expect(parseSendAs(many)).toHaveLength(MAX_SENDAS_ALIASES);
+    // The own address is looked for in the whole listing, and only then are the aliases capped.
+    const many = { sendAs: [...Array.from({ length: 80 }, (_, i) => accepted(`a${i}@example.org`)), PRIMARY] };
+    const listed = parseSendAs(many)!;
+    expect(listed).toContain(OWNER);
+    const aliases = aliasesFrom(listed, OWNER)!;
+    expect(aliases).toHaveLength(MAX_SENDAS_ALIASES);
+    expect(aliases).not.toContain(OWNER);
+    expect(aliasesFrom(["a0@example.org"], OWNER)).toBeNull();
     expect(ownAddresses(OWNER, { sendas_aliases: [ALIAS, 7, "  HELP@example.net "] })).toEqual([OWNER, ALIAS, "help@example.net"]);
   });
 });
@@ -107,7 +117,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       w.calls.length = 0;
       await run(db.storage, gmailFetch(w), id, T0 + 23 * HOUR);
       expect(sendAsCalls(w)).toBe(0);
-      w.sendAs = { status: 200, body: { sendAs: [{ sendAsEmail: "help@example.net" }] } };
+      w.sendAs = listing(PRIMARY, accepted("help@example.net"));
       await run(db.storage, gmailFetch(w), id, T0 + 25 * HOUR);
       expect(sendAsCalls(w)).toBe(1);
       expect((await config(e, id)).sendas_aliases).toEqual(["help@example.net"]);
@@ -138,6 +148,43 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     } finally { await db.close(); }
   });
 
+  // Value: protects=a reply that cannot be the mailbox's own listing never erases the stored aliases; fails_when=an empty or foreign listing is stored as the new list; why_new=review finding; seam=recorded Gmail fake. Regression proof: red before the own-address check.
+  it("a listing without the mailbox's own address keeps the stored list", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const stamp = new Date(T0 - 2 * DAY).toISOString();
+      const id = await connected(db.storage, { sendas_aliases: [ALIAS], sendas_checked_at: stamp });
+      for (const [i, answer] of [listing(), listing(accepted("stranger@example.org"))].entries()) {
+        const w = world({ sendAs: answer });
+        await run(db.storage, gmailFetch(w), id, T0 + i * 2 * DAY);
+        expect(sendAsCalls(w)).toBe(1);
+        expect((await config(e, id)).sendas_aliases).toEqual([ALIAS]);
+      }
+    } finally { await db.close(); }
+  });
+
+  // Value: protects=a passing rate limit or outage does not postpone the next check by a day; fails_when=the check time is stamped after a 429, a 5xx or a network error; why_new=review finding; seam=recorded Gmail fake. Regression proof: red before the transient-class check.
+  it("a rate limit or server error does not stamp the check time, so the next run asks again", async () => {
+    const db = await open();
+    try {
+      const e = db.storage.engine();
+      const stamp = new Date(T0 - 2 * DAY).toISOString();
+      const id = await connected(db.storage, { sendas_aliases: [ALIAS], sendas_checked_at: stamp });
+      for (const status of [429, 503]) {
+        const w = world({ sendAs: { status, body: { error: { code: status, message: "try later" } } } });
+        await run(db.storage, gmailFetch(w), id);
+        expect(sendAsCalls(w)).toBeGreaterThan(0);
+        expect((await config(e, id)).sendas_checked_at).toBe(stamp);
+        expect((await config(e, id)).sendas_aliases).toEqual([ALIAS]);
+      }
+      const w = world({ sendAs: listing(PRIMARY, accepted("help@example.net")) });
+      await run(db.storage, gmailFetch(w), id, T0 + HOUR);
+      expect(sendAsCalls(w)).toBe(1);
+      expect((await config(e, id)).sendas_aliases).toEqual(["help@example.net"]);
+    } finally { await db.close(); }
+  });
+
   // Value: protects=an alias is never linked to a person page or made a wanted person; fails_when=enrichment uses the run-start account row, which has no aliases yet, or the label alone; why_new=new behavior; seam=real runtime enrichment.
   it("enrichment never links an alias or makes it a wanted person, from the run that first learns it", async () => {
     const db = await open();
@@ -148,7 +195,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const msg: RawMessage = plainMessage("al1", "tal", T0 - 3 * DAY,
         { "From": "Ben Ortiz <ben@example.com>", "To": `Owner Alias <${ALIAS}>`, "Cc": "Dana Fox <dana@example.com>", "Subject": "Draft", "Message-ID": "<al1@example.com>" },
         "Here is the draft.");
-      const w = world({ messages: [msg], sendAs: { status: 200, body: { sendAs: [{ sendAsEmail: ALIAS }] } } });
+      const w = world({ messages: [msg], sendAs: listing(PRIMARY, accepted(ALIAS)) });
       expect((await run(db.storage, gmailFetch(w), id)).status).toBe("success");
       const slug = (await e.query<{ page_slug: string }>(`SELECT page_slug FROM connector_items WHERE account_id = $1 AND external_id = 'tal'`, [id])).rows[0]!.page_slug;
       const links = (await e.query<{ target_slug: string }>(`SELECT target_slug FROM links WHERE source_slug = $1`, [slug])).rows.map(r => r.target_slug);
@@ -171,7 +218,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         `SELECT slug, markdown_body, content_hash FROM pages WHERE source_id = $1 AND deleted_at IS NULL ORDER BY slug`, [SOURCE])).rows;
       expect(before).toHaveLength(4);
 
-      w.sendAs = { status: 200, body: { sendAs: [{ sendAsEmail: ALIAS }, { sendAsEmail: "bob@example.org" }] } };
+      w.sendAs = listing(PRIMARY, accepted(ALIAS), accepted("bob@example.org"));
       w.history = start => (start === "120000" ? { status: 404, body: GMAIL_FIXTURES.error404History } : "historyEmpty");
       w.profile = "profileAfterExpiry";
       const result = await run(db.storage, gmailFetch(w), id, T0 + DAY);
