@@ -137,7 +137,7 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--reason", "--redirect-uris", "--refresh-ttl", "--repeats", "--replaces", "--rounds", "--rrf-k", "--scopes", "--settle",
   "--via", "--sealed-fraction", "--search-mode", "--seed", "--severity", "--since", "--skill", "--slug", "--slugs", "--split",
   "--slug-prefixes", "--source", "--source-id", "--source-path", "--source-slug", "--stale-days",
-  "--status", "--sync-policy", "--tag", "--take", "--takes-holders",
+  "--status", "--sweep", "--sync-policy", "--tag", "--take", "--takes-holders",
   "--tables", "--target", "--tenant-mode", "--threshold", "--title", "--to",
   "--to-pglite-path", "--token",
   "--token-endpoint-auth-method", "--token-file", "--tool-name", "--top-skills", "--ttl",
@@ -200,6 +200,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "--max-cost-usd", "--plan-hash", "--rechunk-stale", "--reconcile-deletes", "--source", "--vault",
     ]),
   ],
+  ["code", new Set(["--allow-mass-delete", "--apply", "--limit", "--paths", "--sweep"])],
   ["code-def", new Set(["--json"])],
   ["code-refs", new Set(["--json"])],
   ["code-callers", new Set(["--json"])],
@@ -390,7 +391,7 @@ export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = ne
       "connectors", "import", "migrate-engine", "reindex", "skillify", "transcripts", "write-gate",
     ]),
   ],
-  ["--apply", new Set(["embed", "import", "mirror-adopt", "erase", "atoms-retire", "purge-leftovers", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors", "member", "sources"])],
+  ["--apply", new Set(["code", "embed", "import", "mirror-adopt", "erase", "atoms-retire", "purge-leftovers", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors", "member", "sources"])],
   ["--fix", new Set(["lint", "skillpack"])],
 ]);
 

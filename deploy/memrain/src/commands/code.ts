@@ -20,6 +20,7 @@ import { loadConfig } from "../core/config.ts";
 import { entityId } from "../core/entities.ts";
 import { codeIndexReadiness, type CodeReadinessGraph } from "../core/code-graph.ts";
 import type { Engine } from "../core/engine/interface.ts";
+import { visibilityClause } from "../core/visibility.ts";
 
 export type CodeSub = "code-def" | "code-refs" | "code-callers" | "code-callees";
 
@@ -102,6 +103,7 @@ export async function runCode(opts: CodeCommandOptions): Promise<void> {
          WHERE d.source_path = $1
            AND $2 BETWEEN c.start_line AND c.end_line
            AND e.type = 'code-def'
+           AND ${visibilityClause("d")}
          ORDER BY (c.end_line - c.start_line) ASC
          LIMIT 1`,
         [parsed.file, parsed.line],
@@ -131,7 +133,7 @@ export async function runCode(opts: CodeCommandOptions): Promise<void> {
        FROM entity_mentions em
        JOIN chunks c ON c.id = em.chunk_id
        JOIN documents d ON d.id = c.document_id
-       WHERE em.entity_id = $1
+       WHERE em.entity_id = $1 AND ${visibilityClause("d")}
        ORDER BY d.source_path, c.start_line NULLS FIRST`,
       [eid],
     );

@@ -58,6 +58,7 @@ import {
   isIndexedPolicy,
 } from "./commands/sources.ts";
 import { runCode, type CodeSub } from "./commands/code.ts";
+import { runCodePrune, runCodeRestore } from "./commands/code-prune.ts";
 import { runAuth } from "./commands/auth.ts";
 import { runAdminSetupLink } from "./commands/admin.ts";
 
@@ -166,6 +167,10 @@ function printUsage(): void {
   console.log("  code-callers <name> [--json] symbols whose body calls <name>");
   console.log("  code-callees <path>:<line> [--json]");
   console.log("                               symbols called from inside the symbol covering <path>:<line>");
+  console.log("  code prune [--paths CSV] [--apply] [--allow-mass-delete]");
+  console.log("                               code documents whose file is gone; dry run unless --apply (soft delete)");
+  console.log("  code restore <doc-id> | --sweep ID | [--limit N]");
+  console.log("                               undo a prune, or list the recent prune passes");
   console.log("  doctor                       self-diagnostics — exits 0 on healthy");
   console.log("  doctor --remediation-plan    read-only plan: what would be enqueued for each red check");
   console.log("  doctor --remediate [--execute|--yes] [--max-jobs N] [--max-usd X]");
@@ -570,6 +575,21 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       }
       await runCode(opts);
       return 0;
+    }
+    case "code": {
+      const sub = positional[0];
+      if (sub === "prune" && positional.length === 1) {
+        return runCodePrune({ paths: values.get("--paths"), apply: flags.has("--apply"),
+          allowMassDelete: flags.has("--allow-mass-delete") });
+      }
+      if (sub === "restore" && positional.length <= 2) {
+        const limit = values.has("--limit") ? Number(values.get("--limit")) : undefined;
+        if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+          throw new Error(`code restore: invalid --limit ${values.get("--limit")}`);
+        }
+        return runCodeRestore({ documentId: positional[1], sweepId: values.get("--sweep"), limit });
+      }
+      throw new Error("code: use code prune [--paths CSV] [--apply] [--allow-mass-delete] or code restore <doc-id> | --sweep ID");
     }
     case "aliases": {
       if (positional.length !== 1 || positional[0] !== "suggest") { console.error("Usage: memrain aliases suggest [--source ID] [--limit N] [--json]"); return 2; }

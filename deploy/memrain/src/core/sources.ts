@@ -329,13 +329,13 @@ export async function resolveSourceForPath(
   return r.rows[0]?.id ?? null;
 }
 
-interface SourcePrefix {
+export interface SourcePrefix {
   id: string;
   prefix: string;
 }
 
 /** `PATH_PREFIX_MATCH` + `resolveSourceForPath` in JS, over a preloaded list. */
-function owningSource(path: string, prefixes: readonly SourcePrefix[]): string | null {
+export function owningSource(path: string, prefixes: readonly SourcePrefix[]): string | null {
   let best: SourcePrefix | null = null;
   for (const s of prefixes) {
     if (!path.startsWith(s.prefix)) continue;

@@ -23,6 +23,14 @@ import { listStaleChunkerDocIds } from "./chunker-version.ts";
 import { SUPPORTED_EXTENSIONS } from "./chunkers/parsers.ts";
 import { backfillDocumentSources, loadRereadGuard, type StoredDocument } from "./sources.ts";
 import { LEGACY_DATA_DIR } from "./brand.ts";
+import {
+  codePruneAutoEnabled,
+  openCodePruneDocIds,
+  pruneCodeRoots,
+  restoreCodePrunes,
+  type CodePruneResult,
+  type CodeWalkEvidence,
+} from "./code-prune.ts";
 
 export interface SweepCodeOptions {
   /** Filesystem roots to sweep (each becomes its own source). */
@@ -47,6 +55,12 @@ export interface SweepCodeOptions {
    * skipped, so the run is resumable and the second run costs nothing.
    */
   forceStaleChunker?: boolean;
+  /**
+   * After a complete walk, soft-delete the documents of files gone from each
+   * root (core/code-prune.ts, within its valve). Defaults to
+   * `MEMRAIN_CODE_PRUNE` (on).
+   */
+  prune?: boolean;
 }
 
 export interface SweepCodeResult {
@@ -67,6 +81,10 @@ export interface SweepCodeResult {
   staleChunkerUnreached?: string[];
   /** Chunks this walk wrote without a vector (the embedding cap or an embed failure). */
   embeddingDeferred?: number;
+  /** What the prune of deleted files did, per root (absent when pruning is off). */
+  prune?: CodePruneResult;
+  /** Pruned documents whose file came back; the walk made them live again. */
+  restored?: number;
 }
 
 // Default ignore set for the CODE sweep. Intentionally narrower than
@@ -93,6 +111,30 @@ const DEFAULT_IGNORES: readonly string[] = [
   "venv",
   ".pytest_cache",
 ];
+
+/**
+ * Walk `root` the way the sweep does, without indexing: what the walk could
+ * prove about the root, for `memrain code prune`.
+ */
+export function walkCodeRoot(root: string, ignore: readonly string[] = []): CodeWalkEvidence {
+  const evidence: CodeWalkEvidence = {
+    root: normalizeSourcePath(root),
+    missing: !existsSync(root),
+    files: 0,
+    walkErrors: 0,
+    partial: false,
+  };
+  if (evidence.missing) return evidence;
+  const skip = new Set([...ignore, ...DEFAULT_IGNORES]);
+  for (const _ of walkFiles(root, {
+    extensions: SUPPORTED_EXTENSIONS,
+    ignore: skip,
+    onError: () => { evidence.walkErrors++; },
+  })) {
+    evidence.files++;
+  }
+  return evidence;
+}
 
 function shortHash(s: string): string {
   return createHash("sha256").update(s).digest("hex").slice(0, 16);
@@ -203,9 +245,23 @@ async function sweepCodeRootsInner(
   // not pay per file without bound.
   const embedCap = new EmbedSpendCap(codeEmbedMaxUsd());
   let embeddingDeferred = 0;
+  const prune = opts.prune ?? codePruneAutoEnabled();
+  // Documents a prune retired whose deletion is still the prune's: when the
+  // walk meets one's file again, it is made live before the mtime check (the
+  // indexer never revives a deleted document by itself).
+  const pruned = prune ? await openCodePruneDocIds(storage.raw()) : new Set<string>();
+  const evidence: CodeWalkEvidence[] = [];
 
   for (const root of opts.paths) {
     const perRoot = { root, files: 0, missing: !existsSync(root) };
+    const walked: CodeWalkEvidence = {
+      root: normalizeSourcePath(root),
+      missing: perRoot.missing,
+      files: 0,
+      walkErrors: 0,
+      partial: false,
+    };
+    evidence.push(walked);
     if (perRoot.missing) {
       result.perRoot.push(perRoot);
       continue;
@@ -213,7 +269,9 @@ async function sweepCodeRootsInner(
     for (const file of walkFiles(root, {
       extensions: SUPPORTED_EXTENSIONS,
       ignore,
+      onError: () => { walked.walkErrors++; },
     })) {
+      walked.files++;
       perRoot.files++;
       result.scanned++;
       // Same reason as the vault sweep: indexCodeFile stores the CANONICAL
@@ -230,12 +288,17 @@ async function sweepCodeRootsInner(
         console.warn(`[sweep-code] not indexing ${canonical}: ${verdict.reason}`);
         continue;
       }
+      // A returned file may carry an old mtime and new content, so its pruned
+      // document is re-indexed first (the write keeps it deleted) and made live
+      // only once that succeeded; its old chunks never come back on their own.
+      const returned = pruned.has(id);
       const lastIndexed = stored?.lastIndexedMtime ?? null;
       const forcedByChunker = staleChunkerIds?.has(id) ?? false;
       if (forcedByChunker) seenStaleIds!.add(id);
       if (
         !opts.force &&
         !forcedByChunker &&
+        !returned &&
         lastIndexed !== null &&
         lastIndexed >= file.mtimeMs
       ) {
@@ -254,6 +317,11 @@ async function sweepCodeRootsInner(
         result.reindexed++;
         indexed.push(canonical);
         if (out.hasParseError) result.parseErrors++;
+        if (returned) {
+          pruned.delete(id);
+          const back = await restoreCodePrunes(storage.raw(), { documentId: id }, "file_returned");
+          result.restored = (result.restored ?? 0) + back.restored.length;
+        }
       } catch (e) {
         result.errors.push({
           path: file.path,
@@ -265,6 +333,16 @@ async function sweepCodeRootsInner(
       }
     }
     result.perRoot.push(perRoot);
+  }
+
+  if (prune) {
+    if (budgetBroke) for (const w of evidence) w.partial = true;
+    try {
+      result.prune = await pruneCodeRoots(storage.raw(), evidence, { trigger: "sweep", apply: true });
+      logPrune(result.prune);
+    } catch (e) {
+      result.errors.push({ path: opts.paths.join(", "), message: `code prune failed: ${(e as Error).message}` });
+    }
   }
 
   if (embeddingDeferred > 0) {
@@ -296,4 +374,23 @@ async function sweepCodeRootsInner(
   }
 
   return result;
+}
+
+function logPrune(r: CodePruneResult): void {
+  if (r.sweep_id) {
+    console.log(
+      `[code] pruned ${r.pruned} document(s) of deleted files (sweep ${r.sweep_id}); ` +
+        `\`memrain code restore --sweep ${r.sweep_id}\` undoes it`,
+    );
+  }
+  for (const root of r.roots) {
+    if (root.reason === "mass_delete") {
+      console.warn(
+        `[code] prune withheld for ${root.root}: ${root.missing} of ${root.live} code document(s) have no file; ` +
+          "`memrain code prune` lists them, `memrain code prune --apply --allow-mass-delete` retires them",
+      );
+    } else if (root.reason === "walk_errors") {
+      console.warn(`[code] prune skipped for ${root.root}: the walk could not read part of it`);
+    }
+  }
 }

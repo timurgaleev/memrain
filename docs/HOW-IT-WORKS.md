@@ -45,6 +45,15 @@ that sweep left without a vector waits for `memrain embed --code`. Code is
 never a source for atoms (the lessons the maintenance cycle distils from
 notes).
 
+When a file is deleted from the repository, the next code sweep soft-deletes
+its document, so its symbols leave search and the code tools. Each one is
+recorded with the pass that removed it, and `memrain code restore` brings it
+back with its chunks and vectors until the purge removes it 72 hours later; a
+file that comes back is restored by the sweep itself. The sweep does nothing
+when a root is missing, empty or only partly readable, and it holds back a
+pass that would remove a large share of a root for `memrain code prune` to
+review, because a failed mount looks exactly like a mass deletion.
+
 Chat history comes in the same way. `memrain transcripts ingest` reads ChatGPT
 and Claude.ai exports, Codex CLI rollouts (`~/.codex/sessions`) and Claude Code
 session logs (`~/.claude/projects`), one file or a whole directory. It keeps

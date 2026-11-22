@@ -73,7 +73,7 @@ export async function getChunksForSource(
     `SELECT c.id, c.chunk_index, c.content, c.symbol_name
        FROM chunks c
        JOIN documents d ON d.id = c.document_id
-      WHERE d.source_path = $1${scopeFilter}${quarantineFilter}
+      WHERE d.source_path = $1 AND d.deleted_at IS NULL AND NOT d.archived${scopeFilter}${quarantineFilter}
       ORDER BY c.chunk_index, c.id${limitSql}${offsetSql}`,
     params,
   );

@@ -92,6 +92,7 @@ const SOURCE_TABLES: Record<string, Disposition> = {
   "write_gate_row_holds": { kind: "cascade" },
   "trust_proposals": { kind: "cascade" },
   "entity_dedupe_rejections": { kind: "cascade" },
+  "code_prunes": { kind: "cascade" },
   "secret_store": { kind: "cascade" },
   "notifications": { kind: "cascade" },
   "open_loops": { kind: "cascade" },

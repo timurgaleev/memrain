@@ -161,6 +161,33 @@ which inputs or mirrors need work, then review a bounded repair below.
 `reindex --rechunk-stale` upgrades existing stale documents; it is not a full
 restore and does not discover missing canonical data.
 
+## Code documents of deleted files
+
+Every code sweep (the boot sweep and `reindex --source code`) soft-deletes the
+documents of files gone from a root it walked completely, and logs
+`[code] pruned N document(s) ... (sweep cp-...)`. A root that is missing,
+shows no files or could not be read in full is left alone. A pass over 200
+documents, or over 20% of a root's code documents (more than one), is withheld
+with a `[code] prune withheld` line instead. `MEMRAIN_CODE_PRUNE=0` turns the
+automatic pass off.
+
+```bash
+# what is missing, per root, and what the valve says (dry run):
+bun run src/cli.ts code prune
+# retire them; --allow-mass-delete only after checking the sample paths:
+bun run src/cli.ts code prune --apply [--allow-mass-delete]
+# recent passes, then undo one pass or one document:
+bun run src/cli.ts code restore
+bun run src/cli.ts code restore --sweep cp-20261122T010203-a1b2c3
+bun run src/cli.ts code restore doc_0123456789abcdef
+```
+
+`--paths CSV` overrides `MEMRAIN_CODE_PATHS`. A restore works until the purge
+removes the document 72 hours after the prune; it reports a document deleted
+again by something else as `superseded` and leaves it deleted. The automatic
+pass leaves a document you restored to `code prune --apply`; a file that comes
+back is restored by the next sweep.
+
 ## Re-build the index after RDS loss
 
 RDS holds canonical pages, facts, versions and other history that may have no

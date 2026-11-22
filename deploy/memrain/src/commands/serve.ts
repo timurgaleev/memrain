@@ -435,7 +435,8 @@ export function startBackgroundWork(
           }
         }
         console.log(
-          `[code] boot sweep: scanned=${r.scanned} reindexed=${r.reindexed} skipped=${r.skipped} parseErrors=${r.parseErrors} errors=${r.errors.length}`,
+          `[code] boot sweep: scanned=${r.scanned} reindexed=${r.reindexed} skipped=${r.skipped} parseErrors=${r.parseErrors} errors=${r.errors.length}` +
+            (r.prune ? ` pruned=${r.prune.pruned}` : ""),
         );
         // The count alone is undiagnosable — print the failing files. Capped so a
         // broken mount (every file failing) can't flood the boot log.

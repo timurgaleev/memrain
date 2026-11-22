@@ -24,6 +24,12 @@ export interface WalkOptions {
   extensions: readonly string[];
   /** Directory basenames to skip. */
   ignore: ReadonlySet<string>;
+  /**
+   * Called for every directory or file the walk could not read. The walk still
+   * skips it; a caller that acts on what the walk did NOT see (the code prune)
+   * needs to know the walk was incomplete.
+   */
+  onError?: (path: string, err: unknown) => void;
 }
 
 /**
@@ -58,7 +64,8 @@ function* walkInner(
   let canonical: string;
   try {
     canonical = realpathSync(root);
-  } catch {
+  } catch (err) {
+    opts.onError?.(root, err);
     return;
   }
   if (seen.has(canonical)) return;
@@ -70,7 +77,8 @@ function* walkInner(
     // string-name variant we want via the `encoding: "utf8"` option (no-op at
     // runtime, but keeps the type narrow for the `ent.name` string ops below).
     entries = readdirSync(root, { withFileTypes: true, encoding: "utf8" }) as Dirent[];
-  } catch {
+  } catch (err) {
+    opts.onError?.(root, err);
     return;
   }
   // readdir order is the filesystem's (sorted on APFS, hash order on ext4), so
@@ -91,8 +99,8 @@ function* walkInner(
       try {
         const st = statSync(full);
         yield { path: full, mtimeMs: Math.floor(st.mtimeMs) };
-      } catch {
-        // unreadable, skip
+      } catch (err) {
+        opts.onError?.(full, err);
       }
     }
   }
