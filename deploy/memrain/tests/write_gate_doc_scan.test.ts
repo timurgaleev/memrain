@@ -14,6 +14,8 @@ import { storageEngines } from "./helpers/storage-engines.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 import { indexDocument } from "../src/core/indexer.ts";
 import { registerSource } from "../src/core/sources.ts";
+import { addMember } from "../src/core/members.ts";
+import { setOwner } from "../src/core/brain-owner.ts";
 import { putPage } from "../src/core/pages.ts";
 import { scanDocuments } from "../src/core/write-gate-scan.ts";
 import type { Storage } from "../src/core/storage.ts";
@@ -39,6 +41,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await registerSource(e, { id: "hook", kind: "webhook", pathPrefix: "/hook" });
       await registerSource(e, { id: "me-mail", kind: "mailbox", pathPrefix: "/me-mail" });
       await e.query(`INSERT INTO connector_accounts (id, source_id, provider, principal_ref, account_label) VALUES (gen_random_uuid(), 'me-mail', 'test', 'admin:operator', 'owner@example.test')`);
+      // Only a named owner's personal source counts as the owner's mail.
+      await addMember(e, "ora", { personalSource: "me-mail" }, { actor: "ops", via: "cli" });
+      await setOwner(e, "ora");
       // Stored under the default flag mode, as before the detector changed.
       await indexDocument(s, { sourcePath: "hook://1", text: HOSTILE, sourceId: "hook" }, { embedFn, remote: true });
       await indexDocument(s, { sourcePath: "hook://2", text: BENIGN, sourceId: "hook" }, { embedFn, remote: true });
