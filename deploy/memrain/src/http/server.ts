@@ -36,7 +36,6 @@ import {
   corsPreflightResponse,
   applyCorsHeaders,
 } from "./cors.ts";
-import { handleIngestRoute } from "./ingest.ts";
 import {
   assertIngressConfig,
   evaluatePublicGuard,
@@ -59,13 +58,9 @@ import { RateLimiter, type RateLimiterOptions } from "../mcp/rate_limit.ts";
 import { resolveClientIp } from "./client-key.ts";
 import { createAdminAuth, type AdminAuth } from "./admin.ts";
 import { handleAdminApi } from "./admin-api.ts";
-import { handleConnectorCallbackPage } from "./admin-connectors.ts";
 import { serveAdminStatic } from "./admin-static.ts";
-import { handleAdminEventsRoute } from "./admin-events.ts";
 import type { AuthInfo } from "../core/auth-info.ts";
-import { extension } from "../core/extension.ts";
 import { assertNotWrapped } from "../core/startup-guard.ts";
-import { handleShareView } from "./share.ts";
 
 /** RFC 6749 §5.2-style throttle response for the rate-limited OAuth endpoints. */
 function rateLimited(): Response {
@@ -166,7 +161,7 @@ export interface ServerOptions {
   publicBearerToken?: string;
   /**
    * Shared secret required to call MCP write tools (`index`,
-   * `log_friction`, `page_*`, `link`/`unlink`, `add_*`, `jobs_*`) on the
+   * `page_*`, `link`/`unlink`, `add_tag`/`remove_tag`) on the
    * internal `/mcp` path. Defends the docker-bridge surface from a
    * compromised sibling container. Wire from `MEMRAIN_INTERNAL_TOKEN` env /
    * `<secrets_prefix>/memrain-internal-token`. When unset, internal write
@@ -206,7 +201,6 @@ export function startServer(opts: ServerOptions): ServerHandle {
     ...(opts.internalToken ? { internalToken: opts.internalToken } : {}),
   };
   assertIngressConfig(ingress);
-  extension().startupCheck(ingress, process.env);
   const mcpEnabled = opts.mcpEnabled !== false;
   const mcpHandler = mcpEnabled
     ? makeMcpHandler({
@@ -246,8 +240,6 @@ export function startServer(opts: ServerOptions): ServerHandle {
   const registerRateLimiter = opts.oauthProvider
     ? new RateLimiter({ capacity: 5, refillPerSecond: 5 / 60 })
     : null;
-  // POST /ingest webhook capture — 100 events / 10 s per IP.
-  const ingestRateLimiter = new RateLimiter({ capacity: 100, refillPerSecond: 10 });
   // Pre-auth brute-force throttle for the token-verification path below.
   // `verifyAccessToken` costs two DB SELECTs and runs only AFTER the public
   // guard REJECTED the request — `guard.allow` is false there, so the /mcp
@@ -388,7 +380,7 @@ export function startServer(opts: ServerOptions): ServerHandle {
   } else {
     console.warn(
       "[memrain] WARNING: MEMRAIN_INTERNAL_TOKEN not configured — MCP write " +
-        "tools (index, log_friction, page_*, link, add_*, jobs_*) are open " +
+        "tools (index, page_*, link, unlink, add_tag, remove_tag) are open " +
         "to any peer on the docker bridge. Configure the token via " +
         "<secrets_prefix>/memrain-internal-token (legacy: memex-internal-token) + fetch-secrets.sh.",
     );
@@ -399,9 +391,6 @@ export function startServer(opts: ServerOptions): ServerHandle {
     port: opts.port,
     fetch: async (req, server) => {
       const url = new URL(req.url);
-      const refused = await extension().admitRequest(req, url);
-      if (refused) return refused;
-
       // CORS preflight — answered BEFORE auth: preflights carry no
       // credentials by design, so the bearer guard would 401 every browser
       // client. 204 either way; grant headers only for allowlisted origins.
@@ -625,65 +614,6 @@ export function startServer(opts: ServerOptions): ServerHandle {
           return handleRevokeRoute(req, oauthProvider);
         }
       }
-      // POST /ingest — webhook capture (OAuth write scope). The guard above
-      // resolved OAuth bearers on the public path; internal callers (no
-      // Cf-Connecting-Ip) present theirs here, so both ingress classes reach
-      // the handler with a resolved identity. Everything else — scope check,
-      // byte cap, content-type allowlist, idempotent job — lives in ingest.ts.
-      if (url.pathname === "/ingest" && req.method === "POST") {
-        let ingestAuth = oauthAuth;
-        if (!ingestAuth && opts.oauthProvider) {
-          const m = /^Bearer (.+)$/.exec(req.headers.get("Authorization") ?? "");
-          if (m && m[1]) {
-            try {
-              const info = await opts.oauthProvider.verifyAccessToken(m[1]);
-              assertAudience(info.resource, resolveIssuer(url, opts.publicUrl));
-              ingestAuth = {
-                token: info.token,
-                clientId: info.clientId,
-                scopes: info.scopes,
-                ...(info.sourceId != null ? { sourceId: info.sourceId } : {}),
-                ...(info.allowedSources != null
-                  ? { allowedSources: info.allowedSources }
-                  : {}),
-                ...(info.takesHolders != null
-                  ? { takesHolders: info.takesHolders }
-                  : {}),
-                ...(info.boundSlugPrefixes != null
-                  ? { boundSlugPrefixes: info.boundSlugPrefixes }
-                  : {}),
-                budgetUsdPerDay: info.budgetUsdPerDay,
-                ...(info.spendId ? { spendId: info.spendId } : {}),
-                ...(info.principal ? { principal: info.principal } : {}),
-                ...(info.toolSurface ? { toolSurface: info.toolSurface } : {}),
-                ...(info.minTrust ? { minTrust: info.minTrust } : {}),
-                ...(info.memberId ? { memberId: info.memberId } : {}),
-                isPublic: guard.isPublic,
-              };
-            } catch (e) {
-              if (!(e instanceof InvalidTokenError)) {
-                console.error("[memrain] /ingest token verification error:", e);
-              }
-            }
-          }
-        }
-        const ip = resolveRateLimitBucket(
-          resolveClientIp(req),
-          server.requestIP(req)?.address,
-        ).key;
-        return handleIngestRoute(req, {
-          storage: opts.storage,
-          ...(ingestAuth !== undefined ? { authInfo: ingestAuth } : {}),
-          allowRequest: () => ingestRateLimiter.allow(ip),
-          clientIp: ip,
-        });
-      }
-      const extra = await extension().routes(req, url, {
-        storage: opts.storage,
-        ...(opts.publicUrl ? { publicUrl: opts.publicUrl } : {}),
-        ...(opts.oauthProvider ? { oauthProvider: opts.oauthProvider } : {}),
-      });
-      if (extra) return extra;
       if (url.pathname === "/mcp" && mcpHandler) {
         // Evaluate the internal-token gate once per request; the handler
         // enforces it only for write tools on the internal path (read
@@ -700,8 +630,6 @@ export function startServer(opts: ServerOptions): ServerHandle {
           issuer: resolveIssuer(url, opts.publicUrl),
         });
       }
-      const shared = await handleShareView(req, url, opts.storage);
-      if (shared) return shared;
       if (adminAuth && (url.pathname === "/admin" || url.pathname.startsWith("/admin/"))) {
         // A1 auth routes, then A2 data/provisioning routes (each gates on
         // requireAdmin itself). The embedded SPA (B/C) dispatches here later.
@@ -717,11 +645,6 @@ export function startServer(opts: ServerOptions): ServerHandle {
           ...(opts.publicUrl ? { publicUrl: opts.publicUrl } : {}),
         });
         if (r2) return r2;
-        const rcb = handleConnectorCallbackPage(req, url);
-        if (rcb) return rcb;
-        // SSE live-activity feed (deferred #2) — requireAdmin-gated.
-        const rsse = handleAdminEventsRoute(req, adminAuth.requireAdmin);
-        if (rsse) return rsse;
         // C: the built SPA (static dist + index.html fallback). Auth + the data
         // API above win; everything else under /admin is the front-end. GET only.
         if (req.method === "GET") {

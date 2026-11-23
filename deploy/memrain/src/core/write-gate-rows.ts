@@ -173,6 +173,9 @@ export interface ProspectiveEvent {
   drawnFrom?: string | null;
 }
 
+/** The rank of an optional tier ceiling in parameter `n`; the owner's rank when none is given. */
+const FLOOR_RANK_SQL = (n: number): string => `COALESCE(${tierRankSql(`$${n}::text`)}, 3)`;
+
 function originQuery(origin: RowOrigin): { sql: string; params: unknown[] } {
   if ("newFact" in origin) {
     const f = origin.newFact;
@@ -211,9 +214,6 @@ function originQuery(origin: RowOrigin): { sql: string; params: unknown[] } {
   // scope: upstream the document the caller just drew the row from, by its key
   return { sql: `SELECT ${rankTierSql(`LEAST(${documentRankSql("d")}, ${FLOOR_RANK_SQL(2)})`)} AS tier, COALESCE(d.source_id, 'default') AS source_id FROM documents d WHERE d.id = $1`, params: [origin.document, origin.floor ?? null] };
 }
-
-/** The rank of an optional tier ceiling in parameter `n`; the owner's rank when none is given. */
-const FLOOR_RANK_SQL = (n: number): string => `COALESCE(${tierRankSql(`$${n}::text`)}, 3)`;
 
 /** A row's effective tier and source, read the way trust-frame.ts reads it; null when the row is not found. */
 export async function effectiveRowTier(engine: Engine, origin: RowOrigin): Promise<{ tier: TrustTier; sourceId: string } | null> {

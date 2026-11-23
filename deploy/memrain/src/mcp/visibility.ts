@@ -9,15 +9,15 @@
  *   dispatch  the per-credential gates: a missing write source (fail-closed),
  *             operator-only tools, the per-op OAuth scope, the slug-bound
  *             client's deny-by-default for write tools that name no slug, a
- *             read floor (mcp/read-floor.ts) and a narrowed tool surface
- *             (mcp/surface.ts).
+ *             credential carrying a read floor (refused outright) and a
+ *             narrowed tool surface (mcp/surface.ts).
  *
  * Both layers ask this module, and `tools/list` advertises exactly the tools
  * for which it finds no refusal. Listing and calling therefore cannot drift:
  * a listed tool is never turned away for scope or permission, and a hidden
  * tool is one the caller could not have called. Refusals that depend on the
- * ARGUMENTS (a slug outside the bound prefixes, `extract_facts persist`) are
- * not tool-level and stay in dispatch.
+ * ARGUMENTS (a slug outside the bound prefixes) are not tool-level and stay
+ * in dispatch.
  */
 import {
   effectiveWriteSourceIdForIngress,
@@ -28,66 +28,22 @@ import {
 import { hasScope } from "../core/scope.ts";
 import { OPERATIONS, WRITE_SCOPED_TOOLS } from "./operations.ts";
 import { readForceSurfaceEnv, toolOnSurface } from "./surface.ts";
-import { refusedUnderFloor } from "./read-floor.ts";
 import { TOOL_DEFS, type ToolDef } from "./tool_defs.ts";
 
 const OP_BY_NAME = new Map(OPERATIONS.map((o) => [o.name, o]));
 
 /**
- * Operator-only operational tools. These expose brain-wide state that has no
- * per-source axis — the job queue (jobs_* return another tenant's job
- * payload/result/logs: vault paths, note snippets) and the advisor/stats
- * dashboards (migrations, embed coverage, whole-brain counts, internal-auth
- * config). They are refused for any authenticated tenant principal
- * (`authInfo !== undefined`), i.e. an OAuth `memrain_at_` caller. The static
- * daily bearer and the trusted-local/internal path (both `authInfo === undefined`)
- * keep full access — they are the operator. `source_health` is deliberately NOT
- * here: it is the per-source (tenant-safe) health view.
+ * Operator-only tools. They expose brain-wide state that has no per-source
+ * axis (whole-brain counts, migrations, embed coverage, lock and OAuth client
+ * health), so any authenticated principal (`authInfo !== undefined`) is
+ * refused them. The static bearer and the trusted-local path (both
+ * `authInfo === undefined`) are the operator and keep them. Per-source health
+ * stays reachable through `sources_status`.
  */
 export const OPERATOR_ONLY_TOOLS: ReadonlySet<string> = new Set([
-  "quarantine_list",
-  "extraction_review",
-  // The original value of a redacted credential (and admin panel only, see ADMIN_PANEL_ONLY_TOOLS).
-  "reveal_secret",
   "stats",
-  "advisor",
-  "jobs_submit",
-  "jobs_list",
-  "jobs_get",
-  "jobs_cancel",
-  "jobs_logs",
-  // Daemon status names the scheduler's host and every daemon's state.
-  "daemons_status",
-  // list_concepts reads synth_concepts, which has no source axis — its narratives
-  // are clustered across EVERY tenant's atoms. An OAuth tenant token is trusted
-  // (isPublic:false) so the public denylist doesn't cover it; gate it operator-only
-  // so one tenant can never read concepts derived from another tenant's notes.
-  // (Proper per-tenant concepts would need a source_id column on synth_concepts.)
-  "list_concepts",
-  // Job lifecycle mutators/reads share the jobs_* posture: another tenant's
-  // job rows carry payload/progress free text.
-  "retry_job",
-  "get_job_progress",
-  // Whole-brain operational snapshots (admin scope).
-  "get_status_snapshot",
   "run_doctor",
-  // purge_deleted_pages is NOT operator-only: it is gated at the
-  // `admin` scope (the per-op scope gate enforces it), reachable by an
-  // admin-scoped token. The static bearer + internal
-  // path are never gated here anyway.
-  // chronicle_backfill sweeps EVERY conversation-shape page in scope and spends
-  // (queued) chronicle-extract work — an operator maintenance action, not a
-  // tenant-reachable one.
-  "chronicle_backfill",
 ]);
-
-/**
- * Tools only the admin panel session reaches (http/admin-tool.ts dispatches
- * them directly). No MCP caller lists or calls them, the internal token
- * included: an agent steered by text it read must not be able to pull a kept
- * credential back out.
- */
-export const ADMIN_PANEL_ONLY_TOOLS: ReadonlySet<string> = new Set(["reveal_secret"]);
 
 /**
  * Which params of a write op name the slugs it MUTATES — the surface the
@@ -110,21 +66,14 @@ export const SLUG_PARAMS_BY_WRITE_TOOL: Readonly<Record<string, readonly string[
   page_put: ["slug"],
   page_append: ["slug"],
   page_edit: ["slug"],
-  takes_add: ["slug"],
-  takes_update: ["slug"],
-  takes_resolve: ["slug"],
   page_rename: ["from", "to"],
   page_delete: ["slug"],
   page_restore: ["slug"],
   page_revert: ["slug"],
   add_tag: ["slug"],
   remove_tag: ["slug"],
-  add_timeline_event: ["slug"],
-  put_raw_data: ["slug"],
   link: ["source_slug", "target_slug"],
   unlink: ["source_slug", "target_slug"],
-  add_fact: ["entity_slug"],
-  ontology_propose: ["entity"],
 };
 
 export type ToolRefusal =
@@ -134,7 +83,7 @@ export type ToolRefusal =
   | { kind: "operator_only" }
   | { kind: "insufficient_scope"; requiredScope: string }
   | { kind: "slug_bound" }
-  | { kind: "trust_floor"; floor: string }
+  | { kind: "credential_unsupported" }
   | { kind: "tool_surface"; surface: "starter" | "verbs"; forced?: true };
 
 /** What the transport knows about the caller of one request. */
@@ -156,7 +105,6 @@ export function ingressRefusal(
 ): ToolRefusal | null {
   if (!forbidPublic(name)) return null;
   if (ctx.isPublic) return { kind: "public_ingress" };
-  if (ADMIN_PANEL_ONLY_TOOLS.has(name)) return { kind: "operator_only" };
   // An authenticated principal is judged on scope in dispatch, not on the
   // internal token — the wall defends against an anonymous bridge sibling.
   if (ctx.internalAuthOk === false && ctx.authInfo === undefined) {
@@ -164,13 +112,6 @@ export function ingressRefusal(
   }
   return null;
 }
-
-/**
- * Write tools that refuse an authenticated caller with no write source
- * whatever MEMRAIN_TENANT_FAIL_CLOSED says: their unscoped fallback would
- * reach every source's rows.
- */
-const FAIL_CLOSED_WRITE_TOOLS: ReadonlySet<string> = new Set(["loops_update"]);
 
 /**
  * The per-credential gates dispatch applies before any handler runs, in the
@@ -184,7 +125,7 @@ export function dispatchRefusal(
 ): ToolRefusal | null {
   if (authInfo === undefined) return null;
   const writeDenied =
-    isNoSourceSentinel(effectiveWriteSourceIdForIngress(authInfo, { failClosed: failClosed || FAIL_CLOSED_WRITE_TOOLS.has(name) }));
+    isNoSourceSentinel(effectiveWriteSourceIdForIngress(authInfo, { failClosed }));
   if (writeDenied && WRITE_SCOPED_TOOLS.has(name)) return { kind: "no_write_source" };
   if (OPERATOR_ONLY_TOOLS.has(name)) return { kind: "operator_only" };
   const scope = OP_BY_NAME.get(name)?.scope;
@@ -201,7 +142,9 @@ export function dispatchRefusal(
   ) {
     return { kind: "slug_bound" };
   }
-  if (authInfo.minTrust !== undefined && refusedUnderFloor(name)) return { kind: "trust_floor", floor: authInfo.minTrust };
+  // Token verification already refuses a credential with a read floor; this
+  // keeps any that reaches dispatch from reading past it.
+  if (authInfo.minTrust !== undefined) return { kind: "credential_unsupported" };
   const surface = authInfo.toolSurface;
   if (surface !== undefined && !toolOnSurface(name, surface)) return { kind: "tool_surface", surface };
   return null;

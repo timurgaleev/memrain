@@ -15,11 +15,33 @@
  * composed page, so the brain's own fences are never touched. Idempotent.
  */
 import { wellFormForText } from "./well-form.ts";
-import { isTimelineLine } from "./timeline-body.ts";
 
 const LINE_BREAK_RE = /\r\n?|[\u2028\u2029]/g;
 const FENCE_MARKER_RE = /(<!---\s*)(memrain|memex)(\s*):(?=\s*(?:facts|takes)\b)/gi;
 const CITATION_RE = /\[(source):/gi;
+
+const DATED_BULLET_RE = /^\s{0,8}[-*]\s{1,4}(?:\*\*)?\d{4}-\d{2}-\d{2}/;
+const DATED_HEADER_RE = /^###\s{1,4}\d{4}-\d{2}-\d{2}/;
+
+/** Heading level (1-6) of a line, or 0. Counts leading '#' without a regex. */
+function headingLevel(line: string): number {
+  let n = 0;
+  while (n < line.length && n < 7 && line[n] === "#") n++;
+  if (n === 0 || n > 6) return 0;
+  const next = line[n];
+  return next === undefined || next === " " || next === "\t" ? n : 0;
+}
+
+/**
+ * True for a line a body timeline reader would take as its own: a level-1/2
+ * `Timeline` heading, a `### YYYY-MM-DD` header, or a bullet that opens with a
+ * date. No date-validity check: outside text escapes the shape, valid or not.
+ */
+function isTimelineLine(line: string): boolean {
+  const level = headingLevel(line);
+  if (level === 1 || level === 2) return line.slice(level).trim().toLowerCase() === "timeline";
+  return DATED_HEADER_RE.test(line) || DATED_BULLET_RE.test(line);
+}
 
 export function neutralizeOutsideText(text: string): string {
   const defused = wellFormForText(text)

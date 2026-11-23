@@ -15,7 +15,6 @@
 import type { Engine } from "./engine/interface.ts";
 import { bumpDocumentClock } from "./generation.ts";
 import { logIngest } from "./ingest-log.ts";
-import { clearCache } from "./search/query-cache.ts";
 import {
   INSTRUCTION_LIKE_REASON,
   WRITE_GATE_APPROVAL_KEY,
@@ -176,6 +175,5 @@ export async function decideWriteGateHold(
     });
     return result;
   });
-  if (status === "approved") await clearCache(engine);
   return { status };
 }

@@ -12,10 +12,12 @@
  * Every call is logged as agent `admin-panel` with a NULL token name, which
  * keeps it apart from every PAT and OAuth row.
  */
-import { dispatchTool } from "../mcp/dispatch.ts";
+import { dispatchTool, type ToolCallResult } from "../mcp/dispatch.ts";
+import { revealSecret } from "../core/secret-store.ts";
+import { VaultError } from "../core/vault.ts";
+import { OperationError, isOperationError } from "../core/operation-error.ts";
 import type { SearchOptions } from "../core/search/hybrid.ts";
 import { logToolCallToDb } from "../mcp/request-log-db.ts";
-import { publishToolCallEvent } from "./admin-events.ts";
 import { readBodyWithCap } from "./body_limit.ts";
 import { RateLimiter } from "../mcp/rate_limit.ts";
 import { extractErrorMessage } from "../mcp/http_transport.ts";
@@ -65,16 +67,8 @@ const ARG_RULES = new Map<string, Readonly<Record<string, ArgRule>>>([
   ["page_versions", { slug: str(512), limit: int(1, 10) }],
   ["get_links", { slug: str(512), limit: int(1, 200) }],
   ["get_tags", { slug: str(512) }],
-  ["graph_neighbors", { slug: str(512), type: str(64), direction: oneOf("outbound", "inbound", "both"), limit: int(1, 60) }],
-  ["entity_recall", { slug: str(512), query: str(200), fact_limit: int(1, 50), timeline_limit: int(1, 50) }],
-  ["entity_facts", { entity_slug: str(512), order: oneOf("confidence", "recency"), since: str(40), limit: int(1, 100) }],
-  ["entity_timeline", { slug: str(512), since: str(40), until: str(40), limit: int(1, 100) }],
-  ["fact_supersessions", { entity_slug: str(512), limit: int(1, 100) }],
-  ["recall", { id: { kind: "factId" } }],
-  ["chronicle_since", { since: str(40), kind: str(64), limit: int(1, 100) }],
-  ["chronicle_day", { date: str(40), week: bool, kind: str(64), limit: int(1, 100) }],
-  ["chronicle_on_this_day", { date: str(40), limit: int(1, 100) }],
   // The admin session is the owner: it may read a kept original (audited).
+  // Not an MCP tool: no MCP caller lists or calls it, the internal token included.
   ["reveal_secret", { slug: str(512), fingerprint: str(16) }],
   ["add_tag", { slug: str(512), tag: str(100) }],
   ["remove_tag", { slug: str(512), tag: str(100) }],
@@ -126,6 +120,21 @@ export function sanitizeAdminToolArgs(
     }
   }
   return { ok: true, args: out };
+}
+
+/** The original behind a redaction marker, for the panel owner; the store audits the read. */
+async function revealForAdmin(storage: Storage, args: Record<string, unknown>): Promise<ToolCallResult> {
+  try {
+    const out = await revealSecret(storage.engine(), {
+      slug: String(args.slug ?? ""), fingerprint: String(args.fingerprint ?? ""),
+    }, ADMIN_PANEL_AGENT);
+    return { content: [{ type: "text", text: JSON.stringify({ ok: true, ...out }) }] };
+  } catch (e) {
+    // Vault messages are fixed text: never the value, the key or the AAD.
+    const err = e instanceof VaultError ? new OperationError("storage_error", `${e.code}: ${e.message}`) : isOperationError(e) ? e : null;
+    if (err === null) throw e;
+    return { content: [{ type: "text", text: JSON.stringify(err.toEnvelope(false)) }], isError: true };
+  }
 }
 
 const defaultLimiter = new RateLimiter({ capacity: 30, refillPerSecond: 0.5 });
@@ -208,7 +217,6 @@ export async function handleAdminTool(req: Request, deps: AdminToolDeps): Promis
       force: true,
       ...(errorMessage !== undefined ? { errorMessage } : {}),
     });
-    publishToolCallEvent({ tool, agent: ADMIN_PANEL_AGENT, latencyMs, ok });
   };
 
   if (!ADMIN_TOOLS.has(name)) {
@@ -232,11 +240,13 @@ export async function handleAdminTool(req: Request, deps: AdminToolDeps): Promis
 
   let result: Awaited<ReturnType<typeof dispatchTool>>;
   try {
-    result = await dispatchTool(
-      deps.storage,
-      { name, arguments: args },
-      { adminPanel: true, signal: req.signal, ...(deps.embedQuery ? { embedQuery: deps.embedQuery } : {}) },
-    );
+    result = name === "reveal_secret"
+      ? await revealForAdmin(deps.storage, args)
+      : await dispatchTool(
+          deps.storage,
+          { name, arguments: args },
+          { adminPanel: true, signal: req.signal, ...(deps.embedQuery ? { embedQuery: deps.embedQuery } : {}) },
+        );
   } catch (e) {
     if (req.signal.aborted) {
       record(false, "client_aborted");

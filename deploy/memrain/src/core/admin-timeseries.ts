@@ -11,9 +11,11 @@
  */
 import type { Engine } from "./engine/interface.ts";
 import { brainDailyCapUsd } from "./budget.ts";
-import { MADE } from "./spend-report.ts";
 import { requestLogDbEnabled } from "../mcp/request-log-db.ts";
 import { requestLogRetentionDays } from "./request-log-retention.ts";
+
+/** Spend log rows that cost something: every outcome but a refusal. */
+const MADE = "outcome IS DISTINCT FROM 'refused'";
 
 /**
  * The operator's own admin-panel calls are not agent traffic. They are the

@@ -66,9 +66,9 @@ function connection(auth: AuthInfo | undefined, isPublic: boolean): string {
 }
 
 function fix(auth: AuthInfo | undefined): string {
-  if (auth?.principal?.kind === "pat") return `memrain member bind <member> --token ${auth.clientId}`;
-  if (auth !== undefined) return `memrain member bind <member> --client ${auth.clientId}`;
-  return "memrain auth create <name> --member <member>";
+  if (auth?.principal?.kind === "pat") return `memrain auth permissions ${auth.clientId} set-read-sources <source>`;
+  if (auth !== undefined) return `memrain auth rescope-client ${auth.clientId} --source <source>`;
+  return "memrain auth create <name> --source <source>";
 }
 
 /**
@@ -89,7 +89,7 @@ export function assertRequesterScope(
   throw new OperationError(
     "requester_scope_required",
     `This brain serves several people (${why(brain.serves)}) and ${connection(auth, isPublic)} is bound to nobody, so ${name} was refused and nothing was read.`,
-    `On the brain host, bind it to the person it serves: ${fix(auth)} (memrain member list names the members), or scope it to a source.`,
+    `On the brain host, scope it to a source: ${fix(auth)}, or bind it to the brain's owner.`,
   );
 }
 
@@ -119,8 +119,8 @@ export async function assertCredentialScoped(
     "requester_scope_required",
     `This brain serves several people (${why(serves)}), so the ${kind} ${name} was not created bound to nobody; nothing was created.`,
     kind === "token"
-      ? `Bind it to the person it serves: memrain auth create ${name} --member <member>, or scope it with --source <source>.`
-      : `Scope it to a source with --source <source>, then bind it: memrain member bind <member> --client <client_id>.`,
+      ? `Scope it with --source <source>, or bind it to the brain's owner: memrain auth create ${name} --member <owner>.`
+      : `Scope it to a source with --source <source>.`,
   );
 }
 
@@ -150,8 +150,8 @@ export async function unscopedConnections(engine: Pick<Engine, "query">): Promis
   return {
     serves,
     connections: [
-      ...tokens.rows.map((t) => ({ kind: "token" as const, name: t.name, fix: `memrain member bind <member> --token ${t.name}` })),
-      ...clients.rows.map((c) => ({ kind: "client" as const, name: c.client_id, fix: `memrain member bind <member> --client ${c.client_id}` })),
+      ...tokens.rows.map((t) => ({ kind: "token" as const, name: t.name, fix: `memrain auth permissions ${t.name} set-read-sources <source>` })),
+      ...clients.rows.map((c) => ({ kind: "client" as const, name: c.client_id, fix: `memrain auth rescope-client ${c.client_id} --source <source>` })),
     ],
   };
 }

@@ -6,7 +6,6 @@
  *                                version and the memrain operating contract
  *   - `tools/list`               the tools this caller can call (mcp/visibility.ts)
  *   - `tools/call`               { name, arguments } → tool result
- *   - `prompts/list`, `prompts/get`  explicitly opted-in skill text, scoped by tool access
  *   - `ping`                     health probe (returns {})
  *
  * Anything else returns -32601 (method not found). Malformed JSON gets
@@ -21,14 +20,12 @@ import { dispatchTool } from "./dispatch.ts";
 import { ingressRefusal, visibleToolDefs } from "./visibility.ts";
 import { logToolCall } from "./param-redaction.ts";
 import { logToolCallToDb } from "./request-log-db.ts";
-import { publishToolCallEvent } from "../http/admin-events.ts";
 import { RateLimiter } from "./rate_limit.ts";
 import { parseJsonBody } from "../http/body_limit.ts";
 import { publicSafeErrorMessage } from "../core/public_redaction.ts";
 import type { AuthInfo } from "../core/auth-info.ts";
 import { resolveClientKey } from "../http/client-key.ts";
 import { resolveServerInfo, resolveServerInstructions } from "./server-instructions.ts";
-import { getSkillPrompt, listSkillPrompts } from "../core/skillpack/prompts.ts";
 
 /**
  * The MCP revisions this server speaks, oldest first. Each one's required
@@ -257,7 +254,7 @@ export function makeMcpHandler(opts: McpHandlerOptions) {
     // up front, to every bucket the request paid, so a single POST of
     // thousands of tools/call (each a paid Bedrock embed) can't amplify past
     // either limiter's capacity.
-    const extraCost = (Array.isArray(raw) ? Math.max(raw.length - 1, 0) : 0) + extraFactWrites(raw);
+    const extraCost = Array.isArray(raw) ? Math.max(raw.length - 1, 0) : 0;
     for (let i = extraCost; i > 0; i--) {
       const ipOk = limiter.allow(clientId);
       if (!ipOk || (perTokenLimiter && tokenId && !perTokenLimiter.allow(tokenId))) {
@@ -288,18 +285,6 @@ export function makeMcpHandler(opts: McpHandlerOptions) {
   };
 }
 
-/** `add_fact` items past the first in each `tools/call` of a request. */
-function extraFactWrites(raw: unknown): number {
-  let n = 0;
-  for (const r of Array.isArray(raw) ? raw : [raw]) {
-    const req = r as { method?: unknown; params?: { name?: unknown; arguments?: { items?: unknown } } } | null;
-    if (req?.method !== "tools/call" || req.params?.name !== "add_fact") continue;
-    const items = req.params.arguments?.items;
-    if (Array.isArray(items) && items.length > 1) n += items.length - 1;
-  }
-  return n;
-}
-
 async function handleSingle(
   storage: Storage,
   req: JsonRpcRequest,
@@ -322,24 +307,15 @@ async function handleSingle(
     ...(ctx.authInfo ? { tokenName: ctx.authInfo.clientId } : {}),
     force: ctx.authInfo !== undefined,
   };
-  const promptOptions = () => {
-    if (ctx.isPublic || ctx.authInfo?.isPublic) return null;
-    const visible = new Set(visibleToolDefs(ctx, forbidPublic).map(tool => tool.name));
-    if (!visible.has("list_skills") || !visible.has("get_skill")) return null;
-    return { callable: (name: string) => visible.has(name),
-      ...(process.env.MEMRAIN_SKILLS_DIR?.trim() ? { skillsDir: process.env.MEMRAIN_SKILLS_DIR } : {}) };
-  };
-
   switch (req.method) {
     case "initialize": {
       // The contract names only tools this caller can call, judged by the
       // same predicate tools/list uses.
       const visible = new Set(visibleToolDefs(ctx, forbidPublic).map((t) => t.name));
-      const promptConfig = promptOptions();
       return rpcOk(id, {
         protocolVersion: negotiateProtocolVersion(req.params?.protocolVersion),
         serverInfo: SERVER_INFO,
-        capabilities: { tools: {}, ...(promptConfig && listSkillPrompts(promptConfig).prompts.length ? { prompts: {} } : {}) },
+        capabilities: { tools: {} },
         instructions: resolveServerInstructions(process.env, { callable: (name) => visible.has(name) }),
         // memrain's own response-shape version, distinct from the MCP protocol
         // version above: that pins the transport, this pins what memrain puts
@@ -347,26 +323,6 @@ async function handleSingle(
         // does not know instead of discovering the change in production.
         _meta: { memexResponseVersion: MEMRAIN_RESPONSE_VERSION },
       });
-    }
-    case "prompts/list": {
-      const options = promptOptions();
-      if (!options) return rpcError(id, ERR_METHOD_NOT_FOUND, "method not found");
-      const cursor = req.params?.cursor;
-      if (cursor !== undefined && (typeof cursor !== "string" || !/^[a-z0-9][\w-]{0,127}$/i.test(cursor))) {
-        return rpcError(id, -32602, "Invalid prompt cursor");
-      }
-      return rpcOk(id, listSkillPrompts(options, cursor as string | undefined));
-    }
-    case "prompts/get": {
-      const options = promptOptions();
-      if (!options) return rpcError(id, ERR_METHOD_NOT_FOUND, "method not found");
-      const args = req.params?.arguments;
-      if (args !== undefined && (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).length)) {
-        return rpcError(id, -32602, "This prompt takes no arguments");
-      }
-      const name = req.params?.name;
-      const prompt = typeof name === "string" ? getSkillPrompt(name, options) : null;
-      return prompt ? rpcOk(id, prompt) : rpcError(id, -32602, "Prompt not found");
     }
     case "tools/list":
       // Log tools/list too — a client that only ever lists tools should
@@ -464,9 +420,6 @@ async function handleSingle(
           params: params.arguments,
           ...(errMsg !== undefined ? { errorMessage: errMsg } : {}),
         });
-        // Push a redacted event to the admin SSE feed (deferred #2). No-op when
-        // no admin browser is connected; never raw params.
-        publishToolCallEvent({ tool: params.name, agent: agentName, latencyMs: Date.now() - startedAt, ok: !result.isError });
         return rpcOk(id, result);
       } catch (e) {
         // Defensive: dispatchTool already catches + sanitizes, but if it

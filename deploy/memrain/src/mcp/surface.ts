@@ -3,7 +3,7 @@
  *
  *   full     every tool its scopes allow (the default; nothing changes)
  *   starter  the daily-driver set below
- *   verbs    the seven memory verbs
+ *   verbs    the memory verbs (none in this build)
  *
  * A surface only ever narrows a grant: mcp/visibility.ts refuses a tool off
  * the credential's surface for tools/list and tools/call alike, so a hidden
@@ -17,21 +17,14 @@ export function isToolSurface(v: unknown): v is ToolSurface {
   return v === "full" || v === "starter" || v === "verbs";
 }
 
-export const VERB_TOOLS: ReadonlySet<string> = new Set([
-  "recall",
-  "add_fact",
-  "entity_recall",
-  "think",
-  "forget_fact",
-  "context_pack",
-  "context_delta",
-]);
+// No tool this build serves is one of the memory verbs, so a credential on the
+// verbs surface is shown nothing: the surface still only narrows.
+export const VERB_TOOLS: ReadonlySet<string> = new Set();
 
 export const STARTER_TOOLS: ReadonlySet<string> = new Set([
   ...VERB_TOOLS,
   "whoami",
   "search",
-  "query",
   "search_exact",
   "page_get",
   "page_list",
@@ -41,12 +34,6 @@ export const STARTER_TOOLS: ReadonlySet<string> = new Set([
   "get_links",
   "backlinks",
   "resolve_slugs",
-  "entity_facts",
-  "entity_timeline",
-  "volunteer_context",
-  "list_skills",
-  "get_skill",
-  "list_brain_skillpack",
 ]);
 
 /** True when `name` is on `surface`; every tool is on the full surface. */

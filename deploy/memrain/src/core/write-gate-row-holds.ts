@@ -14,6 +14,7 @@
  * A hold keeps the row's text, like the row would have; its receipt names
  * families and a hash only.
  */
+import { OperationError } from "./operation-error.ts";
 import { createHash } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
 import { logIngest } from "./ingest-log.ts";
@@ -283,40 +284,18 @@ function writerPath(hold: RowHold): WriterPath | null {
   return null;
 }
 
-async function publishReleased(storage: Storage, hold: RowHold, path: WriterPath): Promise<string | null> {
-  const engine = storage.engine();
-  const p = hold.payload;
-  const rowNum = typeof p["row_num"] === "number" ? p["row_num"] : null;
+async function publishReleased(_storage: Storage, _hold: RowHold, path: WriterPath): Promise<string | null> {
   // A released fence take is stored by the takes writer the next time it
   // syncs the page, which finds the content released; nothing here writes
   // synth_takes.
   if (path === "fence_take") return null;
-  if (path === "fence_fact" && rowNum !== null) {
-    const { getPage } = await import("./pages.ts");
-    const { reconcileFactsForPage } = await import("./facts-reconcile.ts");
-    const slug = p["source_markdown_slug"] as string;
-    const page = await getPage(storage, slug);
-    if (!page) return null;
-    await reconcileFactsForPage(storage, slug, page.content_hash, str(p["source_id"]) ?? undefined);
-    // scope: upstream the page and row number come from the released hold's own payload
-    const r = await engine.query<{ id: number }>(
-      `SELECT id FROM entity_facts WHERE source_markdown_slug = $1 AND row_num = $2 AND fact = $3 AND forgotten_at IS NULL
-        ORDER BY id DESC LIMIT 1`, [slug, rowNum, p["fact"]]);
-    const id = r.rows[0]?.id;
-    return id === undefined ? null : String(id);
-  }
-  const { mergeOntologyFact } = await import("./ontology-facts.ts");
-  const merged = await mergeOntologyFact(storage, {
-    entitySlug: p["entity_slug"] as string, dimension: p["dimension"] as string, value: p["value"] as string,
-    sourceId: str(p["source_id"]) ?? "default", principal: str(p["written_by_principal"]),
-    ...(typeof p["confidence"] === "number" ? { confidence: p["confidence"] } : {}),
-    ...(str(p["source_slug"]) ? { source_slug: p["source_slug"] as string } : {}),
-    ...(str(p["valid_from"]) ? { validFrom: p["valid_from"] as string } : {}),
-    ...(str(p["valid_until"]) ? { validTo: p["valid_until"] as string } : {}),
-    ...(p["visibility"] === "world" || p["visibility"] === "private" ? { visibility: p["visibility"] } : {}),
-    ...(p["dim_status"] === "active" || p["dim_status"] === "quarantined" ? { status: p["dim_status"] } : {}),
-  });
-  return merged.factId === null ? null : String(merged.factId);
+  // A held fact needs the facts writer to store it, and this build has none:
+  // the hold goes back to held, so its row is neither lost nor half-released.
+  throw new OperationError(
+    "unsupported",
+    "this held row is a fact, and this build does not store facts",
+    "Drop it with memrain write-gate drop <id>, or release it on a build that stores facts.",
+  );
 }
 
 /** The gated text of a held row, read back from its payload for the release's flag receipt. */

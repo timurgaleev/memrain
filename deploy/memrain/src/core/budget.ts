@@ -18,12 +18,16 @@ import { randomUUID } from "node:crypto";
 import { OperationError } from "./operation-error.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { noteWriteTiming } from "./write-timing.ts";
-import { beginRequestCost } from "./request-cost.ts";
 import { BedrockHalted, assertBedrockOpen, classifyBedrockError, noteBedrockFailure, noteBedrockSuccess } from "./llm/bedrock-errors.ts";
 import { keywordOnlyMode } from "./llm/gateway.ts";
 import { appendAudit, auditDir } from "./audit-week-file.ts";
 import type { Engine } from "./engine/interface.ts";
-import type { SonnetUsage } from "./llm/sonnet.ts";
+
+/** Token counts a model call reports, the unit every price here is in. */
+export interface SonnetUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
 
 /**
  * Ledger key of the brain's own held calls (cycle, jobs, CLI) when a
@@ -1445,7 +1449,6 @@ async function attemptTracked<T>(
     noteWriteTiming("ledgerMs", performance.now() - refuseStart);
   }
   const sendStart = performance.now();
-  const settleRequestCost = beginRequestCost();
   let failure: unknown;
   let outcome: SpendOutcome = "ok";
   try {
@@ -1466,7 +1469,6 @@ async function attemptTracked<T>(
     // than settling at $0.
     const keepHold = usage === undefined && failure !== undefined && mayHaveBilled(failure);
     const actualUsd = usage && priceFor(call.model) ? costUsd(call.model, chargeableUsage(usage)) : null;
-    settleRequestCost(usage ? actualUsd : failure !== undefined && !keepHold ? 0 : null);
     if (hold) settleRuns(hold.runs, hold.usd, keepHold ? hold.usd : (actualUsd ?? 0));
     if (keepHold) {
       const usd = hold?.usd ?? worstCaseUsd(call) ?? 0;

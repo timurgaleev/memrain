@@ -238,7 +238,7 @@ the entry below.
 
 **What happened.** The brain has two or more enabled members (or `access.serves` is `several`), and the credential names neither a member nor a source, so it cannot say whose reads it makes. Reads are refused; `whoami` still answers.
 
-**What to do.** On the brain host, bind the credential to the person it serves (`memrain member bind <member> --token <name>`), or scope it to a source.
+**What to do.** On the brain host, scope the credential to a source (`memrain auth permissions <name> set-read-sources <source>`, or `memrain auth rescope-client <id> --source <source>` for a client).
 
 ### result_too_large
 

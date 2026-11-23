@@ -11,7 +11,6 @@
  * EVERY route gates on `requireAdmin` itself — the public bearer guard exempts
  * `/admin*`, so there is no ambient protection here.
  */
-import { spendReport } from "../core/spend-report.ts";
 import { adminTimeseries, AGENT_CALL, NOT_PANEL_ROW, type TimeseriesDays } from "../core/admin-timeseries.ts";
 import { onboardingSteps, type OnboardingStatus } from "../core/admin-onboarding.ts";
 import { graphHubs } from "../core/links.ts";
@@ -25,7 +24,6 @@ import type { Storage } from "../core/storage.ts";
 import type { Engine } from "../core/engine/interface.ts";
 import { getSource, listSources } from "../core/sources.ts";
 import { brainHealthMetrics } from "../core/source-health.ts";
-import { getCalibrationProfile } from "../core/synthesis/reads.ts";
 import {
   clientGrantSnapshot,
   GrantConflictError,
@@ -43,20 +41,8 @@ import { isToolSurface } from "../mcp/surface.ts";
 import { isTrustTier } from "../core/trust-tier.ts";
 import { normalizeScopesInput } from "../core/scope.ts";
 import { isSameOriginPost } from "./same-origin.ts";
-import { extension } from "../core/extension.ts";
 import { handleAdminTool } from "./admin-tool.ts";
-import { defaultConnectorDeps, handleAdminConnectors } from "./admin-connectors.ts";
-import { handleAdminNotifications } from "./admin-notifications.ts";
-import { handleAdminEval } from "./admin-eval.ts";
-import { handleAdminApprovals } from "./admin-approvals.ts";
-import { handleAdminMembers } from "./admin-members.ts";
 import { handleAdminAutonomy } from "./admin-autonomy.ts";
-import { handleAdminOffice } from "./admin-office.ts";
-import { handleChatApi } from "./chat-api.ts";
-import { handleFeedbackApi } from "./feedback-api.ts";
-import { operatorOwner } from "../core/chat/chat-service.ts";
-import type { SonnetFn } from "../core/llm/sonnet.ts";
-import { controlDaemon, daemonsStatus } from "../core/daemons/status.ts";
 import { OperationError } from "../core/operation-error.ts";
 import type { RateLimiter } from "../mcp/rate_limit.ts";
 import type { SearchOptions } from "../core/search/hybrid.ts";
@@ -73,10 +59,8 @@ export interface AdminApiDeps {
   toolLimiter?: RateLimiter;
   /** Hermetic query-embedder seam for the tool route (tests only). */
   embedQuery?: SearchOptions["embedQuery"];
-  /** The live admin session's id, which a connector OAuth state is bound to. */
+  /** The live admin session's id. */
   adminSessionId?: (req: Request) => string | null;
-  /** Fake model for the chat routes (tests only). */
-  chatModel?: SonnetFn;
   /**
    * Whether the session holds a fresh passkey step-up (http/admin.ts). Unset:
    * every grant change that widens authority is refused.
@@ -316,10 +300,6 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
   }
   const engine = deps.storage.engine();
 
-  // A registered extension's admin routes, behind the same gates as ours.
-  const extra = await extension().adminRoutes(req, url, { storage: deps.storage }).catch((e: unknown) => serverError("extension", e));
-  if (extra) return extra;
-
   // POST /admin/api/tool — allowlisted MCP tools for the brain explorer.
   if (p === "/admin/api/tool") {
     return handleAdminTool(req, {
@@ -329,43 +309,8 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
     });
   }
 
-  if (p === "/admin/api/connectors" || p.startsWith("/admin/api/connectors/")) {
-    const r = await handleAdminConnectors(req, url, defaultConnectorDeps(deps.storage, deps.publicUrl, deps.adminSessionId ?? (() => null)));
-    if (r) return r;
-  }
-  if (p.startsWith("/admin/api/write-gate/") || p.startsWith("/admin/api/trust/")) {
-    const r = await handleAdminApprovals(req, url, deps.storage).catch((e: unknown) => serverError("write-gate", e));
-    if (r) return r;
-  }
-  if (p.startsWith("/admin/api/members") || p.startsWith("/admin/api/groups") || p === "/admin/api/grant-profiles") {
-    const r = await handleAdminMembers(req, url, engine).catch((e: unknown) => serverError("members", e));
-    if (r) return r;
-  }
-  if (p === "/admin/api/chat" || p.startsWith("/admin/api/chat/")) {
-    const r = await handleChatApi(req, url, {
-      storage: deps.storage,
-      ...(deps.chatModel ? { chatModel: deps.chatModel } : {}),
-      ...(deps.embedQuery ? { embedQuery: deps.embedQuery } : {}),
-    }).catch((e: unknown) => serverError("chat", e));
-    if (r) return r;
-  }
-  if (p === "/admin/api/feedback") return handleFeedbackApi(req, { storage: deps.storage, owner: operatorOwner() }).catch((e: unknown) => serverError("feedback", e));
-  if (p === "/admin/api/office") {
-    const r = await handleAdminOffice(req, url, engine).catch((e: unknown) => serverError("office", e));
-    if (r) return r;
-  }
   if (p === "/admin/api/spend/paused" || p === "/admin/api/spend/resume") {
     const r = await handleAdminAutonomy(req, url, engine).catch((e: unknown) => serverError("spend-paused", e));
-    if (r) return r;
-  }
-
-  if (p === "/admin/api/notifications" || p.startsWith("/admin/api/notifications/")) {
-    const r = await handleAdminNotifications(req, url, engine);
-    if (r) return r;
-  }
-
-  if (p.startsWith("/admin/api/eval/")) {
-    const r = await handleAdminEval(req, url, { storage: deps.storage, ...(deps.embedQuery ? { embedQuery: deps.embedQuery } : {}) });
     if (r) return r;
   }
 
@@ -1170,17 +1115,6 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
     }
   }
 
-  // GET /admin/api/calibration/profile — the latest synthesis calibration
-  // scorecard (Calibration page). Null when no profile has been computed yet.
-  if (p === "/admin/api/calibration/profile" && req.method === "GET") {
-    try {
-      const profile = await getCalibrationProfile(engine);
-      return Response.json({ profile });
-    } catch (e) {
-      return serverError("calibration-profile", e);
-    }
-  }
-
   // GET /admin/api/agents/spend — per-OAuth-client daily spend vs budget cap.
   // The mig-081 spend ledger enforces budget_usd_per_day on paid ops; this is
   // the read side so an operator can see who is near their cap.
@@ -1201,21 +1135,6 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
       return Response.json({ agents: rows.rows });
     } catch (e) {
       return serverError("agents-spend", e);
-    }
-  }
-
-  // GET /admin/api/spend/report?days=N — the ledger by model, feature and
-  // spender, with the calls the totals cannot price.
-  if (p === "/admin/api/spend/report" && req.method === "GET") {
-    const raw = url.searchParams.get("days");
-    const days = raw === null ? 7 : Number(raw);
-    if (!Number.isInteger(days) || days < 1 || days > 366) {
-      return badRequest("days must be a whole number from 1 to 366");
-    }
-    try {
-      return Response.json(await spendReport(engine, { days }));
-    } catch (e) {
-      return serverError("spend-report", e);
     }
   }
 
@@ -1275,33 +1194,6 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
       return Response.json(r.rows[0] ?? {});
     } catch (e) {
       return serverError("stats", e);
-    }
-  }
-
-  // GET /admin/api/daemons — schedules, pauses, last runs, scheduler leader.
-  if (p === "/admin/api/daemons" && req.method === "GET") {
-    try {
-      return Response.json(await daemonsStatus(engine));
-    } catch (e) {
-      return serverError("daemons", e);
-    }
-  }
-
-  // POST /admin/api/daemons/control — pause, resume, enable or disable a
-  // daemon, for every source or one (= `memrain daemons ...`). Audited.
-  if (p === "/admin/api/daemons/control" && req.method === "POST") {
-    let body: { action?: unknown; daemon?: unknown; source_id?: unknown; reason?: unknown };
-    try {
-      body = (await req.json()) as typeof body;
-    } catch {
-      return badRequest("invalid JSON body");
-    }
-    if (body === null || typeof body !== "object") return badRequest("invalid JSON body");
-    try {
-      return Response.json(await controlDaemon(engine, body, "admin"));
-    } catch (e) {
-      if (e instanceof OperationError) return badRequest(e.message);
-      return serverError("daemons-control", e);
     }
   }
 
