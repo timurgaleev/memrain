@@ -22,8 +22,7 @@ setDefaultTimeout(60000);
 
 const PKG = join(import.meta.dir, "..");
 const INDEXED = [
-  "src/core/synthesis/takes-fence.ts",
-  "src/core/facts-fence.ts",
+  "src/core/fences.ts",
   "src/core/embed-skip.ts",
   "src/core/llm/resolve-model.ts",
   "src/core/rrf.ts",
