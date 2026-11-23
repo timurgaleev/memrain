@@ -10,7 +10,6 @@
 import type { Engine } from "./engine/interface.ts";
 import { bumpDocumentClock } from "./generation.ts";
 import { applyDerivedCleanup, planDerivedCleanup, type DerivedCleanupResult } from "./derived-cleanup.ts";
-import { codePrunesKeptFromPurge } from "./code-prune.ts";
 
 /** Hours a soft-deleted / archived document survives before hard purge. */
 export const SOFT_DELETE_TTL_HOURS = 72;
@@ -188,14 +187,9 @@ export async function purgeExpiredDocuments(
   let purgedArchived = 0;
   let synthesis: DerivedCleanupResult | undefined;
   await engine.transaction(async (tx) => {
-    // A code document a prune retired whose file has come back waits for the
-    // next code sweep to revive it, instead of going with everything derived
-    // from it.
-    const kept = await codePrunesKeptFromPurge(tx, ttlHours);
     const d = await tx.query<{ id: string }>(
       `DELETE FROM documents
         WHERE deleted_at IS NOT NULL
-          AND id <> ALL($2::text[])
           -- Inclusive on purpose, and matching the archived branch below.
           -- A ttl of 0 means "purge what is already soft-deleted"; strict
           -- less-than makes a row deleted in the same clock tick as the purge
@@ -203,7 +197,7 @@ export async function purgeExpiredDocuments(
           -- time and the two timestamps can land equal.
           AND deleted_at <= NOW() - ($1 || ' hours')::interval
         RETURNING id`,
-      [String(ttlHours), kept],
+      [String(ttlHours)],
     );
     purgedDeleted = d.rows.length;
     const a = await tx.query<{ id: string }>(

@@ -40,12 +40,6 @@ import {
 // Local helpers
 // ---------------------------------------------------------------------------
 
-/**
- * The queued ingest jobs that name a token principal: the sweep keeps the
- * tokens they name. The kinds as stored in `jobs.kind` (core/jobs/kinds.ts).
- */
-const INGEST_JOB_KINDS = ["ingest_capture", "transcripts_ingest"];
-
 /** SHA-256 hex digest. Tokens and client secrets are stored hashed. */
 function hashToken(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -3300,48 +3294,6 @@ export class OAuthProvider {
     throw new InvalidTokenError("Invalid token");
   }
 
-  /**
-   * Re-read the live grant behind a principal reference, for a job queued
-   * under it. Expiry is not checked: an access token reaching its TTL while a
-   * capture waits in the queue is not a revocation. Everything else the
-   * verifier refuses is refused here too, and so is any revoked token of the
-   * session: the holder or the operator killed part of it. Every live token
-   * of a session must agree on the tenant, and the job keeps only the scopes
-   * all of them hold, so a narrowing on any of them binds it.
-   */
-  async resolvePrincipal(ref: PrincipalRef): Promise<PrincipalGrant> {
-    if (ref.kind === "pat") {
-      const rows = await this.withPreMemberFallback((cols) => this.rows(
-        `SELECT ${patSelect(cols)}, revoked_at FROM access_tokens WHERE id = $1`,
-        [ref.id],
-      ));
-      const row = rows[0];
-      if (!row) throw new InvalidTokenError("Credential revoked or no longer exists");
-      if (row.revoked_at != null) throw new InvalidTokenError("Credential revoked");
-      return this.withMembers(legacyGrantFromRow(row), [row.member_id]);
-    }
-    const match = ref.kind === "oauth_family" ? "t.family_id = $1" : "t.token_hash = $1 AND t.family_id IS NULL";
-    const rows = await this.withPreMemberFallback((cols) =>
-      this.rows(`${oauthGrantSelect(cols)} WHERE ${match} AND t.client_id = $2`, [ref.id, ref.client_id]));
-    if (rows.length === 0) throw new InvalidTokenError("Credential revoked or no longer exists");
-    if (rows.some((r) => r.revoked_at != null)) throw new InvalidTokenError("Credential revoked");
-    const grants = rows.map((r) => {
-      const { expiresAt: _expiresAt, resource: _resource, ...grant } = oauthGrantFromRow(r, null);
-      return grant;
-    });
-    const tenant = (g: PrincipalGrant) =>
-      JSON.stringify([g.sourceId ?? null, g.allowedSources ?? null, g.boundSlugPrefixes ?? null, g.spendId ?? null]);
-    const first = grants[0]!;
-    if (grants.some((g) => tenant(g) !== tenant(first))) {
-      throw new InvalidTokenError("Credential tokens disagree on their grant");
-    }
-    const scopes = first.scopes.filter((s) => grants.every((g) => hasScope(g.scopes, s)));
-    if (scopes.length === 0) throw new InvalidTokenError("Token holds no scope its client is still granted");
-    // Every token of one session shares its client and enrollment, so the
-    // first row names the same members as the rest.
-    return this.withMembers({ ...first, scopes }, [rows[0]!.grant_member_id, rows[0]!.client_member_id]);
-  }
-
   /** Run a verifier read, retrying without whichever 162/164/186 column an older schema lacks. */
   private async withPreMemberFallback<T>(read: (cols: VerifierColumns) => Promise<T>): Promise<T> {
     let cols = ALL_VERIFIER_COLUMNS;
@@ -3501,26 +3453,12 @@ export class OAuthProvider {
   // -------------------------------------------------------------------------
 
   /** Delete expired access/refresh tokens and authorization codes. Returns
-   *  the total row count swept. A queued ingest job re-reads the token rows
-   *  it names (one family-less token, or every row of a refresh family; see
-   *  resolvePrincipal), so rows still named by a pending or running ingest
-   *  job stay until that job is done: reaching the TTL is not a revocation. */
+   *  the total row count swept. */
   async sweepExpiredTokens(): Promise<number> {
     const now = Math.floor(Date.now() / 1000);
     const tokens = await this.rows(
-      `WITH held AS (
-         SELECT DISTINCT payload->'principal'->>'kind' AS kind, payload->'principal'->>'id' AS id
-           FROM jobs
-          WHERE kind = ANY($2::text[])
-            AND status IN ('pending', 'running')
-            AND payload->'principal'->>'kind' IN ('oauth_token', 'oauth_family')
-       )
-       DELETE FROM oauth_tokens
-        WHERE expires_at < $1
-          AND NOT (family_id IS NULL AND token_hash IN (SELECT id FROM held WHERE kind = 'oauth_token' AND id IS NOT NULL))
-          AND (family_id IS NULL OR family_id NOT IN (SELECT id FROM held WHERE kind = 'oauth_family' AND id IS NOT NULL))
-       RETURNING 1`,
-      [now, INGEST_JOB_KINDS],
+      `DELETE FROM oauth_tokens WHERE expires_at < $1 RETURNING 1`,
+      [now],
     );
     const codes = await this.rows(
       `DELETE FROM oauth_codes WHERE expires_at < $1 RETURNING 1`,

@@ -8,22 +8,9 @@ import { assertNotWrapped } from "../core/startup-guard.ts";
 import { randomBytes } from "node:crypto";
 import { Storage } from "../core/storage.ts";
 import { startServer } from "../http/server.ts";
-import { publishJobEvent } from "../http/admin-events.ts";
-import { noteCycleRun, noteOfficeRuntime } from "../http/admin-office.ts";
 import { isRelyingParty, resolveRelyingParty } from "../core/webauthn-config.ts";
 import { loadConfig, selfIssuedMismatch } from "../core/config.ts";
-import { startCycleLoop, type CycleHandle } from "../recipes/cycle.ts";
-import { markLinkFlagsRecorder } from "../core/link-watermark.ts";
-import { Worker } from "../core/jobs/worker.ts";
-import { Queue } from "../core/jobs/queue.ts";
-import { registerRemediationHandlers } from "../core/jobs/remediation-handlers.ts";
-import { registerChronicleHandler } from "../core/jobs/chronicle-handler.ts";
-import { registerPageMirrorHandler } from "../core/jobs/page-mirror-handler.ts";
-import { registerSubagentHandlerIfEnabled } from "../core/agent/handler.ts";
-import { registerIngestCaptureHandler } from "../http/ingest.ts";
-import { registerSource } from "../core/sources.ts";
 import { OAuthProvider } from "../core/oauth-provider.ts";
-import { sweepCodeRoots } from "../core/sweep-code.ts";
 import { installSignalHandlers } from "../core/process-cleanup.ts";
 import { legacyEnv, legacyEnvBootLine } from "../core/env-compat.ts";
 import {
@@ -31,54 +18,13 @@ import {
   resolveQuiescence,
   type Quiescence,
 } from "../core/quiescence.ts";
-import { basename } from "node:path";
-import { getFactsQueue } from "../core/facts-queue.ts";
 import { eventLoopWatchdogMs, startEventLoopWatchdog } from "../core/event-loop-watchdog.ts";
-import { REMEDIATION_JOB_KIND, SUBAGENT_JOB_KIND } from "../core/jobs/kinds.ts";
-import { longDaemonKinds } from "../core/daemons/registry.ts";
-import { envSwitches } from "../core/daemons/controls.ts";
-import { startDaemonScheduler, stopDaemonScheduler } from "../core/daemons/scheduler.ts";
-import { registerConnectorRuntimeIfEnabled } from "../core/connectors/runtime.ts";
-import { registerNotificationsDaemon } from "../core/notifications/job.ts";
-import { registerLoopsSweepDaemon } from "../core/loops/job.ts";
-
-const MAX_JOB_CONCURRENCY = 8;
-
-/**
- * Worker concurrency and lanes. MEMRAIN_JOB_CONCURRENCY (1-8, default 1) sets
- * the slots; at 2 or more the long kinds leave one slot for short jobs.
- */
-export function workerLaneOptions(env: NodeJS.ProcessEnv = process.env): { concurrency: number; longKinds: string[] } {
-  const raw = env.MEMRAIN_JOB_CONCURRENCY?.trim();
-  const n = raw !== undefined && /^\d+$/.test(raw) ? Number(raw) : 1;
-  return {
-    concurrency: n >= 1 && n <= MAX_JOB_CONCURRENCY ? n : 1,
-    longKinds: [REMEDIATION_JOB_KIND, SUBAGENT_JOB_KIND, ...longDaemonKinds()],
-  };
-}
+import { startHousekeeping, type HousekeepingHandle } from "../core/housekeeping.ts";
 
 export interface ServeOptions {
   http: boolean;
   host: string;
   port: number;
-}
-
-/**
- * Code roots come exclusively from the env var. CSV. Each root becomes
- * its own `sources` row at boot (id = `<basename>-code`).
- */
-function codePaths(): string[] {
-  const raw = process.env.MEMRAIN_CODE_PATHS;
-  if (!raw || raw.length === 0) return [];
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}
-
-function codeSourceId(path: string): string {
-  const base = basename(path).toLowerCase().replace(/[^a-z0-9]+/g, "-");
-  return `${base || "root"}-code`;
 }
 
 /**
@@ -99,13 +45,6 @@ export function shouldPrintAdminToken(opts: {
 }): boolean {
   if (opts.fromEnv) return false;
   return opts.isTty;
-}
-
-function envNum(name: string): number | undefined {
-  const v = process.env[name];
-  if (v === undefined || v === "") return undefined;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : undefined;
 }
 
 /**
@@ -140,10 +79,10 @@ export async function runServe(opts: ServeOptions): Promise<void> {
     );
   }
 
-  // Abnormal-termination net: release a held cycle lock (and any other
+  // Abnormal-termination net: release a held housekeeping lock (and any other
   // registered cleanup) on SIGHUP/SIGPIPE/uncaughtException/unhandledRejection.
   // It deliberately does NOT touch SIGINT/SIGTERM — those are owned by the
-  // graceful `shutdown()` below, which releases the lock via `cycle.stop()`
+  // graceful `shutdown()` below, which waits for a running housekeeping pass
   // before `storage.close()`. (A competing SIGTERM handler here would race that
   // drain and exit early.)
   installSignalHandlers();
@@ -326,7 +265,7 @@ export async function runServe(opts: ServeOptions): Promise<void> {
     );
   }
   const server = startServer(serverOpts);
-  const { worker, cycle } = startBackgroundWork(storage, config, quiescence);
+  const housekeeping = startBackgroundWork(storage, quiescence, serverOpts.oauthProvider);
 
   // Graceful shutdown on SIGINT / SIGTERM.
   const watchdog = startEventLoopWatchdog(watchdogMs);
@@ -336,12 +275,8 @@ export async function runServe(opts: ServeOptions): Promise<void> {
     shuttingDown = true;
     watchdog.stop();
     console.log(`[memrain] received ${signal}, shutting down`);
-    await getFactsQueue().shutdown();
-    await stopDaemonScheduler();
-    await worker.stop();
-    if (cycle) await cycle.stop();
+    if (housekeeping) await housekeeping.stop();
     await server.stop();
-    await getFactsQueue().shutdown();
     await storage.close();
     process.exit(0);
   };
@@ -352,208 +287,25 @@ export async function runServe(opts: ServeOptions): Promise<void> {
   await new Promise(() => {});
 }
 
-/** What serve's background work calls at boot; tests swap in spies. */
+/** What serve's background work calls at boot; tests swap in a spy. */
 export interface BackgroundDeps {
-  registerSource: typeof registerSource;
-  sweepCodeRoots: typeof sweepCodeRoots;
-  startCycleLoop: typeof startCycleLoop;
-  startWorker: (worker: Worker) => void;
-  workerIntervalMs: number;
+  startHousekeeping: typeof startHousekeeping;
 }
 
-const defaultBackgroundDeps: BackgroundDeps = {
-  registerSource,
-  sweepCodeRoots,
-  startCycleLoop,
-  startWorker: (worker) => worker.start(),
-  workerIntervalMs: 5000,
-};
+const defaultBackgroundDeps: BackgroundDeps = { startHousekeeping };
 
 /**
- * Start the boot code sweep, the jobs worker and the cycle loop, each only
- * when its quiescence switch allows it. Job handlers are registered either
- * way, so submits keep enqueueing while the worker is off. The worker is
- * always constructed so shutdown can stop it unconditionally.
+ * Start the hourly housekeeping (core/housekeeping.ts) unless the brain is in
+ * maintenance or MEMRAIN_CYCLE=0 turned it off. Nothing else runs in the
+ * background: no job worker, no daemons and no paid phases.
  */
 export function startBackgroundWork(
   storage: Storage,
-  config: ReturnType<typeof loadConfig>,
   quiescence: Quiescence,
+  oauthProvider?: Pick<OAuthProvider, "sweepExpiredTokens">,
   deps: BackgroundDeps = defaultBackgroundDeps,
-): { worker: Worker; cycle: CycleHandle | null } {
-  // Markdown ingest is on-demand only: there is no boot-time file watcher.
-  // Content enters the brain via the MCP `index` tool / the `memrain reindex`
-  // CLI (both go through core/sweep.ts → indexer), or via MCP `page_put`.
-  // No filesystem vault is watched at startup.
-
-  // code chunkers (tree-sitter symbols, embedded under MEMRAIN_CODE_EMBED_MAX_USD).
-  // Register one source row per MEMRAIN_CODE_PATHS entry, then run a
-  // boot sweep. Both are best-effort: registration errors are warned,
-  // sweep errors are logged but do NOT abort serve startup.
-  const codeRoots = codePaths();
-  if (!quiescence.bootCodeSweep) {
-    // Off by switch or maintenance; the boot line already says so.
-  } else if (codeRoots.length === 0) {
-    console.log(
-      "[memrain] no code roots configured (set MEMRAIN_CODE_PATHS=/path/to/repo[,...] to enable code chunkers)",
-    );
-  } else {
-    for (const root of codeRoots) {
-      const sourceId = codeSourceId(root);
-      deps.registerSource(storage.engine(), {
-        id: sourceId,
-        kind: "code",
-        pathPrefix: root.endsWith("/") ? root : root + "/",
-        syncPolicy: "local-only",
-        indexedPolicy: "hashed-only",
-        rateLimitPerMinute: 0,
-        respectQuietHours: false,
-        boostWeight: 1.2,
-        description: `Code corpus rooted at ${root} (tree-sitter symbols)`,
-      }).catch((e) =>
-        console.warn(
-          `[code] source registration failed for ${sourceId}:`,
-          e instanceof Error ? e.message : e,
-        ),
-      );
-    }
-    const codeDelayMs = envNum("MEMRAIN_CODE_SWEEP_DELAY_MS") ?? 0;
-    void (async () => {
-      try {
-        const sweepOpts: Parameters<typeof sweepCodeRoots>[1] = { paths: codeRoots };
-        if (codeDelayMs > 0) sweepOpts.perFileDelayMs = codeDelayMs;
-        const r = await deps.sweepCodeRoots(storage, sweepOpts);
-        for (const pr of r.perRoot) {
-          if (pr.missing) {
-            console.warn(
-              `[code] root '${pr.root}' does not exist on disk — bind-mount or git clone missing?`,
-            );
-          } else if (pr.files === 0) {
-            console.warn(
-              `[code] root '${pr.root}' contains 0 indexable files (.ts/.tsx/.py) — is the directory mounted and populated?`,
-            );
-          }
-        }
-        console.log(
-          `[code] boot sweep: scanned=${r.scanned} reindexed=${r.reindexed} skipped=${r.skipped} parseErrors=${r.parseErrors} errors=${r.errors.length}` +
-            (r.prune ? ` pruned=${r.prune.pruned}` : ""),
-        );
-        // The count alone is undiagnosable — print the failing files. Capped so a
-        // broken mount (every file failing) can't flood the boot log.
-        const SWEEP_ERROR_LOG_CAP = 10;
-        for (const err of r.errors.slice(0, SWEEP_ERROR_LOG_CAP)) {
-          console.warn(`[code] sweep error: ${err.path}: ${err.message}`);
-        }
-        if (r.errors.length > SWEEP_ERROR_LOG_CAP) {
-          console.warn(
-            `[code] sweep error: ... and ${r.errors.length - SWEEP_ERROR_LOG_CAP} more`,
-          );
-        }
-      } catch (e) {
-        console.warn(
-          "[code] boot sweep failed:",
-          e instanceof Error ? e.message : e,
-        );
-      }
-    })();
-  }
-
-  // Start the durable jobs worker. Single-concurrency for v1. (The legacy
-  // ingest recipes were removed — markdown enters via on-demand reindex /
-  // MCP, code via the boot sweep; jobs remain for future handlers.)
-  // A default per-job wall-clock cap is OFF unless MEMRAIN_JOB_TIMEOUT_MS is set
-  // (a blanket cap could dead-letter a legitimately-slow Bedrock phase); a job
-  // can still set its own timeoutMs at enqueue.
-  const workerOpts: ConstructorParameters<typeof Worker>[1] = {
-    intervalMs: deps.workerIntervalMs,
-    // Single-active-worker guard: a double-start / second container / restart
-    // overlap elects ONE active worker via the worker_lock row; the rest idle
-    // until the holder's heartbeat lapses (migration 042).
-    engine: storage.engine(),
-    ...workerLaneOptions(),
-    onJobEvent: e => publishJobEvent(e),
-  };
-  const jobTimeoutRaw = process.env.MEMRAIN_JOB_TIMEOUT_MS?.trim();
-  // Strict: digits only (reject "100abc" -> 100, "1e9" -> 1, negatives, blanks),
-  // matching enqueue's positive-integer validation.
-  if (jobTimeoutRaw !== undefined && /^\d+$/.test(jobTimeoutRaw)) {
-    const parsed = Number.parseInt(jobTimeoutRaw, 10);
-    if (parsed > 0) workerOpts.jobTimeoutMs = parsed;
-  }
-  // How long shutdown lets a running job finish before handing it back to the
-  // queue. Same strict digits-only parse; 0 hands back at once.
-  const drainRaw = process.env.MEMRAIN_WORKER_DRAIN_MS?.trim();
-  if (drainRaw !== undefined && /^\d+$/.test(drainRaw)) {
-    workerOpts.drainMs = Number.parseInt(drainRaw, 10);
-  }
-  // Register the `remediation` handler so `doctor --remediate` jobs actually
-  // run instead of dead-lettering with "no handler registered".
-  registerRemediationHandlers(storage);
-  // Register the `ingest_capture` handler so POST /ingest submissions land
-  // as inbox pages instead of dead-lettering.
-  registerIngestCaptureHandler(storage);
-  // Register the `chronicle_extract` handler so timeline extraction runs off
-  // the write path instead of dead-lettering with "no handler registered".
-  registerChronicleHandler(storage);
-  // Register the `page_mirror` handler: with MEMRAIN_PAGE_MIRROR_SYNC=0 the write
-  // path queues the search mirror instead of running it inline.
-  registerPageMirrorHandler(storage);
-  // Connector sync runs only with MEMRAIN_CONNECTORS_ENABLED on and a usable
-  // connector key; without the handler the scheduler queues no connector_sync.
-  // The notifications daemon is off until enabled; registering it only lets
-  // the scheduler queue it once the operator turns it on.
-  registerNotificationsDaemon(storage.engine());
-  // Same for loops_sweep: free, and off until the operator enables it.
-  registerLoopsSweepDaemon(storage.engine());
-  if (registerConnectorRuntimeIfEnabled(storage)) {
-    console.log("[memrain] connector sync enabled (connector_sync jobs; the daemon stays off until enabled)");
-  }
-  // The operator's agent loop runs only when opted in: without the handler a
-  // `subagent` submit is refused as an unknown kind.
-  if (registerSubagentHandlerIfEnabled(storage)) {
-    console.log("[memrain] agent loop enabled (subagent jobs, read-only tools)");
-  }
-  const worker = new Worker(new Queue(storage.engine()), workerOpts);
-  if (quiescence.jobsWorker) {
-    deps.startWorker(worker);
-    console.log(
-      `[memrain] jobs worker started (intervalMs=${deps.workerIntervalMs}${
-        workerOpts.jobTimeoutMs ? `, jobTimeoutMs=${workerOpts.jobTimeoutMs}` : ""
-      }${(workerOpts.concurrency ?? 1) > 1 ? `, concurrency=${workerOpts.concurrency}` : ""})`,
-    );
-    // The daemon scheduler only queues work for the worker, so it runs where
-    // the worker does, and only when opted in.
-    if (envSwitches().on) {
-      startDaemonScheduler(storage.engine());
-      console.log("[memrain] daemon scheduler started (MEMRAIN_DAEMONS=1)");
-    }
-  }
-
-  // Cycle loop. Off by default; opt in via env or memrain.yml. The
-  // `dream.*` config keys drive the cycle's embed-stale phase.
-  // Threshold for enabling stays at >=60 s to avoid
-  // accidental tight loops.
-  const cycleIntervalS = envNum("MEMRAIN_DREAM_INTERVAL_S")
-    ?? config.dream?.interval_s
-    ?? 0;
-  const cycleStaleDays = envNum("MEMRAIN_DREAM_STALE_DAYS")
-    ?? config.dream?.stale_days
-    ?? 30;
-  let cycle: CycleHandle | null = null;
-  if (quiescence.cycle && Number.isFinite(cycleIntervalS) && cycleIntervalS >= 60) {
-    console.log(
-      `[memrain] starting cycle loop: every ${cycleIntervalS}s, embed-stale at >${cycleStaleDays}d`,
-    );
-    markLinkFlagsRecorder();
-    cycle = deps.startCycleLoop(storage, {
-      intervalMs: cycleIntervalS * 1000,
-      staleDays: cycleStaleDays,
-      onRun: e => {
-        noteCycleRun(e.phase);
-        publishJobEvent({ worker: "cycle", kind: "cycle", ...e });
-      },
-    });
-  }
-  noteOfficeRuntime({ jobsWorker: quiescence.jobsWorker, cycleLoop: cycle !== null });
-  return { worker, cycle };
+): HousekeepingHandle | null {
+  if (!quiescence.cycle) return null;
+  console.log("[memrain] housekeeping every hour (purge, search mirrors, embed gaps, token sweep, spend reservations, retention)");
+  return deps.startHousekeeping(storage, oauthProvider ? { sweepTokens: () => oauthProvider.sweepExpiredTokens() } : {});
 }

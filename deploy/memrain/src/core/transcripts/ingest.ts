@@ -29,16 +29,13 @@ import {
   type EchoDictionary,
   secretDisposition,
   type SecretFinding,
-  fingerprintSecret,
   type SecretOriginal,
   trailingDanglingLabel,
   withSecretOriginals,
 } from "../secret-scan.ts";
 import { allowedSecretFingerprints } from "../secret-store.ts";
-import { loadKek, seal, unseal, type Sealed } from "../vault.ts";
 import { renderSession, sessionBaseSlug, type RenderedPart } from "./render.ts";
 import type { TranscriptSession } from "./types.ts";
-import type { TrustTier } from "../trust-tier.ts";
 
 export const TRANSCRIPT_PAGE_TYPE = "conversation";
 const WRITTEN_BY = "transcripts-ingest";
@@ -91,54 +88,6 @@ export function prepareSession(session: TranscriptSession, opts: PrepareSessionO
   });
 }
 
-/** A push's originals ride the queue sealed, never in clear; past this many the rest are not kept. */
-const MAX_QUEUED_ORIGINALS = 4096;
-
-function queuedOriginalsAad(sourceId: string, clientId: string): string {
-  return `memrain:transcript-originals:v1|${sourceId}|${clientId}`;
-}
-
-/**
- * The originals a push's preparation redacted, sealed under the connector key
- * for the queued job, so the worker that writes the pages can keep them. Null
- * when there are none or no key is configured (nothing is kept, as on any write).
- */
-export function sealQueuedOriginals(prepared: readonly PreparedSession[], sourceId: string, clientId: string): Sealed | null {
-  const all = new Map<string, SecretOriginal>();
-  let dropped = 0;
-  for (const p of prepared) {
-    for (const [fp, o] of p.originals) {
-      if (all.has(fp)) continue;
-      if (all.size < MAX_QUEUED_ORIGINALS) all.set(fp, o);
-      else dropped++;
-    }
-  }
-  if (dropped > 0) console.warn(`[transcripts_ingest] ${dropped} redacted original(s) past ${MAX_QUEUED_ORIGINALS} in one push are not kept`);
-  if (all.size === 0) return null;
-  const kek = loadKek().kek;
-  if (kek === null) return null;
-  return seal(kek, JSON.stringify([...all.values()]), queuedOriginalsAad(sourceId, clientId));
-}
-
-/** The worker's half of sealQueuedOriginals. A payload it cannot open keeps nothing; the pages are written regardless. */
-export function openQueuedOriginals(raw: unknown, sourceId: string, clientId: string): Map<string, SecretOriginal> {
-  const out = new Map<string, SecretOriginal>();
-  if (raw === undefined || raw === null) return out;
-  const kek = loadKek().kek;
-  try {
-    if (kek === null) throw new Error("no connector key");
-    const list = JSON.parse(unseal(kek, raw as Sealed, queuedOriginalsAad(sourceId, clientId))) as unknown;
-    if (!Array.isArray(list)) throw new Error("not a list");
-    for (const o of list.slice(0, MAX_QUEUED_ORIGINALS) as SecretOriginal[]) {
-      // An entry must be the value its fingerprint names; nothing else is kept.
-      if (typeof o?.kind === "string" && typeof o.value === "string" && o.fingerprint === fingerprintSecret(o.value)) out.set(o.fingerprint, o);
-    }
-  } catch {
-    console.warn("[transcripts_ingest] the queued redacted originals could not be opened; they are not kept");
-  }
-  return out;
-}
-
 export interface IngestTranscriptsOptions {
   /** Owning source for every part. Defaults to `default`. */
   sourceId?: string;
@@ -147,25 +96,11 @@ export interface IngestTranscriptsOptions {
   /** Test seam: deterministic embedder for the search mirror. */
   embedFn?: EmbedFn;
   /**
-   * Write the parts but leave them out of search for now. The cycle's
-   * mirror-pages phase indexes and embeds them later, a bounded batch per run,
-   * so a bulk backfill does not pay for every embedding up front.
+   * Write the parts but leave them out of search for now. The hourly
+   * housekeeping indexes and embeds them later, a bounded batch per run, so a
+   * bulk backfill does not pay for every embedding up front.
    */
   deferMirror?: boolean;
-  /** Mirror as a remote write (a pushed transcript), not an operator one. */
-  remote?: boolean;
-  /** Ceiling on the parts' trust tier; unset, they are written as before. */
-  trustTier?: TrustTier;
-  /** Called for every part written or rewritten (not unchanged, not deleted). */
-  onPartWritten?: (part: { slug: string; body: string; sourceId: string }) => void;
-  /**
-   * Checked before each session and each part write: once aborted (a job that
-   * lost its lease or timed out), the run throws the signal's reason instead of
-   * writing on alongside the attempt that took over.
-   */
-  signal?: AbortSignal;
-  /** Originals redacted before the sessions got here (a push), for the part writes to seal. */
-  secretOriginals?: ReadonlyMap<string, SecretOriginal>;
 }
 
 export interface IngestTranscriptsResult {
@@ -244,7 +179,6 @@ async function writeSession(
   let sessionChanged = false;
   try {
     for (const part of prepared.parts) {
-      opts.signal?.throwIfAborted();
       const put = await putPage(storage, {
         slug: part.slug,
         type: TRANSCRIPT_PAGE_TYPE,
@@ -256,7 +190,6 @@ async function writeSession(
         source_id: sourceId,
         outsideText: true,
         secretOriginals: prepared.originals,
-        ...(opts.trustTier ? { trust_tier: opts.trustTier } : {}),
       });
       if (put.held) throw new OperationError("conflict", `Import held: ${put.held}`);
       const body = put.outside_body!;
@@ -267,7 +200,6 @@ async function writeSession(
       sessionChanged = true;
       result.parts_written++;
       touched.push(part.slug);
-      opts.onPartWritten?.({ slug: part.slug, body, sourceId });
       if (opts.deferMirror) {
         result.mirror_deferred++;
         continue;
@@ -281,13 +213,12 @@ async function writeSession(
           content_hash: put.content_hash,
           source_id: sourceId,
         },
-        { remote: opts.remote === true, timingLabel: "transcripts_ingest", ...(opts.embedFn ? { embedFn: opts.embedFn } : {}) },
+        { remote: false, timingLabel: "transcripts_ingest", ...(opts.embedFn ? { embedFn: opts.embedFn } : {}) },
       );
       if (!ok) result.mirror_failures++;
     }
 
     for (const slug of await staleParts(storage, prepared.base, sourceId, prepared.parts.length)) {
-      opts.signal?.throwIfAborted();
       const del = await deletePage(storage, slug, WRITTEN_BY, sourceId);
       if (del.already_deleted) continue;
       await removePageFromSearch(storage, slug, sourceId);
@@ -341,13 +272,9 @@ export async function ingestSessions(
   const allow = await allowedSecretFingerprints(engine, sourceId);
 
   for (const session of sessions) {
-    opts.signal?.throwIfAborted();
     let prepared: PreparedSession;
     try {
       prepared = prepareSession(session, { allow });
-      for (const [fingerprint, original] of opts.secretOriginals ?? []) {
-        if (!prepared.originals.has(fingerprint)) prepared.originals.set(fingerprint, original);
-      }
     } catch (e) {
       if (!(e instanceof SecretRejectedError)) throw e;
       await auditRejectionOnce(storage, e, sessionBaseSlug(session), sourceId);
