@@ -17,6 +17,7 @@ import { forgetEmbeddingVectorType } from "./embedding-column.ts";
 import type { Config } from "./config.ts";
 import { applyRuntimeEnvOverlay } from "./runtime-config.ts";
 import { setSpendLedgerEngine } from "./budget.ts";
+import { assertNotWrapped } from "./startup-guard.ts";
 
 export interface StorageStats {
   documents: number;
@@ -30,6 +31,8 @@ export class Storage {
   private _schemaAhead = false;
 
   constructor(engineOrConfig: Engine | Config | { dbPath: string }) {
+    // Before an engine is made: a PGLite engine opens its directory on construction.
+    assertNotWrapped();
     if (isEngine(engineOrConfig)) {
       this._engine = engineOrConfig;
       this._config = null;
@@ -64,6 +67,7 @@ export class Storage {
   }
 
   async init(): Promise<MigrationResult> {
+    assertNotWrapped();
     // Behind a transaction pooler migrations go over the direct URL; without
     // one this throws pooler_migration_refused before any SQL is sent.
     const direct = directEngineFor(this._engine);

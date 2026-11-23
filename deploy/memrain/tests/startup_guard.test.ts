@@ -10,10 +10,27 @@ import { assertNotWrapped } from "../src/core/startup-guard.ts";
 import { extension, registerExtension } from "../src/core/extension.ts";
 import { runServe } from "../src/commands/serve.ts";
 import { isEnvOnlyKey, isNeverStoredKey } from "../src/core/runtime-config.ts";
+import { startServer } from "../src/http/server.ts";
+import { Storage } from "../src/core/storage.ts";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 setDefaultTimeout(60_000);
 
 const WRAPPED = [{ MEMRAIN_TENANT_ID: "acme" }, { MEMRAIN_CONTROL_URL: "postgres://control.invalid/x" }];
+
+async function underEnv(env: Readonly<Record<string, string | undefined>>, fn: () => Promise<void>): Promise<void> {
+  const prior = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, env);
+  try {
+    await fn();
+  } finally {
+    for (const [k, v] of Object.entries(prior)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
 
 describe("startup guard", () => {
   // Value: protects=a wrapped deployment's env never boots this build with its gates open;
@@ -42,6 +59,41 @@ describe("startup guard", () => {
     } finally {
       if (prior === undefined) delete process.env.MEMRAIN_TENANT_ID;
       else process.env.MEMRAIN_TENANT_ID = prior;
+    }
+  });
+
+  // Value: protects=an embedder that starts the HTTP server directly is refused too;
+  // fails_when=startServer drops the guard; why_new=it is exported and bypasses serve; seam=none
+  it("startServer refuses under either wrapped-only variable", async () => {
+    for (const env of WRAPPED) {
+      await underEnv(env, async () => {
+        expect(() => startServer({ host: "127.0.0.1", port: 0 } as never)).toThrow(/refusing to start/);
+      });
+    }
+  });
+
+  // Value: protects=no caller opens a brain's storage under a wrapped environment, PGLite
+  // included; fails_when=Storage.init drops the guard; why_new=same; seam=none
+  it("Storage refuses under either wrapped-only variable, before touching the database", async () => {
+    for (const env of WRAPPED) {
+      const dir = mkdtempSync(join(tmpdir(), "memrain-guard-"));
+      try {
+        await underEnv(env, async () => {
+          expect(() => new Storage({ dbPath: join(dir, "db") })).toThrow(/refusing to start/);
+        });
+        expect(readdirSync(dir)).toEqual([]);
+        // A storage made before the variable appeared still refuses to initialise.
+        const storage = new Storage({ dbPath: join(dir, "db") });
+        try {
+          await underEnv(env, async () => {
+            await expect(storage.init()).rejects.toThrow(/refusing to start/);
+          });
+        } finally {
+          await storage.close();
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 

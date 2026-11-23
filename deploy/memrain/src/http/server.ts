@@ -64,6 +64,7 @@ import { serveAdminStatic } from "./admin-static.ts";
 import { handleAdminEventsRoute } from "./admin-events.ts";
 import type { AuthInfo } from "../core/auth-info.ts";
 import { extension } from "../core/extension.ts";
+import { assertNotWrapped } from "../core/startup-guard.ts";
 import { handleShareView } from "./share.ts";
 
 /** RFC 6749 §5.2-style throttle response for the rate-limited OAuth endpoints. */
@@ -199,6 +200,7 @@ export interface ServerHandle {
 }
 
 export function startServer(opts: ServerOptions): ServerHandle {
+  assertNotWrapped();
   const ingress = {
     ...(opts.publicBearerToken ? { publicBearerToken: opts.publicBearerToken } : {}),
     ...(opts.internalToken ? { internalToken: opts.internalToken } : {}),
