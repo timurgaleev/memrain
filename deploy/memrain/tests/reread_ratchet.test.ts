@@ -2,10 +2,9 @@
  * A maintenance phase that reads a document's stored `source_path` off disk
  * must go through `readGuardedFile` (core/sources.ts): a remote inline `index`
  * labels its row with any path, and a bare read copies the daemon's file into
- * that caller's document. This ratchet keeps new bare reads out of the cycle and
- * the job handlers, and keeps `indexFile` / `indexCodeFile` judging the stored
- * row before they read, so a new caller of either is safe without a check of its
- * own.
+ * that caller's document. This ratchet keeps new bare reads out of the hourly
+ * housekeeping, and keeps `indexFile` judging the stored row before it reads,
+ * so a new caller is safe without a check of its own.
  */
 import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -15,11 +14,12 @@ const SRC = join(import.meta.dir, "..", "src");
 
 const BARE_READ = /\b(?:readFileSync|readFile|createReadStream|openSync)\s*\(|\bBun\.file\s*\(/g;
 
-// Directories whose file reads start from a database row.
-const GUARDED_DIRS = ["core/cycle", "core/jobs"];
+// Modules whose file reads start from a database row.
+const GUARDED = ["core/housekeeping.ts"];
 
 
 function tsFiles(dir: string): string[] {
+  if (!statSync(dir).isDirectory()) return [dir];
   return readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);
     if (statSync(path).isDirectory()) return tsFiles(path);
@@ -40,13 +40,13 @@ function hits(file: string, pattern: RegExp): string[] {
 }
 
 describe("re-read guard ratchet", () => {
-  it("no cycle phase or job handler reads a file except through readGuardedFile", () => {
-    const found = GUARDED_DIRS.flatMap((d) => tsFiles(join(SRC, d))).flatMap((f) => hits(f, BARE_READ));
+  it("housekeeping reads no file except through readGuardedFile", () => {
+    const found = GUARDED.flatMap((d) => tsFiles(join(SRC, d))).flatMap((f) => hits(f, BARE_READ));
     expect(found).toEqual([]);
   });
 
-  it("indexFile / indexCodeFile judge the stored row before they read the file", () => {
-    for (const [file, fn] of [["core/indexer.ts", "indexFile"], ["core/indexer-code.ts", "indexCodeFile"]] as const) {
+  it("indexFile judges the stored row before it reads the file", () => {
+    for (const [file, fn] of [["core/indexer.ts", "indexFile"]] as const) {
       const code = stripComments(readFileSync(join(SRC, file), "utf8"));
       const start = code.indexOf(`export async function ${fn}(`);
       expect(start).toBeGreaterThan(-1);

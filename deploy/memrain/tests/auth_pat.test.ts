@@ -221,7 +221,7 @@ describe("personal access tokens (access_tokens fallback)", () => {
         jsonrpc: "2.0",
         id: 2,
         method: "tools/call",
-        params: { name: "extract_facts", arguments: { text: "Ada founded Acme in 2020." } },
+        params: { name: "search", arguments: { q: "who founded Acme" } },
       }),
     });
     expect(r.status).toBe(200);

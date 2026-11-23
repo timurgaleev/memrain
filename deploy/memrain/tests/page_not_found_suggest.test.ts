@@ -121,7 +121,7 @@ describe("page not found suggestions", () => {
     expect(env.suggestion).toBeUndefined();
   });
 
-  it("covers write-path misses: append, timeline, tag", async () => {
+  it("covers write-path misses: append, tag", async () => {
     const a = envelope(await dispatchTool(
       storage,
       { name: "page_append", arguments: { slug: "me/notes/weekly-review", content: "x" } },
@@ -129,14 +129,6 @@ describe("page not found suggestions", () => {
     ));
     expect(a.error).toBe("not_found");
     expect(a.suggestion).toMatch(/^Did you mean `notes\/weekly-review`.*page_put/);
-
-    const t = envelope(await dispatchTool(
-      storage,
-      { name: "add_timeline_event", arguments: { slug: "me/notes/weekly-review", occurred_at: "2026-09-16", event: "x" } },
-      { authInfo: auth("me") },
-    ));
-    expect(t.error).toBe("not_found");
-    expect(t.suggestion).toContain("`notes/weekly-review`");
 
     const g = envelope(await dispatchTool(
       storage,

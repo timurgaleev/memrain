@@ -56,14 +56,12 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     expect((await call("page_versions", { slug: "notes/foreign", include_body: true })).versions).toEqual([]);
   });
 
-  it("withholds recalled page content without leaking foreign pages", async () => {
-    const r = await call("entity_recall", { slug: "notes/held-one" });
-    expect(r.page.notice).toBe("page_quarantined");
-    expect(r.page.quarantined.reason).toBe("junk_pattern");
-    expect(r.page.markdown_body).toBeUndefined();
-    expect(r.page.compiled_truth).toBeUndefined();
-    expect(r.identity).toBeUndefined();
-    expect((await call("entity_recall", { slug: "notes/foreign" })).page).toBeNull();
+
+  it("withholds a held page's body and truth from a remote page_get", async () => {
+    const r = JSON.stringify(await call("page_get", { slug: "notes/held-one" }));
+    expect(r).toContain("page_quarantined");
+    expect(r).not.toContain("Checking your browser");
+    expect(r).not.toContain("held truth");
   });
 
   it("does not borrow another source's verdict for an ambiguous mirror path", async () => {
@@ -82,8 +80,8 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     const versions = (await call("page_versions", { slug: page.slug, include_body: true }, false)).versions;
     expect(versions[0].body_snapshot).toContain(junk);
     expect(versions[0].quarantined.reason).toBe("junk_pattern");
-    const recall = await call("entity_recall", { slug: page.slug }, false);
-    expect(recall.page.markdown_body).toContain(junk);
-    expect(recall.page.quarantined.reason).toBe("junk_pattern");
+    const got = await call("page_get", { slug: page.slug }, false);
+    expect(got.page.markdown_body).toContain(junk);
+    expect(JSON.stringify(got)).toContain("junk_pattern");
   });
 });

@@ -28,14 +28,13 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { addFact } from "../src/core/facts.ts";
 import { dispatchTool, OPERATOR_ONLY_TOOLS, type ToolCallResult } from "../src/mcp/dispatch.ts";
 import { OPERATIONS, WRITE_SCOPED_TOOLS } from "../src/mcp/operations.ts";
 import type { AuthInfo } from "../src/core/auth-info.ts";
 import { createHash } from "node:crypto";
 import { OAuthProvider } from "../src/core/oauth-provider.ts";
 import { deterministicEmbed } from "./det-embed.ts";
-import { A, auth, B, ENTITY_SLUG, KEYWORD, seedTenantContract } from "./helpers/tenant_seed.ts";
+import { A, auth, B, seedTenantContract } from "./helpers/tenant_seed.ts";
 import { MATRIX, type MatrixRow, TENANT_A_TOKENS, TENANT_B_TOKENS } from "./fixtures/tenant_isolation_matrix.ts";
 
 setDefaultTimeout(60000);
@@ -92,33 +91,9 @@ function leakedToken(
 
 async function seedMatrixExtras(): Promise<void> {
   for (const [who, tag] of [[A, "AAA"], [B, "BBB"]] as const) {
-    const a = auth(who);
     const slug = who === A ? "team-a/alice" : "team-b/alice";
-    await call("put_raw_data", { slug, source: "matrix", data: { note: `${tag}_RAW_note` } }, a);
-    await call("log_ingest", { source_type: "matrix", source_ref: `${tag}_INGEST_ref`, summary: `${tag}_INGEST_summary` }, a);
-    await call("ontology_propose", { entity: ENTITY_SLUG, dimension: "role", value: `${tag}_ONTO_first`, visibility: "world" }, a);
-    await call("ontology_propose", { entity: ENTITY_SLUG, dimension: "role", value: `${tag}_ONTO_second`, visibility: "world" }, a);
-    await call("add_tag", { slug, tag: `${tag}_TAG_label` }, a);
-    await call("add_timeline_event", { slug, occurred_at: `${recentDate}T12:00:00Z`, event: `${tag}_EVENT_recent` }, a);
-    // A retired fact with a replacement pointer is what the supersession audit lists.
-    const kept = await call("add_fact", { entity_slug: slug, fact: `${tag}_FACT_current`, visibility: "world" }, a);
-    const old = await call("add_fact", { entity_slug: slug, fact: `${tag}_FACT_retired`, visibility: "world" }, a);
-    const id = (r: ToolCallResult) => Number(JSON.parse(r.content[0]!.text).id);
-    await storage.engine().query(
-      `UPDATE entity_facts SET forgotten_at = NOW(), superseded_by = $2 WHERE id = $1`,
-      [id(old), id(kept)],
-    );
-    // Token callers read world facts only; give each tenant one on the shared entity.
-    await addFact(storage, { entity_slug: ENTITY_SLUG, fact: `${tag}_FACT_world`, source_id: who, visibility: "world" });
-    await addFact(storage, { entity_slug: ENTITY_SLUG, fact: `${KEYWORD} ${tag}_QUERY_FACT`, source_id: who, visibility: "world" });
-    // An open loop on each tenant's page, as the loops sweep would leave it.
-    await storage.engine().query(
-      `INSERT INTO open_loops (source_id, dedup_key, loop_type, detector, kind, page_slug, summary, opened_at, last_activity_at)
-       VALUES ($1, 'matrix', 'unanswered_inbound', 'deterministic', 'mail', $2, $3, NOW(), NOW())`,
-      [who, slug, `Reply owed: "${tag}_LOOP_subject"`],
-    );
+    await call("add_tag", { slug, tag: `${tag}_TAG_label` }, auth(who));
   }
-  await call("chronicle_backfill", {});
 }
 
 beforeAll(async () => {
@@ -192,12 +167,7 @@ describe("isolated operations never cross the source boundary", () => {
       const ownArgs = ownArgsFor(row);
       const sees = async (rowArgs: Record<string, unknown>, tokens: readonly string[], authInfo?: AuthInfo) =>
         leakedToken(await call(row.name, rowArgs, authInfo), rowArgs, tokens) !== undefined;
-      if (row.name === "code_blast" || row.name === "code_flow") {
-        const operator = await call(row.name, args);
-        const data = JSON.parse(operator.content[0]!.text);
-        expect(data.result).toBe("ambiguous");
-        expect(data.candidates.map((c: { def_chunk_id: string }) => c.def_chunk_id).sort()).toEqual(["ch-a-pay", "ch-b-pay"]);
-      } else if (!(await sees(args, TENANT_B_TOKENS))) {
+      if (!(await sees(args, TENANT_B_TOKENS))) {
         throw new Error(`VACUOUS: the operator sees no tenant-B data through ${row.name}; fix the seed or the row`);
       }
       if (!(await sees(ownArgs, row.own ? [row.own] : TENANT_A_TOKENS, auth(A))) || !(await sees(args, TENANT_B_TOKENS, auth(B)))) {
@@ -242,21 +212,4 @@ describe("operator-only operations refuse token callers", () => {
       }
     });
   }
-});
-
-// think is write-scoped, so the fail-closed gate refuses a grantless caller
-// before callThink runs; the in-handler no-grant short-circuit is the backstop.
-describe("write-scoped reads refuse a grantless caller", () => {
-  it("think: a grantless caller gets no synthesis and no tenant token", async () => {
-    const args = { question: `what about ${KEYWORD}?` };
-    const operator = JSON.parse((await call("think", args)).content[0]!.text);
-    expect(operator.reason).toContain("default-OFF");
-
-    process.env["MEMRAIN_TENANT_FAIL_CLOSED"] = "1";
-    const res = await call("think", args, emptyGrant);
-    expect(leakedToken(res, args, [...TENANT_B_TOKENS, ...TENANT_A_TOKENS])).toBeUndefined();
-    const out = JSON.parse(res.content[0]!.text);
-    expect(out.error).toBe("permission_denied");
-    expect(out.synthesis).toBeUndefined();
-  });
 });

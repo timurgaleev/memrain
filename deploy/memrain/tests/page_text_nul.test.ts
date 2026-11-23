@@ -10,7 +10,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { appendPage, getPage, putPage } from "../src/core/pages.ts";
-import { addTimelineEvent, getEntityTimeline } from "../src/core/timeline.ts";
 
 const NUL = "\u0000";
 const AWS = ["AK", "IA", "Q3EXAMPLE7WXYZ12"].join("");
@@ -72,16 +71,3 @@ describe("a page write with U+0000 in its text", () => {
   });
 });
 
-describe("a timeline event with U+0000 in its text", () => {
-  it("stores event and detail with U+0000 removed", async () => {
-    await putPage(storage, { slug: "people/alice", type: "person" });
-    await addTimelineEvent(storage, {
-      slug: "people/alice",
-      occurred_at: "2026-01-03T00:00:00Z",
-      event: `Served canap${NUL}es`,
-      detail: `Both canap${NUL}es trays`,
-    });
-    const rows = await getEntityTimeline(storage, "people/alice");
-    expect(rows.map((r) => [r.event, r.detail])).toEqual([["Served canapes", "Both canapes trays"]]);
-  });
-});

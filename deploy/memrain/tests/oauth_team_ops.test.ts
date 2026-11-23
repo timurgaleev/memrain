@@ -14,7 +14,6 @@ import { registerSource } from "../src/core/sources.ts";
 import { runWithSpendClient, setSpendLedgerEngine, trackedInvoke } from "../src/core/budget.ts";
 import { createAdminAuth } from "../src/http/admin.ts";
 import { handleAdminApi } from "../src/http/admin-api.ts";
-import { checkOauthClientHygiene } from "../src/core/doctor-tenancy.ts";
 import { runAuth } from "../src/commands/auth.ts";
 
 const HAIKU = "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
@@ -467,57 +466,3 @@ describe("admin API: enrollments and member grants", () => {
   });
 });
 
-describe("oauth-client-hygiene", () => {
-  it("is ok with no clients, and for a used confidential read/write connector", async () => {
-    expect((await checkOauthClientHygiene(storage.raw())).detail).toContain("no OAuth clients");
-    const { client } = await connector("client");
-    await storage.raw().query(
-      `INSERT INTO mcp_request_log (token_name, operation, latency_ms, status) VALUES ($1, 'search', 5, 'success')`,
-      [client.client_id],
-    );
-    const c = await checkOauthClientHygiene(storage.raw());
-    expect(c.status).toBe("ok");
-  });
-
-  it("warns on idle, public client-mode, non-https redirect and wide-scoped connectors", async () => {
-    const e = storage.raw();
-    await e.query(
-      `INSERT INTO oauth_clients (client_id, client_name, client_secret_hash, grant_types, scope, redirect_uris, tenant_mode)
-       VALUES ('c-idle', 'cloud-app', 'h', '{client_credentials}', 'read', '{}', 'client'),
-              ('c-pub', 'pub', NULL, '{authorization_code}', 'read', '{https://ok.example/cb}', 'client'),
-              ('c-pub-enr', 'pub-enr', NULL, '{authorization_code}', 'read', '{https://ok.example/cb}', 'enrollment'),
-              ('c-http', 'plain', 'h', '{authorization_code}', 'read', '{http://plain.example/cb}', 'client'),
-              ('c-wide', 'wide', 'h', '{authorization_code,refresh_token}', 'read write admin', '{https://ok.example/cb}', 'client'),
-              ('c-gone', 'gone', NULL, '{authorization_code}', 'admin', '{http://gone.example/cb}', 'client')`,
-    );
-    await e.query(`UPDATE oauth_clients SET deleted_at = now() WHERE client_id = 'c-gone'`);
-    for (const id of ["c-pub", "c-pub-enr", "c-http", "c-wide"]) {
-      await e.query(
-        `INSERT INTO mcp_request_log (token_name, operation, latency_ms, status) VALUES ($1, 'search', 5, 'success')`,
-        [id],
-      );
-    }
-    // A call older than 90 days does not count.
-    await e.query(
-      `INSERT INTO mcp_request_log (token_name, operation, latency_ms, status, created_at)
-       VALUES ('c-idle', 'search', 5, 'success', now() - interval '91 days')`,
-    );
-    const c = await checkOauthClientHygiene(e);
-    expect(c.status).toBe("warn");
-    expect(c.ok).toBe(true);
-    expect(c.detail).toContain("1 client(s) with no call in 90 days: cloud-app (c-idle)");
-    expect(c.detail).toContain("1 public client(s) in client tenant mode: pub (c-pub)");
-    expect(c.detail).toContain("plain (c-http): http://plain.example/cb");
-    expect(c.detail).toContain("wide (c-wide) [read write admin]");
-    expect(c.detail).not.toContain("gone");
-    expect(c.detail).not.toContain("pub-enr");
-  });
-
-  it("reports a probe that throws as a warn", async () => {
-    await storage.raw().query("ALTER TABLE mcp_request_log RENAME TO mcp_request_log_hidden");
-    await storage.raw().query(`INSERT INTO oauth_clients (client_id, client_name) VALUES ('c1', 'one')`);
-    const c = await checkOauthClientHygiene(storage.raw());
-    expect(c.status).toBe("warn");
-    expect(c.detail).toStartWith("could not check oauth-client-hygiene: ");
-  });
-});

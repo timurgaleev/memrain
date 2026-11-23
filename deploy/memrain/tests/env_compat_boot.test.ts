@@ -55,7 +55,6 @@ const KNOBS = {
   BOOT_CODE_SWEEP: "0",
   JOBS_WORKER: "0",
   CYCLE: "0",
-  EXPANSION_MODEL: "probe-expansion-model",
 };
 
 describe("env shim at process start", () => {
@@ -77,7 +76,6 @@ describe("env shim at process start", () => {
       publicWrite: true,
       tenantFailClosed: true,
       quiescence: { maintenance: false, bootCodeSweep: false, jobsWorker: false, cycle: false, invalid: [] },
-      expansionModel: KNOBS.EXPANSION_MODEL,
     });
   });
 

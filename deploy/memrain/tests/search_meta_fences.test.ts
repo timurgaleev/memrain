@@ -73,7 +73,7 @@ afterAll(async () => {
 });
 
 async function run(
-  name: "search" | "query",
+  name: "search",
   q: string,
   opts: { isPublic?: boolean; authInfo?: AuthInfo },
   extra: Record<string, unknown> = {},
@@ -106,7 +106,7 @@ describe("search meta does not reveal fenced matches", () => {
     expect(page.meta.degraded).not.toContain("budget_truncated");
   });
 
-  for (const tool of ["search", "query"] as const) {
+  for (const tool of ["search"] as const) {
     it(`tenant ${tool}: a diary-only term in its own source and an absent term get the same meta`, async () => {
       const diary = await run(tool, DIARY_TERM, { authInfo: tenant });
       const absent = await run(tool, ABSENT_TERM, { authInfo: tenant });

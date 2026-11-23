@@ -6,8 +6,15 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { addFact } from "../src/core/facts.ts";
 import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
+
+/** A fact row as an earlier build's writer stored it; plain SQL, since this build writes none. */
+async function addFact(storage: Storage, f: { entity_slug: string; fact: string; source_chunk_id?: string; written_by?: string; attributed_to?: string }): Promise<void> {
+  await storage.engine().query(
+    `INSERT INTO entity_facts (entity_slug, fact, source_chunk_id, written_by, attributed_to) VALUES ($1, $2, $3, $4, $5)`,
+    [f.entity_slug, f.fact, f.source_chunk_id ?? null, f.written_by ?? null, f.attributed_to ?? null],
+  );
+}
 
 let tmp: string;
 let storage: Storage;

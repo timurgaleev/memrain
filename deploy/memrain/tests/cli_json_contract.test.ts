@@ -1,6 +1,5 @@
 /**
- * `--json` contract over the real entrypoint: for each of the sixteen most-used
- * commands, `JSON.parse(stdout)` yields exactly one object — on success, on a
+ * `--json` contract over the real entrypoint: for each guarded command, `JSON.parse(stdout)` yields exactly one object — on success, on a
  * usage error and on a refused flag — while human-readable output stays on
  * stderr. A script or an agent can therefore branch on stdout alone.
  *
@@ -38,29 +37,17 @@ function parseOne(r: Run): Record<string, unknown> {
 const SUCCESS_CASES: { argv: string[]; key: string; engineFree?: boolean }[] = [
   { argv: ["status", "--json"], key: "stats" },
   { argv: ["doctor", "--json"], key: "checks" },
-  { argv: ["search", "hello", "--json"], key: "hits" },
-  { argv: ["call", "page_put", "--args", JSON.stringify({ slug: "notes/json-contract", markdown_body: "# Contract\n\nhello" }), "--json"], key: "slug" },
-  { argv: ["call", "page_get", "--args", JSON.stringify({ slug: "notes/json-contract" }), "--json"], key: "page" },
-  { argv: ["call", "page_list", "--json"], key: "pages" },
-  { argv: ["pages", "--json"], key: "pages" },
-  { argv: ["eval", "chronicle", "--json"], key: "tasks", engineFree: true },
-  { argv: ["daemons", "status", "--json"], key: "daemons" },
-  { argv: ["connectors", "status", "--json"], key: "connectors" },
-  { argv: ["models", "--json"], key: "models", engineFree: true },
   { argv: ["sources", "list", "--json"], key: "rows" },
   { argv: ["secrets", "audit", "--json"], key: "hits_total" },
   { argv: ["export", "--dir", "@EXPORT@", "--json"], key: "pages" },
-  { argv: ["spend", "--json"], key: "total_usd" },
   { argv: ["engine", "status", "--json"], key: "engine" },
   { argv: ["version", "--json"], key: "version", engineFree: true },
-  { argv: ["waiting", "sweep", "--json"], key: "swept" },
 ];
 
 describe("the guarded command set", () => {
-  it("is the sixteen commands the contract below covers", () => {
+  it("is the commands the contract below covers", () => {
     const covered = new Set(SUCCESS_CASES.map((c) => c.argv[0]!));
     expect([...JSON_GUARDED_COMMANDS].sort()).toEqual([...covered].sort());
-    expect(JSON_GUARDED_COMMANDS.size).toBe(16);
   });
 });
 
@@ -152,14 +139,8 @@ for (const engine of engines) {
       }, 60_000);
     }
 
-    it("a tool error stays one object and keeps its non-zero exit", () => {
-      const r = cli(["call", "page_get", "--args", JSON.stringify({ slug: "notes/missing" }), "--json"]);
-      expect(r.code).toBe(1);
-      expect(parseOne(r).error).toBe("not_found");
-    }, 60_000);
-
     it("a usage error becomes an error object, not empty stdout", () => {
-      const r = cli(["search", "--json"]);
+      const r = cli(["sources", "bogus", "--json"]);
       expect(r.code).not.toBe(0);
       const doc = parseOne(r);
       expect(doc.ok).toBe(false);
@@ -173,12 +154,6 @@ for (const engine of engines) {
       const doc = parseOne(r);
       expect(doc.ok).toBe(false);
       expect((doc.error as { message: string }).message).toContain("--bogus");
-    }, 60_000);
-
-    it("eval compare with no results answers in JSON rather than prose", () => {
-      const r = cli(["eval", "compare", "--input", join(dir, "absent.jsonl"), "--json"]);
-      expect(r.code).toBe(0);
-      expect(parseOne(r)).toMatchObject({ ok: true, grouped: {} });
     }, 60_000);
   });
 }

@@ -2,9 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { getPage, pageVersions, putPage, renamePage } from "../src/core/pages.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { addFact } from "../src/core/facts.ts";
 import { addTag, getTags } from "../src/core/tags.ts";
-import { putRawData, getRawData } from "../src/core/raw-data.ts";
 import { dispatchTool, type DispatchOptions } from "../src/mcp/dispatch.ts";
 import { isPublicMcpToolForbidden } from "../src/http/public_guard.ts";
 
@@ -23,29 +21,6 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     return { ...JSON.parse(result.content[0]!.text), isError: result.isError };
   };
 
-  it("carries data and history, redirects old reads and removes only the owned mirrors", async () => {
-    const e = db.storage.engine();
-    await addFact(db.storage, { entity_slug: "notes/old", fact: "Preserved fact", source_id: "rename-own" });
-    await addTag(db.storage, "notes/old", "keep");
-    await putRawData(db.storage, "notes/old", "manual", { keep: true });
-    await e.query("INSERT INTO timeline_events (slug, occurred_at, event, source_id) VALUES ('notes/old', NOW(), 'Preserved event', 'rename-own')");
-    await e.query(`INSERT INTO documents (id, source_path, source_id) VALUES
-      ('rename-body', 'page://rename-own/notes/old', 'rename-own'),
-      ('rename-truth', 'page-truth://rename-own/notes/old', 'rename-own'),
-      ('rename-foreign', 'page://notes/old', 'rename-other')`);
-    const result = await rename();
-    expect(result).toMatchObject({ ok: true, renamed: true });
-    expect(result.isError).toBeFalsy();
-    const page = await getPage(db.storage, "notes/old", ["rename-own"]);
-    expect(page).toMatchObject({ slug: "notes/new", markdown_body: "Keep all content" });
-    expect((await pageVersions(db.storage, "notes/new"))[1]?.body_snapshot).toBe("Keep all content");
-    expect((await e.query<{ written_by_principal: string }>("SELECT written_by_principal FROM page_versions WHERE slug = 'notes/new' ORDER BY version_n DESC LIMIT 1")).rows[0]?.written_by_principal).toBe("client:rename-client");
-    expect((await e.query("SELECT entity_slug, fact FROM entity_facts")).rows).toEqual([{ entity_slug: "notes/new", fact: "Preserved fact" }]);
-    expect((await e.query("SELECT slug, event FROM timeline_events")).rows).toEqual([{ slug: "notes/new", event: "Preserved event" }]);
-    expect(await getTags(db.storage, "notes/new")).toContain("keep");
-    expect((await getRawData(db.storage, "notes/new"))[0]?.data).toEqual({ keep: true });
-    expect((await e.query("SELECT id FROM documents")).rows).toEqual([{ id: "rename-foreign" }]);
-  });
 
   it("preserves distinct manual and derived inbound edges when moving their target", async () => {
     await putPage(db.storage, { slug: "notes/ref", markdown_body: "Ref", source_id: "rename-own" });

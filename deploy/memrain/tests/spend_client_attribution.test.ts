@@ -16,7 +16,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { OAuthProvider } from "../src/core/oauth-provider.ts";
-import { FactsQueue } from "../src/core/facts-queue.ts";
 import { indexDocument } from "../src/core/indexer.ts";
 import { OperationError } from "../src/core/operation-error.ts";
 import {
@@ -166,29 +165,6 @@ describe("auth set-budget", () => {
   });
 });
 
-describe("deferred work keeps its own client", () => {
-  // A queued job runs from ANOTHER job's `finally`, so an unbound job inherits
-  // whoever's continuation pumped it. Same sessionId on purpose: the queue caps
-  // in-flight per session at 1, which is exactly what makes the second job run
-  // inside the first one's continuation.
-  it("bills a queued extraction to the client that enqueued it", async () => {
-    await reset();
-    const q = new FactsQueue({ perSessionInflightCap: 1 });
-    const seen: string[] = [];
-    const record = (label: string) => async () => {
-      await new Promise((r) => setTimeout(r, 1));
-      seen.push(`${label}:${currentSpendClient()}`);
-    };
-    await runWithSpendClient("alpha", async () => {
-      q.enqueue(record("job-alpha"), "one-session");
-    });
-    await runWithSpendClient("beta", async () => {
-      q.enqueue(record("job-beta"), "one-session");
-    });
-    await new Promise((r) => setTimeout(r, 60));
-    expect(seen).toEqual(["job-alpha:alpha", "job-beta:beta"]);
-  });
-});
 
 describe("an exhausted client is refused, not merely logged", () => {
   // withClientSpend wraps three ops, so before this a capped client could burn

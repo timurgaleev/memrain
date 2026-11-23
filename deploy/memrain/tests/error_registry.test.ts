@@ -61,7 +61,7 @@ it("registers every structured error code and keeps static recovery tool names c
 });
 
 it("detects a typo in a recovery tool and a subclass code", () => {
-  const found = inspect('class X extends OperationError { constructor() { super("typo_code", "m", "Use page_forgett or call entity_facts."); } }');
+  const found = inspect('class X extends OperationError { constructor() { super("typo_code", "m", "Use page_forgett or call page_get."); } }');
   expect(found.codes).toEqual(["typo_code"]);
   expect(found.tools.filter(t => !tools.has(t))).toEqual(["page_forgett"]);
 });

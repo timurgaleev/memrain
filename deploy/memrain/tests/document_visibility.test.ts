@@ -1,6 +1,6 @@
 /**
  * Document soft-delete / archive / quarantine visibility filter (migration 040
- * + core/visibility.ts + destructive-guard.ts + cycle/purge.ts).
+ * + core/visibility.ts + destructive-guard.ts).
  *
  * A hidden document must never appear in search; a restore brings it back; the
  * purge phase hard-deletes once past the TTL. All offline (keyword arm needs no
@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { writeDocumentTransaction } from "../src/core/indexer-tx.ts";
 import { keywordSearch } from "../src/core/search/keyword.ts";
-import { hybridSearch } from "../src/core/search/index.ts";
+import { hybridSearch } from "../src/core/search/hybrid.ts";
 import {
   assessDestructiveImpact,
   softDeleteDocuments,
@@ -22,7 +22,6 @@ import {
   restoreSource,
   purgeExpiredDocuments,
 } from "../src/core/destructive-guard.ts";
-import { purgePhase } from "../src/core/cycle/purge.ts";
 import { deterministicEmbed, deterministicEmbedQuery } from "./det-embed.ts";
 
 let tmp: string;
@@ -113,29 +112,15 @@ describe("destructive-guard impact + purge", () => {
       .query<{ n: number }>("SELECT COUNT(*)::int AS n FROM documents WHERE id = 'doc_purgeme'");
     expect(r.rows[0]!.n).toBe(0);
   });
-
-  it("purge phase runs clean on a corpus with nothing expired", async () => {
-    const res = await purgePhase(storage.engine(), { ttlHours: 99999 });
-    expect(res.purged_documents_deleted).toBe(0);
-    expect(res.purged_pages).toBe(0);
-  });
 });
 
-describe("cache cannot resurrect a hidden document", () => {
-  it("a soft-delete invalidates a cached hit (no resurrection via hydrate)", async () => {
+describe("hybrid search never returns a hidden document", () => {
+  it("a soft-delete drops a document from both arms of hybrid search", async () => {
     await seedDoc("doc_cacheme", "foxtrotcacheme");
-    const opts = {
-      k: 5 as const,
-      intent: "topic" as const,
-      noExpansion: true,
-      embedQuery: deterministicEmbedQuery,
-    };
-    // First search populates the query cache with doc_cacheme as a hit.
+    const opts = { k: 5, embedQuery: deterministicEmbedQuery };
     const first = await hybridSearch(storage, "foxtrotcacheme", opts);
     expect(first.some((h) => h.documentId === "doc_cacheme")).toBe(true);
 
-    // Soft-delete it (bumps per-doc generation → Layer-2 cache invalidates;
-    // hydrate also filters as a backstop).
     await softDeleteDocuments(storage.engine(), { documentId: "doc_cacheme" });
 
     const second = await hybridSearch(storage, "foxtrotcacheme", opts);

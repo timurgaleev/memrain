@@ -23,7 +23,7 @@ describe("retrieval diagnostics and budget candidates", () => {
     return JSON.parse(result.content[0]!.text);
   };
 
-  for (const name of ["search", "query"]) {
+  for (const name of ["search"]) {
     it(`${name} distinguishes a healthy miss, degraded retrieval and an empty grant`, async () => {
       const missing = await call(name, { q: "garden empty healthy", since: "2999-01-01" });
       expect(missing.hits).toEqual([]);
@@ -46,18 +46,4 @@ describe("retrieval diagnostics and budget candidates", () => {
     });
   }
 
-  it("a budget without k can return more than twenty hits; explicit k and default width stay unchanged", async () => {
-    const clock = spyOn(Date, "now").mockReturnValue(Date.now());
-    try {
-      const ordinary = await call("query", {});
-      const budgeted = await call("query", { token_budget: 10000 });
-      const explicit = await call("query", { token_budget: 10000, k: 3 });
-      expect(ordinary.hits).toHaveLength(20);
-      expect(budgeted.hits.length).toBeGreaterThan(20);
-      expect(explicit.hits).toHaveLength(3);
-      expect(budgeted.hits.reduce((sum: number, hit: { content: string; title: string }) => sum + estTokens(hit.content) + estTokens(hit.title), 0)).toBeLessThanOrEqual(10000);
-      expect(budgeted.hits.slice(0, 20)).toEqual(ordinary.hits);
-      expect(budgeted.hint).toBeUndefined();
-    } finally { clock.mockRestore(); }
-  });
 });

@@ -17,15 +17,11 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { dispatchTool, type ToolCallResult } from "../src/mcp/dispatch.ts";
 import { putPage } from "../src/core/pages.ts";
-import { addFact } from "../src/core/facts.ts";
-import { addTimelineEvent } from "../src/core/timeline.ts";
+import { seedFact, seedTimelineEvent } from "./helpers/seed-rows.ts";
 import { addLink } from "../src/core/links.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { indexPageIntoSearch } from "../src/core/page-index.ts";
 import { hybridSearch } from "../src/core/search/hybrid.ts";
-import { applyGraphSignals, type GraphSignalScorable } from "../src/core/search/graph-signals.ts";
-import { queryCacheKey, putCachedQuery } from "../src/core/search/query-cache.ts";
-import { currentDocumentClock } from "../src/core/generation.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 import type { AuthInfo } from "../src/core/auth-info.ts";
 
@@ -81,13 +77,13 @@ beforeAll(async () => {
   // visibility:"world" — a scoped tenant reader is floored to world-visible
   // facts (mig-085); the tenant isolation here is enforced by source_id, so the
   // facts must clear the world floor to be readable at all.
-  await addFact(storage, { entity_slug: ENTITY, fact: A_SECRET, source_id: "a", visibility: "world" });
-  await addFact(storage, { entity_slug: ENTITY, fact: B_SECRET, source_id: "b", visibility: "world" });
+  await seedFact(storage, { entity_slug: ENTITY, fact: A_SECRET, source_id: "a", visibility: "world" });
+  await seedFact(storage, { entity_slug: ENTITY, fact: B_SECRET, source_id: "b", visibility: "world" });
   // Timeline events go on each tenant's OWN page (ownership guard: a scoped caller
   // may only append to a page its own source owns — a tenant cannot annotate the
   // shared/default ENTITY, which would be another tenant's page).
-  await addTimelineEvent(storage, { slug: A_SLUG, occurred_at: "2026-01-01T00:00:00Z", event: A_SECRET, source_id: "a" });
-  await addTimelineEvent(storage, { slug: B_SLUG, occurred_at: "2026-01-02T00:00:00Z", event: B_SECRET, source_id: "b" });
+  await seedTimelineEvent(storage, { slug: A_SLUG, occurred_at: "2026-01-01T00:00:00Z", event: A_SECRET, source_id: "a" });
+  await seedTimelineEvent(storage, { slug: B_SLUG, occurred_at: "2026-01-02T00:00:00Z", event: B_SECRET, source_id: "b" });
   await addLink(storage, { source_slug: A_SLUG, target_slug: ENTITY, type: "mentions", source_id: "a" });
   await addLink(storage, { source_slug: B_SLUG, target_slug: ENTITY, type: "mentions", source_id: "b" });
 
@@ -140,15 +136,6 @@ describe("tenant isolation via dispatch authInfo", () => {
     expect(b).not.toContain(A_CHUNK_SECRET);
   });
 
-  it("relational_recall: B does not surface A-only slugs", async () => {
-    // Walks every edge touching the entity (intro archetype). A's mentions edge
-    // (A_SLUG→entity) is source 'a', so a B-scoped traversal must not reach it.
-    const b = JSON.stringify(
-      await call("relational_recall", { query: `who introduced me to ${ENTITY}?` }, auth("b")),
-    );
-    expect(b).not.toContain(A_SLUG);
-  });
-
   it("derived-write stamping: A's page_put stamps wikilink edges as source 'a' (not 'default')", async () => {
     // page_put through dispatch derives a wikilink edge from the body. With an
     // authInfo write source, the derived edge must inherit 'a' — never the
@@ -174,15 +161,6 @@ describe("tenant isolation via dispatch authInfo", () => {
     expect(unscoped).toContain(A_LINK_TARGET);
   });
 
-  it("entity_recall: B cannot read A's page body via the entity page fetch", async () => {
-    // entity_recall fetches the entity's page alongside facts/timeline. The page
-    // fetch must be source-scoped too, else a federated caller leaks the body.
-    const b = JSON.stringify(await call("entity_recall", { slug: A_SLUG }, auth("b")));
-    expect(b).not.toContain(A_SECRET);
-    const a = JSON.stringify(await call("entity_recall", { slug: A_SLUG }, auth("a")));
-    expect(a).toContain(A_SECRET);
-  });
-
   it("back-compat: an unscoped caller sees both tenants", async () => {
     const all = JSON.stringify(await call("page_list", {}));
     expect(all).toContain(A_SLUG);
@@ -205,72 +183,5 @@ describe("read-surface scoping (BATCH 3)", () => {
     );
     expect(unscoped).toContain(QA_TOKEN);
     expect(unscoped).toContain(QB_TOKEN);
-  });
-
-  it("hydrateByIds (cache arm): a stale cross-source cache row is re-filtered on hydrate", async () => {
-    const engine = storage.engine();
-    // Grab B's mirrored chunk (source 'b').
-    const bChunk = await engine.query<{ id: string; document_id: string }>(
-      `SELECT c.id, c.document_id FROM chunks c
-         JOIN documents d ON d.id = c.document_id
-        WHERE d.source_id = 'b' AND c.content LIKE '%' || $1 || '%' LIMIT 1`,
-      [QB_TOKEN],
-    );
-    expect(bChunk.rows.length).toBe(1);
-    const { id: bChunkId, document_id: bDocId } = bChunk.rows[0]!;
-
-    // Poison the 'a'-scoped cache key with B's chunk id, as a re-scope could
-    // strand. A scoped hydrate must still filter it out (leak-lock).
-    const qLeak = "cacheprobe leak phrase alpha";
-    const clockA = await currentDocumentClock(engine);
-    const keyA = queryCacheKey(qLeak, 10, ["a"], false);
-    await putCachedQuery(engine, keyA, qLeak, 10, "topic", [bChunkId], clockA, [bDocId]);
-    const leaked = JSON.stringify(
-      await hybridSearch(storage, qLeak, { k: 10, sourceIds: ["a"], rerank: false, embedQuery: embedFn }),
-    );
-    expect(leaked).not.toContain(QB_TOKEN);
-
-    // Behaviour-neutral control: the SAME poisoned id under an UNSCOPED key
-    // still hydrates (whole-brain), proving the guard only trims out-of-scope.
-    const qNeutral = "cacheprobe neutral phrase beta";
-    const clockU = await currentDocumentClock(engine);
-    const keyU = queryCacheKey(qNeutral, 10, undefined, false);
-    await putCachedQuery(engine, keyU, qNeutral, 10, "topic", [bChunkId], clockU, [bDocId]);
-    const served = JSON.stringify(
-      await hybridSearch(storage, qNeutral, { k: 10, rerank: false, embedQuery: embedFn }),
-    );
-    expect(served).toContain(QB_TOKEN);
-  });
-
-  it("graph-signals adjacency: a scoped caller never inherits another source's hub boost", async () => {
-    const engine = storage.engine();
-    // Hub with two inbound links, both stamped source 'b'. Endpoints are live
-    // pages so defaultAdjacency's page joins hold.
-    const HUB = "gs/hub";
-    const L1 = "gs/b1";
-    const L2 = "gs/b2";
-    await putPage(storage, { slug: HUB, type: "note", title: "Hub", markdown_body: "hub", source_id: "b" });
-    await putPage(storage, { slug: L1, type: "note", title: "L1", markdown_body: "l1", source_id: "b" });
-    await putPage(storage, { slug: L2, type: "note", title: "L2", markdown_body: "l2", source_id: "b" });
-    await addLink(storage, { source_slug: L1, target_slug: HUB, type: "mentions", source_id: "b" });
-    await addLink(storage, { source_slug: L2, target_slug: HUB, type: "mentions", source_id: "b" });
-
-    const mkResults = (): GraphSignalScorable[] =>
-      [HUB, L1, L2].map((slug) => ({ score: 1, payload: { sourcePath: `page://${slug}` } }));
-
-    // 'a'-scoped: the 'b' links are invisible → hub gets no adjacency boost.
-    const aScoped = mkResults();
-    await applyGraphSignals(aScoped, engine, { enabled: true, sourceIds: ["a"] });
-    expect(aScoped[0]!.score).toBe(1);
-
-    // 'b'-scoped: two in-source inbound links → hub boosted above its peers.
-    const bScoped = mkResults();
-    await applyGraphSignals(bScoped, engine, { enabled: true, sourceIds: ["b"] });
-    expect(bScoped[0]!.score).toBeGreaterThan(1);
-
-    // Behaviour-neutral: an unscoped caller sees the same hub boost as today.
-    const unscoped = mkResults();
-    await applyGraphSignals(unscoped, engine, { enabled: true });
-    expect(unscoped[0]!.score).toBeGreaterThan(1);
   });
 });

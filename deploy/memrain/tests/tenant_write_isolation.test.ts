@@ -16,7 +16,7 @@
  * dispatch end-to-end. Single shared Storage (beforeAll), per-test unique slugs
  * so tests never share mutable state. The global `pages.slug` PK still blocks
  * two same-slug ROWS, so pages use distinct per-tenant slugs (the by-slug
- * cross-tenant call is the attack); tags/links/facts prove the scope filter on
+ * cross-tenant call is the attack); tags/links prove the scope filter on
  * a row that DOES exist under the other source.
  */
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
@@ -33,8 +33,6 @@ import {
 } from "../src/core/pages.ts";
 import { addLink, removeLink } from "../src/core/links.ts";
 import { addTag, getTags, removeTag } from "../src/core/tags.ts";
-import { addFact } from "../src/core/facts.ts";
-import { recallFact, forgetFact } from "../src/core/facts-recall.ts";
 import { purgeDeletedPages } from "../src/core/pages-purge.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { indexDocument } from "../src/core/indexer.ts";
@@ -203,27 +201,6 @@ describe("removeTag write scope", () => {
     await addTag(storage, slug, "btag2", B);
     await removeTag(storage, slug, "btag2");
     expect(await getTags(storage, slug, [B])).not.toContain("btag2");
-  });
-});
-
-describe("forgetFact write scope", () => {
-  const ENTITY = "companies/acme-facts";
-  it("a forget scoped to A cannot tombstone B's fact, nor prove its existence", async () => {
-    await putPage(storage, { slug: ENTITY, type: "company", markdown_body: "acme" });
-    const idB = (await addFact(storage, { entity_slug: ENTITY, fact: "b-guard fact", source_id: B })).id!;
-    const r = await forgetFact(storage, idB, {}, [A]);
-    expect(r.found).toBe(false); // scoped probe → not yours
-    expect(r.forgotten).toBe(false);
-    expect(await recallFact(storage, idB)).not.toBeNull(); // B's fact survives
-  });
-
-  it("a forget scoped to B tombstones B's own fact; unscoped works too", async () => {
-    const idA = (await addFact(storage, { entity_slug: ENTITY, fact: "a-own fact", source_id: A })).id!;
-    const idB = (await addFact(storage, { entity_slug: ENTITY, fact: "b-own fact", source_id: B })).id!;
-    expect(await forgetFact(storage, idB, {}, [B])).toEqual({ id: idB, found: true, forgotten: true, withdrawn_duplicates: 0 });
-    expect(await recallFact(storage, idB)).toBeNull();
-    // Behavior-neutral: an unscoped forget still tombstones the fact.
-    expect((await forgetFact(storage, idA)).forgotten).toBe(true);
   });
 });
 

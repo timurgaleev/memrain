@@ -29,7 +29,6 @@ const section = (n: number, extra = "") =>
 const docText = (s2extra = "") => [section(1), section(2, s2extra), section(3)].join("\n\n");
 
 const embedFn = async (text: string) => deterministicEmbed(text);
-const contextualLlmFn = async () => ({ text: "situates the chunk", modelId: "fake" });
 
 beforeEach(async () => {
   tmp = mkdtempSync(join(tmpdir(), "memrain-write-timing-"));
@@ -49,7 +48,7 @@ function timingLines(spy: { mock: { calls: unknown[][] } }): string[] {
 
 describe("index timing line", () => {
   it("splits a labelled write into reused and paid chunks", async () => {
-    const opts = { embedFn, contextualLlmFn };
+    const opts = { embedFn };
     await indexDocument(storage, { sourcePath: "/notes/t.md", text: docText() }, opts);
 
     const log = spyOn(console, "error").mockImplementation(() => {});
@@ -66,10 +65,9 @@ describe("index timing line", () => {
       expect(line).toContain("status=ok");
       expect(line).toContain('path="/notes/t.md"');
       // One section changed: two chunks reuse their stored vectors, one pays for
-      // the contextual call and the embed.
+      // the embed.
       expect(line).toContain("chunks=3");
       expect(line).toContain("reused=2");
-      expect(line).toContain("llm_ok=1");
       expect(line).toContain("embeds=1");
       expect(line).toMatch(/ms_total=\d+ ms_bedrock=\d+ ms_slot=\d+ ms_queue=\d+ ms_ledger=\d+ ms_tx=\d+/);
     } finally {

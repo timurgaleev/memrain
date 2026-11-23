@@ -22,7 +22,6 @@ import {
   trackedInvoke,
   worstCaseUsd,
 } from "../src/core/budget.ts";
-import { expandQuery } from "../src/core/search/expansion.ts";
 import { bedrockClientConfig, withDeadline } from "../src/core/llm/gateway.ts";
 
 const HAIKU = "eu.anthropic.claude-haiku-4-5-20251001-v1:0";
@@ -364,13 +363,3 @@ describe("the worst case", () => {
   });
 });
 
-describe("the search fallbacks", () => {
-  it("query expansion hands a budget refusal to the caller", async () => {
-    const send = mock(async () => ({ output: { message: { content: [{ text: "a\nb" }] } } }));
-    const client = { send } as unknown as BedrockRuntimeClient;
-    await expect(
-      runWithSpendClient({ clientId: "broke", capUsd: 0 }, () => expandQuery("where is the deploy script", { client })),
-    ).rejects.toMatchObject({ code: "budget_exhausted" });
-    expect(send).not.toHaveBeenCalled();
-  });
-});

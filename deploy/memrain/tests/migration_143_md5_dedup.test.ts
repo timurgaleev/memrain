@@ -14,9 +14,7 @@ import { Storage } from "../src/core/storage.ts";
 import { PGliteEngine } from "../src/core/engine/pglite.ts";
 import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
-import { addFact } from "../src/core/facts.ts";
 import { putPage } from "../src/core/pages.ts";
-import { addTimelineEvent } from "../src/core/timeline.ts";
 import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
 import { migrationsThrough } from "./helpers/migration-120.ts";
 
@@ -70,8 +68,6 @@ const ENGINES: Array<{ name: string; open: () => Promise<Opened> }> = [
 
 // Incompressible, so the index cannot fit the text by compressing it.
 const longAscii = (bytes = 3000) => randomBytes(bytes).toString("base64");
-const longCyr = () =>
-  Array.from({ length: 3000 }, () => String.fromCharCode(0x430 + Math.floor(Math.random() * 32))).join("");
 
 const MD5_INDEXES = ["entity_facts_dedup_speaker_md5_idx", "timeline_events_manual_dedup_md5_idx"];
 const OLD_INDEXES = ["entity_facts_dedup_speaker_idx", "timeline_events_manual_dedup_idx"];
@@ -96,40 +92,9 @@ for (const { name, open } of ENGINES) {
       return r.rows.map((x) => x.indexname);
     }
 
-    it("stores a 4000-char manual event and dedups the repeat", async () => {
-      const event = longAscii();
-      const input = { slug: "notes/x", occurred_at: "2026-01-01", event };
-      const a = await addTimelineEvent(db.storage, input);
-      const b = await addTimelineEvent(db.storage, input);
-      expect(a.inserted).toBe(true);
-      expect(b.inserted).toBe(false);
-    });
 
-    it("stores a 3000-char Cyrillic event", async () => {
-      const event = longCyr();
-      const a = await addTimelineEvent(db.storage, { slug: "notes/x", occurred_at: "2026-01-01", event });
-      expect(a.inserted).toBe(true);
-      const r = await db.storage.engine().query<{ event: string }>(
-        `SELECT event FROM timeline_events WHERE id = $1`,
-        [a.id],
-      );
-      expect(r.rows[0]?.event).toBe(event);
-    });
 
-    it("two distinct 5000-char events both insert", async () => {
-      const a = await addTimelineEvent(db.storage, { slug: "notes/x", occurred_at: "2026-01-01", event: longAscii(3750) });
-      const b = await addTimelineEvent(db.storage, { slug: "notes/x", occurred_at: "2026-01-01", event: longAscii(3750) });
-      expect(a.inserted).toBe(true);
-      expect(b.inserted).toBe(true);
-    });
 
-    it("stores a 4000-char chunk fact and dedups the repeat", async () => {
-      const input = { entity_slug: "people/a", fact: longAscii(), source_chunk_id: "c1" };
-      const a = await addFact(db.storage, input);
-      const b = await addFact(db.storage, input);
-      expect(a.inserted).toBe(true);
-      expect(b.inserted).toBe(false);
-    });
 
     it("reverts and re-applies; the down changes nothing while a long row exists", async () => {
       const e = db.storage.engine();

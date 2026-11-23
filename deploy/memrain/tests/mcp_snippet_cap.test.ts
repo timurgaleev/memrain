@@ -85,7 +85,7 @@ describe("snippet cap helpers", () => {
 });
 
 describe("search and query results", () => {
-  for (const tool of ["search", "query"]) {
+  for (const tool of ["search"]) {
     it(`${tool}: unset returns full content`, async () => {
       const { hits } = await call(tool, { q: "zephyrquartz" });
       const hit = hits.find((h: { sourcePath: string }) => h.sourcePath === `page://${SLUG}`);

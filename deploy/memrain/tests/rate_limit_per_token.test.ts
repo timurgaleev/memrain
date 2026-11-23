@@ -39,34 +39,8 @@ describe("per-token rate limiter", () => {
     expect(anon.status).toBe(200);
   });
 
-  test("an add_fact with items is charged one write per item", async () => {
-    const perToken = new RateLimiter({ capacity: 5, refillPerSecond: 0 });
-    const handler = makeMcpHandler({
-      storage: { engine: () => ({ query: async () => ({ rows: [] }) }) } as never,
-      internalRateLimiter: new RateLimiter({ capacity: 100, refillPerSecond: 0 }),
-      perTokenRateLimiter: perToken,
-      clientKey: () => "ip",
-    });
-    const call = (items: unknown[]) =>
-      new Request("http://x/mcp", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: 1, method: "tools/call",
-          params: { name: "add_fact", arguments: { items } },
-        }),
-      });
-    const ctx = { isPublic: false, authInfo: { clientId: "tok1" } as never };
-    const items = (n: number) => Array.from({ length: n }, (_, i) => ({ entity_slug: "people/a", fact: `f${i}` }));
 
-    // Five items fit a five-write bucket; a sixth write does not.
-    expect((await handler(call(items(5)), ctx)).status).not.toBe(429);
-    const over = await handler(call(items(1)), ctx);
-    expect(over.status).toBe(429);
-    expect(over.headers.get("Retry-After")).not.toBeNull();
-  });
-
-  test("a JSON-RPC batch charges the per-token bucket once per element, add_fact items included", async () => {
+  test("a JSON-RPC batch charges the per-token bucket once per element", async () => {
     const perToken = new RateLimiter({ capacity: 6, refillPerSecond: 0 });
     let ip = 0;
     const handler = makeMcpHandler({
@@ -76,10 +50,6 @@ describe("per-token rate limiter", () => {
       clientKey: () => `ip-${ip++}`,
     });
     const ping = (id: number) => ({ jsonrpc: "2.0", id, method: "ping" });
-    const addFacts = (id: number, n: number) => ({
-      jsonrpc: "2.0", id, method: "tools/call",
-      params: { name: "add_fact", arguments: { items: Array.from({ length: n }, (_, i) => ({ entity_slug: "people/a", fact: `f${i}` })) } },
-    });
     const post = (payload: unknown) =>
       new Request("http://x/mcp", {
         method: "POST",
@@ -88,8 +58,8 @@ describe("per-token rate limiter", () => {
       });
     const ctx = { isPublic: false, authInfo: { clientId: "tok1" } as never };
 
-    // Three pings plus a three-item add_fact: six dispatched writes/calls.
-    expect((await handler(post([ping(1), ping(2), ping(3), addFacts(4, 3)]), ctx)).status).toBe(200);
-    expect((await handler(post(ping(5)), ctx)).status).toBe(429);
+    // Six pings in one batch: six dispatched calls.
+    expect((await handler(post([1, 2, 3, 4, 5, 6].map(ping)), ctx)).status).toBe(200);
+    expect((await handler(post(ping(7)), ctx)).status).toBe(429);
   });
 });

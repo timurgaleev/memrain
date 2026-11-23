@@ -11,7 +11,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import { mergePage } from "../src/core/entity-merge.ts";
 import { setSlugAlias } from "../src/core/slug-aliases.ts";
 import {
   appendPage,
@@ -649,88 +648,6 @@ describe("putPage — background re-put of a deleted page", () => {
 // canonical page and undo the merge.
 // ---------------------------------------------------------------------------
 
-describe("putPage — merged-away slug", () => {
-  useStorage();
-  const seedMerged = async (): Promise<void> => {
-    await putPage(storage, {
-      slug: "people/bob",
-      type: "person",
-      title: "Bob",
-      markdown_body: "canonical",
-    });
-    await putPage(storage, {
-      slug: "people/bob-smith",
-      type: "person",
-      title: "Bob Smith",
-      markdown_body: "stub",
-    });
-    const m = await mergePage(storage, "people/bob-smith", "people/bob");
-    expect(m.merged).toBe(true);
-  };
-
-  it("refuses to resurrect the stub", async () => {
-    await seedMerged();
-    await expect(
-      putPage(storage, {
-        slug: "people/bob-smith",
-        type: "person",
-        markdown_body: "re-derived",
-        written_by: "atoms",
-      }),
-    ).rejects.toThrow(/redirects to 'people\/bob'/);
-  });
-
-  it("keeps the merge intact — no shadow page for the entity", async () => {
-    await seedMerged();
-    await putPage(storage, {
-      slug: "people/bob-smith",
-      type: "person",
-      markdown_body: "re-derived",
-    }).catch(() => {});
-
-    // The stub stays folded: `page_get stub` still forwards to the canonical,
-    // whose body is untouched, and only one live page exists for the entity.
-    const got = await getPage(storage, "people/bob-smith");
-    expect(got!.slug).toBe("people/bob");
-    expect(got!.markdown_body).toBe("canonical");
-    expect((await listPages(storage)).map((p) => p.slug)).toEqual([
-      "people/bob",
-    ]);
-    const live = await storage
-      .engine()
-      .query<{ c: number }>(
-        "SELECT COUNT(*)::int AS c FROM pages WHERE slug = $1 AND deleted_at IS NULL",
-        ["people/bob-smith"],
-      );
-    expect(live.rows[0]!.c).toBe(0);
-  });
-
-  it("resurrects again once the canonical is gone (no page left to shadow)", async () => {
-    await seedMerged();
-    await deletePage(storage, "people/bob");
-    const r = await putPage(storage, {
-      slug: "people/bob-smith",
-      type: "person",
-      markdown_body: "re-derived",
-    });
-    expect(r.changed).toBe(true);
-    expect((await getPage(storage, "people/bob-smith"))!.markdown_body).toBe(
-      "re-derived",
-    );
-  });
-
-  it("a plain soft-deleted slug still resurrects unconditionally", async () => {
-    await putPage(storage, { slug: "people/bob", type: "person", markdown_body: "v1" });
-    await deletePage(storage, "people/bob");
-    const r = await putPage(storage, {
-      slug: "people/bob",
-      type: "person",
-      markdown_body: "v2",
-    });
-    expect(r.changed).toBe(true);
-    expect((await getPage(storage, "people/bob"))!.markdown_body).toBe("v2");
-  });
-});
 
 // ---------------------------------------------------------------------------
 // putPage over a slug that was RENAMED away. Unlike a merge, a rename hard-

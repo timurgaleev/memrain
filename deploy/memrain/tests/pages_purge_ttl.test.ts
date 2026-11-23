@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { purgeDeletedPages } from "../src/core/pages-purge.ts";
-import { purgePhase } from "../src/core/cycle/purge.ts";
+import { runHousekeeping } from "../src/core/housekeeping.ts";
 import { deletePage, putPage } from "../src/core/pages.ts";
 
 let tmp: string;
@@ -40,10 +40,10 @@ async function remaining(): Promise<string[]> {
 }
 
 describe("page purge TTL", () => {
-  it("the purge phase keeps a page deleted 100 hours ago and reaps one deleted 721 hours ago", async () => {
+  it("housekeeping keeps a page deleted 100 hours ago and reaps one deleted 721 hours ago", async () => {
     await deletedPage("notes/young", 100);
     await deletedPage("notes/old", 721);
-    await purgePhase(storage.engine());
+    expect((await runHousekeeping(storage)).ran).toBe(true);
     expect(await remaining()).toEqual(["notes/young"]);
   });
 
@@ -52,8 +52,8 @@ describe("page purge TTL", () => {
       `INSERT INTO documents (id, source_path, title, deleted_at)
        VALUES ('doc-old', '/v/old.md', 'old', NOW() - interval '100 hours')`,
     );
-    const r = await purgePhase(storage.engine());
-    expect(r.purged_documents_deleted).toBe(1);
+    const r = await runHousekeeping(storage);
+    expect(r.steps["purge"]).toMatchObject({ documents_deleted: 1 });
     const left = await storage.engine().query(`SELECT 1 FROM documents WHERE id = 'doc-old'`);
     expect(left.rows).toHaveLength(0);
   });

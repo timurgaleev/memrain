@@ -8,14 +8,9 @@ afterAll(async () => { await db.close(); });
 
 describe("MCP reader database failures", () => {
   for (const [name, table, args] of [
-    ["list_concepts", "synth_concepts", {}],
-    ["list_takes", "synth_takes", {}],
-    ["takes_search", "synth_takes", { q: "claim" }],
-    ["takes_scorecard", "synth_takes", {}],
-    ["takes_calibration", "synth_takes", {}],
-    ["get_calibration_profile", "synth_calibration_profile", {}],
-    ["find_contradictions", "synth_contradictions", {}],
-    ["get_recent_transcripts", "FROM pages", {}],
+    ["page_list", "FROM pages", {}],
+    ["get_tags", "FROM tags", { slug: "notes/x" }],
+    ["page_versions", "page_versions", { slug: "notes/x" }],
   ] as const) {
     it(`${name} reports timeout instead of a clean empty result`, async () => {
       const e = db.storage.engine();

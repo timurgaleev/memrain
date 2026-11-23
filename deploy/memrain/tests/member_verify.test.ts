@@ -5,7 +5,7 @@
  * owner stops the owner's keys too. An unbound credential verifies as before.
  *
  * Driven through the real paths a request takes: verifyAccessToken (what /mcp
- * calls), resolvePrincipal (what a queued job re-checks) and the HTTP server.
+ * calls) and the HTTP server.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash, randomBytes } from "node:crypto";
@@ -80,7 +80,6 @@ describe("personal access tokens", () => {
     const { token, id } = await mintPat("ora-laptop", "ora");
     const info = await provider.verifyAccessToken(token);
     expect(info).toMatchObject({ clientId: "ora-laptop", memberId: "ora", allowedSources: ["team"] });
-    expect((await provider.resolvePrincipal({ kind: "pat", id })).clientId).toBe("ora-laptop");
   });
 
   // Value: protects=a 2.x team key never verifies; fails_when=a non-owner binding is treated as
@@ -90,7 +89,6 @@ describe("personal access tokens", () => {
     const carl = await mintPat("carl-key", "carl");
     expect(await refused(provider.verifyAccessToken(bob.token))).toContain("credential_unsupported");
     expect(await refused(provider.verifyAccessToken(carl.token))).toContain("credential_unsupported");
-    expect(await refused(provider.resolvePrincipal({ kind: "pat", id: bob.id }))).toContain("credential_unsupported");
   });
 
   // Value: protects=disabling the owner still stops the owner's keys; fails_when=the owner is

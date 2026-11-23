@@ -126,9 +126,6 @@ describe("validateParams — unit", () => {
       ["search", { query: "x", limit: 5 }, "query", "q"],
       ["search", { query: "x", limit: 5 }, "limit", "k"],
       ["page_append", { slug: "s", markdown: "m" }, "markdown", "content"],
-      ["add_timeline_event", { slug: "s", date: "2026-01-01", summary: "e" }, "date", "occurred_at"],
-      ["add_timeline_event", { slug: "s", date: "2026-01-01", summary: "e" }, "summary", "event"],
-      ["entity_recall", { entity: "people/a" }, "entity", "slug"],
       ["resolve_slugs", { slugs: ["a"] }, "slugs", "query"],
     ];
     for (const [name, params, from, to] of cases) {
@@ -238,40 +235,6 @@ describe("validateParams — unit", () => {
   });
 });
 
-describe("validateParams — code graph and wanted_pages params", () => {
-  const expectInvalid = (fn: () => void): void => {
-    expect(fn).toThrow();
-    try {
-      fn();
-    } catch (e) {
-      expect((e as { code: string }).code).toBe("invalid_params");
-    }
-  };
-
-  it("accepts `lang` on every code graph tool and refuses a non-string one", () => {
-    const required: Record<string, Record<string, unknown>> = {
-      code_def: { name: "f" },
-      code_refs: { name: "f" },
-      code_callers: { name: "f" },
-      code_callees: { target: "f" },
-      code_blast: { symbol: "f" },
-      code_flow: { symbol: "f" },
-    };
-    for (const [name, base] of Object.entries(required)) {
-      const op = opByName(name);
-      expect(() => validateParams(op, { ...base, lang: "go" }), name).not.toThrow();
-      expectInvalid(() => validateParams(op, { ...base, lang: 3 }));
-    }
-  });
-
-  it("bounds wanted_pages.limit to 1..200", () => {
-    const op = opByName("wanted_pages");
-    expect(() => validateParams(op, {})).not.toThrow();
-    expect(() => validateParams(op, { limit: 200 })).not.toThrow();
-    expectInvalid(() => validateParams(op, { limit: 201 }));
-    expectInvalid(() => validateParams(op, { limit: 0 }));
-  });
-});
 
 describe("validateParams — contract parity (no well-formed call is rejected)", () => {
   it("every operation accepts a param set built from its own valid boundaries", () => {

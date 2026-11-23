@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { createAccount } from "../src/core/connectors/accounts.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 
 const column = async (e: Engine, t: string, c: string) => (await e.query<{ n: number }>(
@@ -23,7 +22,11 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const e = db.storage.engine();
     try {
       await registerSource(e, { id: "inbox", kind: "mailbox", pathPrefix: "inbox/" });
-      const account = await createAccount(e, { sourceId: "inbox", provider: "microsoft", services: ["outlook_mail"], principalRef: "admin:operator", accountLabel: "me@example.test" });
+      // A connector account as an earlier build stored it.
+      const account = (await e.query<{ id: string }>(
+        `INSERT INTO connector_accounts (id, source_id, provider, services, principal_ref, account_label)
+         VALUES ('00000000-0000-4000-8000-000000000169', 'inbox', 'microsoft', ARRAY['outlook_mail'], 'admin:operator', 'me@example.test') RETURNING id::text AS id`,
+      )).rows[0]!;
       await e.query(STATE, ["first-connect", null]);
       await e.query(STATE, ["reconnect", account.id]);
       await expect(e.query(STATE, ["gone", "0f0f0f0f-0000-4000-8000-00000000abcd"])).rejects.toThrow();

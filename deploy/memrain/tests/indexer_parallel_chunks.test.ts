@@ -171,23 +171,6 @@ describe("parallel chunk embedding", () => {
     expect(state.peak).toBe(1);
   });
 
-  it("runs the contextual call in parallel too", async () => {
-    setWidth(3);
-    const llm = { active: 0, peak: 0 };
-    const contextualLlmFn = async () => {
-      llm.active++;
-      llm.peak = Math.max(llm.peak, llm.active);
-      await new Promise((r) => setTimeout(r, 20));
-      llm.active--;
-      return { text: "situates the chunk", modelId: "fake" };
-    };
-    await indexDocument(
-      storage,
-      { sourcePath: "/p/ctx.md", text: doc(6) },
-      { embedFn: async (t: string) => deterministicEmbed(t), contextualLlmFn, timingLabel: "page_put" },
-    );
-    expect(llm.peak).toBe(3);
-  });
 
   it("takes no slot for a chunk whose stored vector is reused", async () => {
     setWidth(1);

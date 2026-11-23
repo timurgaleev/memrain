@@ -2,8 +2,7 @@
  * Federated sources: a read that names no source, from a caller whose grant
  * names none, reaches the default source plus the federated ones. A code
  * source starts unfederated, so its chunks stay out of ordinary search, and
- * an explicit source_ids, a grant that lists it, a code filter and the code
- * tools still reach it. Migration 195 keeps every existing non-code source
+ * an explicit source_ids or a grant that lists it still reaches it. Migration 195 keeps every existing non-code source
  * federated and runs twice without undoing a later choice.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
@@ -13,7 +12,6 @@ import { storageEngines } from "./helpers/storage-engines.ts";
 import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
 import { federatedReadScope, getSource, registerSource, setSourceFederated } from "../src/core/sources.ts";
 import { indexPageIntoSearch } from "../src/core/page-index.ts";
-import { entityId } from "../src/core/entities.ts";
 import { dispatchTool } from "../src/mcp/dispatch.ts";
 import type { AuthInfo } from "../src/core/auth-info.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
@@ -21,7 +19,6 @@ import { deterministicEmbed } from "./det-embed.ts";
 
 const embedFn = async (text: string) => deterministicEmbed(text);
 const KEYWORD = "wombatfederation";
-const SYMBOL = "federateWombat";
 const NOTES = "notes-vault";
 const CODE = "repo-code";
 
@@ -54,12 +51,6 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     await registerSource(e, { id: CODE, kind: "code", pathPrefix: "/fed-code" });
     await indexPageIntoSearch(db.storage, { slug: "notes/wombat", title: "Wombat note", markdown_body: `${KEYWORD} in a note`, source_id: NOTES }, { embedFn });
     await indexPageIntoSearch(db.storage, { slug: "code/wombat", title: "Wombat code", markdown_body: `${KEYWORD} in code`, source_id: CODE }, { embedFn });
-    // A code symbol definition the code tools look up, in the code source.
-    await e.query(`INSERT INTO documents (id, source_path, title, source_id, frontmatter) VALUES ('fed-code-doc', '/fed-code/w.ts', 'w.ts', $1, '{"kind":"code","language":"typescript"}'::jsonb)`, [CODE]);
-    await e.query(`INSERT INTO chunks (id, document_id, chunk_index, content, start_line, end_line, symbol_name_qualified, source_id, language)
-                   VALUES ('fed-code-chunk', 'fed-code-doc', 0, $1, 1, 3, $2, $3, 'typescript')`, [`function ${SYMBOL}() {}`, SYMBOL, CODE]);
-    await e.query(`INSERT INTO entities (id, type, name) VALUES ($1, 'code-def', $2) ON CONFLICT (id) DO NOTHING`, [entityId("code-def", SYMBOL), SYMBOL]);
-    await e.query(`INSERT INTO entity_mentions (chunk_id, entity_id, surface_form) VALUES ('fed-code-chunk', $1, $2)`, [entityId("code-def", SYMBOL), SYMBOL]);
   });
   afterAll(async () => { await db.close(); });
 
@@ -81,25 +72,21 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
   // returns a chunk from an unfederated code source, or the note it should find goes missing.
   it("keeps an unfederated code source out of an unscoped search", async () => {
     expect(await sourcesOf("search", { q: KEYWORD })).toEqual(new Set([NOTES]));
-    expect(await sourcesOf("query", { q: KEYWORD })).toEqual(new Set([NOTES]));
     expect(await sourcesOf("search", { q: KEYWORD }, key())).toEqual(new Set([NOTES]));
   });
 
-  // Value: protects=the explicit routes past federation; fails_when=source_ids, a grant listing the source, or a code
-  // filter stops reaching a code source.
-  it("reaches the code source by source_ids, by a grant that lists it, and by a code filter", async () => {
+  // Value: protects=the explicit routes past federation; fails_when=source_ids or a grant listing the source stops
+  // reaching a code source.
+  it("reaches the code source by source_ids and by a grant that lists it", async () => {
     expect(await sourcesOf("search", { q: KEYWORD, source_ids: [NOTES, CODE] })).toEqual(new Set([NOTES, CODE]));
     expect(await sourcesOf("search", { q: KEYWORD }, key([NOTES, CODE]))).toEqual(new Set([NOTES, CODE]));
     expect(await sourcesOf("search", { q: KEYWORD, source_ids: [CODE] }, key())).toEqual(new Set([CODE]));
-    expect(await sourcesOf("search", { q: SYMBOL, lang: "typescript" })).toContain(CODE);
   });
 
-  // Value: protects=federation never widening a narrower read and never dropping a query refine's scope;
-  // fails_when=a query with refine and a code filter searches every source, the owner-only narrowing order lets an
+  // Value: protects=federation never widening a narrower read; fails_when=the owner-only narrowing order lets an
   // unbound key read the code source or an owner-only source, or a fail-closed empty grant reads anything.
-  it("keeps refine, owner-only and fail-closed scopes at least as narrow", async () => {
+  it("keeps owner-only and fail-closed scopes at least as narrow", async () => {
     const e = db.storage.engine();
-    expect(await sourcesOf("query", { q: KEYWORD, refine: "note", lang: "typescript" })).not.toContain(CODE);
     await registerSource(e, { id: "private-mail", kind: "mailbox", pathPrefix: "mail:fed" });
     await e.query(`UPDATE sources SET owner_only = true WHERE id = 'private-mail'`);
     await indexPageIntoSearch(db.storage, { slug: "mail/wombat", title: "Wombat mail", markdown_body: `${KEYWORD} in mail`, source_id: "private-mail" }, { embedFn });
@@ -121,13 +108,6 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
       await e.query(`DELETE FROM pages WHERE source_id = 'private-mail'`);
       await e.query(`DELETE FROM sources WHERE id = 'private-mail'`);
     }
-  });
-
-  // Value: protects=code tools reading unfederated sources; fails_when=code_def is scoped by federation.
-  it("leaves the code tools reading every source", async () => {
-    const r = await dispatchTool(db.storage, { name: "code_def", arguments: { name: SYMBOL } });
-    expect(r.isError ?? false).toBe(false);
-    expect(r.content[0]!.text).toContain("/fed-code/w.ts");
   });
 
   // Value: protects=federate/unfederate taking effect on the next read; fails_when=the flag is cached or ignored.

@@ -134,12 +134,6 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) {
       expect(await counts()).toEqual(before);
     });
 
-    it("stores fenced-code symbols without vectors", async () => {
-      await indexDocument(storage, { sourcePath: "/notes/kept.md", text: BODY }, {
-        embedFn: async () => { throw new Error("keyword-only must not embed"); },
-      });
-      expect(await counts()).toEqual({ vectors: 0, symbols: 1 });
-    });
   });
 }
 

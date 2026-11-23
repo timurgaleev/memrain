@@ -18,10 +18,10 @@ import type { AuthInfo } from "../src/core/auth-info.ts";
 import { putPage } from "../src/core/pages.ts";
 import { indexPageIntoSearch } from "../src/core/page-index.ts";
 import { addLink } from "../src/core/links.ts";
-import { addFact } from "../src/core/facts.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { setSlugAlias } from "../src/core/slug-aliases.ts";
 import { deterministicEmbed } from "./det-embed.ts";
+import { seedFact } from "./helpers/seed-rows.ts";
 
 const SOURCE = "fence-a";
 const NORMAL = "projects/roadmap";
@@ -74,7 +74,7 @@ beforeAll(async () => {
   );
   // `id` is null when the claim was already on file; both are fresh inserts
   // here, and the recall cases below are meaningless without a real row id.
-  const diaryFact = await addFact(storage, {
+  const diaryFact = await seedFact(storage, {
     entity_slug: NORMAL,
     fact: "diary interiority",
     source_slug: DIARY,
@@ -83,7 +83,7 @@ beforeAll(async () => {
   });
   expect(diaryFact.id).not.toBeNull();
   diaryFactId = diaryFact.id!;
-  const normalFact = await addFact(storage, {
+  const normalFact = await seedFact(storage, {
     entity_slug: NORMAL,
     fact: "public claim",
     source_slug: NORMAL,
@@ -101,56 +101,13 @@ afterAll(async () => {
 
 const slugs = (rows: { slug: string }[]) => rows.map((r) => r.slug);
 
-describe("insight reads: page-row diary fence", () => {
-  const cases: [string, Record<string, unknown>, string][] = [
-    ["find_orphans", {}, "pages"],
-    ["find_experts", {}, "experts"],
-    ["get_recent_salience", {}, "pages"],
-    ["find_anomalies", {}, "anomalies"],
-  ];
-
-  for (const [tool, args, key] of cases) {
-    it(`${tool}: operator sees the diary page, a tenant does not`, async () => {
-      const asOperator = payload(await call(tool, args, false));
-      expect(slugs(asOperator[key])).toContain(DIARY);
-      expect(slugs(asOperator[key])).toContain(NORMAL);
-
-      const res = await call(tool, args, true);
-      const asTenant = payload(res);
-      expect(slugs(asTenant[key])).toContain(NORMAL);
-      expect(slugs(asTenant[key])).not.toContain(DIARY);
-      expect(res.content[0]!.text).not.toContain("Diary 2026-07-01");
-    });
-  }
-});
 
 describe("find_contradictions diary fence", () => {
-  it("operator sees both asserted pairs", async () => {
-    const out = payload(await call("find_contradictions", {}, false));
-    expect(out.contradictions.map((c: any) => c.source_slug).sort()).toEqual([DIARY, NORMAL].sort());
-  });
 
-  it("a tenant loses the pair anchored on the diary page", async () => {
-    const res = await call("find_contradictions", {}, true);
-    expect(payload(res).contradictions.map((c: any) => c.source_slug)).toEqual([NORMAL]);
-    expect(res.content[0]!.text).not.toContain(DIARY);
-  });
 });
 
 describe("recall diary fence", () => {
-  it("operator recalls a diary-sourced fact", async () => {
-    const out = payload(await call("recall", { id: diaryFactId }, false));
-    expect(out.fact.source_slug).toBe(DIARY);
-  });
 
-  it("a tenant gets not_found for a diary-sourced fact but keeps the normal one", async () => {
-    const fenced = await call("recall", { id: diaryFactId }, true);
-    expect(fenced.isError).toBeTruthy();
-    expect(fenced.content[0]!.text).not.toContain("diary interiority");
-
-    const out = payload(await call("recall", { id: normalFactId }, true));
-    expect(out.fact.source_slug).toBe(NORMAL);
-  });
 });
 
 describe("think fallback diary fence", () => {
@@ -183,22 +140,7 @@ describe("think fallback diary fence", () => {
     }
   });
 
-  it("operator's fallback may quote the diary page", async () => {
-    const out = payload(await call("think", { question: WORD }, false));
-    expect(out.synthesis).toBeNull();
-    expect(out.fallback?.kind).toBe("extractive");
-    expect(out.fallback.answer).toContain("life/diary/2026-07-02");
-  });
 
-  it("a tenant scoped into the diary's source gets no diary text or ref", async () => {
-    const res = await call("think", { question: WORD }, true);
-    const out = payload(res);
-    expect(out.synthesis).toBeNull();
-    expect(out.fallback?.kind).toBe("extractive");
-    expect(out.fallback.answer).toContain("milestone");
-    expect(res.content[0]!.text).not.toContain("never shared");
-    expect(res.content[0]!.text).not.toContain("life/diary");
-  });
 });
 
 // Last on purpose: the edge added here gives the diary page an inbound link,

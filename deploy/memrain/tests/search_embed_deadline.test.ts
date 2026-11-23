@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { writeDocumentTransaction } from "../src/core/indexer-tx.ts";
-import { hybridSearch } from "../src/core/search/index.ts";
+import { hybridSearch } from "../src/core/search/hybrid.ts";
 import type { SearchMeta } from "../src/core/search/search-meta.ts";
 import { deterministicEmbed, deterministicEmbedQuery } from "./det-embed.ts";
 
@@ -60,9 +60,6 @@ let lastMeta: SearchMeta | undefined;
 const search = (embedQuery: (text: string) => Promise<number[]>) =>
   hybridSearch(storage, "zigbee pairing setup", {
     k: 5,
-    intent: "topic",
-    noExpansion: true,
-    noCache: true,
     embedQuery,
     onMeta: (m) => {
       lastMeta = m;

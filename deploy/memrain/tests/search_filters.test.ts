@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { writeDocumentTransaction } from "../src/core/indexer-tx.ts";
-import { hybridSearch } from "../src/core/search/index.ts";
+import { hybridSearch } from "../src/core/search/hybrid.ts";
 import { resolveDateBoundary } from "../src/core/search/filters.ts";
 import { deterministicEmbed, deterministicEmbedQuery } from "./det-embed.ts";
 
@@ -64,8 +64,6 @@ afterAll(async () => {
 async function search(opts: Record<string, unknown>): Promise<string[]> {
   const hits = await hybridSearch(storage, "alpha beta retrieval", {
     k: 10,
-    intent: "topic",
-    noExpansion: true,
     embedQuery: deterministicEmbedQuery,
     ...opts,
   });
@@ -98,20 +96,6 @@ describe("search since/until (content date)", () => {
   });
 });
 
-describe("search lang / symbol_kind filters", () => {
-  it("lang filter returns only the matching-language chunk", async () => {
-    const docs = await search({ lang: "typescript" });
-    expect(docs).toEqual(["doc_code"]);
-  });
-  it("symbol_kind filter returns only the matching-kind chunk", async () => {
-    const docs = await search({ symbolKind: "function" });
-    expect(docs).toEqual(["doc_code"]);
-  });
-  it("a non-matching lang returns nothing", async () => {
-    const docs = await search({ lang: "rust" });
-    expect(docs).toEqual([]);
-  });
-});
 
 describe("resolveDateBoundary", () => {
   it("relative '7d' resolves to ~7 days back from now", () => {

@@ -13,7 +13,6 @@ import type { Engine } from "../src/core/engine/interface.ts";
 import { deletePage, putPage } from "../src/core/pages.ts";
 import { purgeExpiredDocuments } from "../src/core/destructive-guard.ts";
 import { purgeDeletedPages } from "../src/core/pages-purge.ts";
-import { synthesizeConceptsPhase } from "../src/core/synthesis/concepts.ts";
 
 let storage: Storage;
 let engine: Engine;
@@ -215,50 +214,4 @@ describe("page purge retires what synthesis derived from the page", () => {
   });
 });
 
-describe("concepts phase", () => {
-  it("ignores atoms whose source document is gone or deleted, and keeps page atoms of live pages", async () => {
-    await doc("doc_live"); await doc("doc_deleted");
-    await putPage(storage, { slug: "notes/live", markdown_body: "live\n" });
-    await atom("doc_live", "Doc atom", ["topic"]);
-    await atom("notes/live", "Page atom", ["topic"], "page");
-    await atom("doc_missing", "Missing source atom", ["topic"]);
-    await atom("doc_deleted", "Deleted source atom", ["topic"]);
-    await softDeleteDoc("doc_deleted");
-    const r = await synthesizeConceptsPhase(engine);
-    expect(r.atomsSeen).toBe(2);
-    const row = (await engine.query<{ narrative: string; atom_count: number }>(`SELECT narrative, atom_count FROM synth_concepts WHERE concept_slug = 'topic'`)).rows[0]!;
-    expect(Number(row.atom_count)).toBe(2);
-    expect(row.narrative).not.toContain("Missing source atom");
-    expect(row.narrative).not.toContain("Deleted source atom");
-  });
-
-  it("rebuilds a concept a purge hid once live atoms carry its tag again", async () => {
-    await doc("doc_gone");
-    const a = await atom("doc_gone", "Old one", ["back"]);
-    const b = await atom("doc_gone", "Old two", ["back"]);
-    await concept("back", "Old one and Old two", [a, b]);
-    await softDeleteDoc("doc_gone");
-    await purgeExpiredDocuments(engine, 0);
-    expect((await pageRow("concepts/back"))?.deleted_at).not.toBeNull();
-    await doc("doc_new");
-    await atom("doc_new", "New one", ["back"]);
-    await atom("doc_new", "New two", ["back"]);
-    const r = await synthesizeConceptsPhase(engine, { storage });
-    expect(r.skippedDeleted).toBe(0);
-    const page = await pageRow("concepts/back");
-    expect(page?.deleted_at).toBeNull();
-    expect(page?.markdown_body).toContain("New one");
-    expect(page?.markdown_body).not.toContain("Old one");
-  });
-
-  it("still skips a concept page a person deleted", async () => {
-    await doc("doc_a");
-    await atom("doc_a", "One", ["mine"]);
-    await atom("doc_a", "Two", ["mine"]);
-    await putPage(storage, { slug: "concepts/mine", type: "concept", markdown_body: "x\n", written_by: "synthesize-concepts", written_by_principal: "operator" });
-    await deletePage(storage, "concepts/mine", "mcp", undefined, { writtenByPrincipal: "alice" });
-    const r = await synthesizeConceptsPhase(engine, { storage });
-    expect(r.skippedDeleted).toBe(1);
-  });
-});
 });

@@ -65,9 +65,7 @@ describe("MCP result size", () => {
     for (const [name, args] of [
       ["page_versions", { slug: "notes/size", include_body: true }],
       ["get_chunks", { source_path: "missing.md" }],
-      ["graph_neighbors", { slug: "notes/size" }],
-      ["graph_query", { type: "related", source_slug: "notes/size" }],
-      ["find_orphans", {}],
+      ["page_list", {}],
     ] as const) {
       const r = await dispatchTool(db.storage, { name, arguments: args });
       expect(JSON.parse(r.content[0]!.text).error).toBe("result_too_large");

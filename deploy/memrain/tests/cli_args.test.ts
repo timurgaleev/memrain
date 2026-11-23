@@ -48,23 +48,13 @@ describe("boolean flags never consume a positional (CLI-2)", () => {
     const hash = "b".repeat(64);
     for (const argv of [
       ["import", "--dir", "/export", "--source", "team", "--apply", "--plan-hash", hash],
-      ["transcripts", "repair-origin", "/session.jsonl", "--source", "team", "--apply", "--plan-hash", hash],
-      ["mirror-adopt", "--source", "team", "--limit", "1", "--apply", "--plan-hash", hash],
+      ["erase", "--source", "team", "--apply", "--plan-hash", hash],
     ]) {
       const parsed = parseArgs(argv);
       expect(parsed.values.get("--plan-hash")).toBe(hash);
       expect(parsed.values.get("--source")).toBe("team");
       expect(parsed.flags.has("--apply")).toBe(true);
     }
-  });
-
-  it("retains the exact rechunk plan and zero-dollar code budget", () => {
-    const hash = "a".repeat(64);
-    const parsed = parseArgs(["reindex", "--rechunk-stale", "--source", "code", "--plan-hash", hash, "--max-cost-usd", "0"]);
-    expect(parsed.flags.has("--rechunk-stale")).toBe(true);
-    expect(parsed.values.get("--plan-hash")).toBe(hash);
-    expect(parsed.values.get("--max-cost-usd")).toBe("0");
-    expect(parsed.positional).toEqual([]);
   });
 
   it("keeps the slug AND the dry-run for `embed --dry-run <slug>`", () => {
@@ -87,53 +77,53 @@ describe("boolean flags never consume a positional (CLI-2)", () => {
   });
 
   it("leaves value-taking flags alone", () => {
-    const r = parseArgs(["search", "--k", "5", "hello"]);
-    expect(r.values.get("--k")).toBe("5");
-    expect(r.positional).toEqual(["hello"]);
+    const r = parseArgs(["embed", "--limit", "5", "notes/x"]);
+    expect(r.values.get("--limit")).toBe("5");
+    expect(r.positional).toEqual(["notes/x"]);
   });
 });
 
 describe("--key=value is split (CLI-3)", () => {
   it("reads the value instead of dropping it", () => {
-    // Worse than losing the flag: the old parser treated the whole `--k=5`
-    // token as a key and then ate the QUERY as its value, so the search ran
-    // with the default k and no search term at all.
-    const old = oldParseArgs(["search", "--k=5", "hello"]);
-    expect(old.values.get("--k")).toBeUndefined();
-    expect(old.values.get("--k=5")).toBe("hello");
+    // Worse than losing the flag: the old parser treated the whole
+    // `--limit=5` token as a key and then ate the SLUG as its value, so embed
+    // ran with the default limit over everything.
+    const old = oldParseArgs(["embed", "--limit=5", "notes/x"]);
+    expect(old.values.get("--limit")).toBeUndefined();
+    expect(old.values.get("--limit=5")).toBe("notes/x");
     expect(old.positional).toEqual([]);
 
-    const now = parseArgs(["search", "--k=5", "hello"]);
-    expect(now.values.get("--k")).toBe("5");
-    expect(now.positional).toEqual(["hello"]);
+    const now = parseArgs(["embed", "--limit=5", "notes/x"]);
+    expect(now.values.get("--limit")).toBe("5");
+    expect(now.positional).toEqual(["notes/x"]);
   });
 
   it("splits on the first '=' only, so values may contain more", () => {
-    const r = parseArgs(["call", "--args={\"a\":\"b=c\"}"]);
-    expect(r.values.get("--args")).toBe('{"a":"b=c"}');
+    const r = parseArgs(["embed", "--slugs=a=b,c"]);
+    expect(r.values.get("--slugs")).toBe("a=b,c");
   });
 
   it("accepts explicit boolean literals", () => {
-    expect(parseArgs(["reindex", "--force=true"]).flags.has("--force")).toBe(true);
-    expect(parseArgs(["reindex", "--force=false"]).flags.has("--force")).toBe(false);
+    expect(parseArgs(["quarantine", "--force=true"]).flags.has("--force")).toBe(true);
+    expect(parseArgs(["quarantine", "--force=false"]).flags.has("--force")).toBe(false);
   });
 
   it("REFUSES a bare `--flag=` rather than guessing ON", () => {
     // An unset shell variable expands to nothing: `--force=$MODE` -> `--force=`.
     // Guessing ON there arms a destructive mode by accident.
-    expect(() => parseArgs(["reindex", "--force="])).toThrow(/boolean flag/);
+    expect(() => parseArgs(["quarantine", "--force="])).toThrow(/boolean flag/);
   });
 });
 
 describe("VALUELESS_FLAGS stays in sync", () => {
   it("contains the destructive booleans", () => {
-    for (const f of ["--force", "--apply", "--fix", "--dry-run"]) {
+    for (const f of ["--force", "--apply", "--dry-run"]) {
       expect(VALUELESS_FLAGS.has(f)).toBe(true);
     }
   });
 
   it("does not contain value-taking near-twins", () => {
-    for (const f of ["--limit", "--stale-days", "--k"]) {
+    for (const f of ["--limit", "--since", "--source"]) {
       expect(VALUELESS_FLAGS.has(f)).toBe(false);
     }
   });
@@ -144,14 +134,14 @@ describe("strict flag validation", () => {
     expect(() => parseArgs(["embed", "--dry-runn"])).toThrow(
       /unknown flag '--dry-runn' — did you mean --dry-run\?/,
     );
-    expect(() => parseArgs(["search", "--kk", "5"])).toThrow(/unknown flag '--kk'/);
+    expect(() => parseArgs(["embed", "--kk", "5"])).toThrow(/unknown flag '--kk'/);
   });
 
   it("refuses a safety flag on a command that would ignore it", () => {
     // The dangerous case is a CORRECTLY spelled flag the command drops: the
     // caller reads "preview", the command does the real thing.
-    expect(() => parseArgs(["search", "--dry-run", "q"])).toThrow(
-      /--dry-run is not supported by 'search'/,
+    expect(() => parseArgs(["export", "--dry-run"])).toThrow(
+      /--dry-run is not supported by 'export'/,
     );
     expect(() => parseArgs(["embed", "--dry-run"])).not.toThrow();
   });
@@ -168,10 +158,9 @@ describe("strict flag validation", () => {
 });
 
 describe("SAFETY_FLAG_COMMANDS is derived from cli.ts, not hand-maintained", () => {
-  // Hand-listing which commands honour --dry-run/--apply/--fix is exactly what
-  // shipped a regression: `lint --dry-run`, `migrate-engine --dry-run` and
-  // `quarantine scan --apply` were all real and all refused. The truth lives in
-  // the command switch, so read it from there.
+  // Hand-listing which commands honour --dry-run/--apply is exactly what
+  // shipped a regression: real invocations such as `quarantine scan --apply`
+  // were refused. The truth lives in the command switch, so read it from there.
   const source = readFileSync(
     join(import.meta.dir, "..", "src", "cli.ts"),
     "utf8",
@@ -197,7 +186,7 @@ describe("SAFETY_FLAG_COMMANDS is derived from cli.ts, not hand-maintained", () 
     return owners.sort();
   }
 
-  for (const flag of ["--dry-run", "--apply", "--fix"]) {
+  for (const flag of ["--dry-run", "--apply"]) {
     it(`lists exactly the commands that read ${flag}`, () => {
       const declared = [...(SAFETY_FLAG_COMMANDS.get(flag) ?? [])].sort();
       expect(declared).toEqual(ownersOf(flag));
@@ -206,18 +195,17 @@ describe("SAFETY_FLAG_COMMANDS is derived from cli.ts, not hand-maintained", () 
 
   it("accepts the invocations the first hand-written list refused", () => {
     for (const argv of [
-      ["lint", "--dry-run"],
-      ["lint", "--fix"],
-      ["migrate-engine", "--dry-run"],
+      ["import", "--dry-run"],
+      ["apply-migrations", "--dry-run"],
       ["quarantine", "scan", "--apply"],
-      ["eval-prune", "--apply"],
+      ["purge-leftovers", "--apply"],
     ]) {
       expect(() => parseArgs(argv)).not.toThrow();
     }
   });
 
   it("still refuses a safety flag on a command that ignores it", () => {
-    expect(() => parseArgs(["doctor", "--fix"])).toThrow(/not supported by 'doctor'/);
+    expect(() => parseArgs(["status", "--apply"])).toThrow(/not supported by 'status'/);
   });
 });
 
@@ -234,39 +222,22 @@ describe("--json on the guarded commands", () => {
 });
 
 describe("the accepted vocabulary is per command (CLI-4)", () => {
-  it("accepts the doctor self-heal flags a global vocabulary refused", () => {
-    // These are read inside runDoctor (off process.argv), so a union-of-all
-    // -commands check called every one of them a typo and left the entire
-    // remediation surface unreachable from the CLI.
-    for (const argv of [
-      ["doctor", "--remediation-plan"],
-      ["doctor", "--remediate"],
-      ["doctor", "--remediate", "--execute"],
-      ["doctor", "--remediate", "--yes"],
-    ]) {
-      expect(() => parseArgs(argv)).not.toThrow();
-    }
-    expect(parseArgs(["doctor", "--remediate", "--max-jobs", "3"]).values.get("--max-jobs"))
-      .toBe("3");
-  });
-
   it("refuses a real flag on a command that never reads it", () => {
-    // `reindex` has no --stale (that is embed/extract), so it was accepted and
+    // `reindex` has no --stale (that is embed), so it was accepted and
     // dropped: the caller asked for a stale-only pass and got a full one.
     expect(() => parseArgs(["reindex", "--stale"])).toThrow(
       /unknown flag '--stale'/,
     );
     expect(() => parseArgs(["reindex", "--stale"])).toThrow(
-      /'reindex' accepts: .*--rechunk-stale/,
+      /'reindex' accepts: .*--reconcile-deletes/,
     );
     // …and stays legal on the commands that do read it.
     expect(() => parseArgs(["embed", "--stale"])).not.toThrow();
-    expect(() => parseArgs(["extract", "--stale"])).not.toThrow();
   });
 
   it("names the command and what it takes when the command takes nothing", () => {
-    expect(() => parseArgs(["orphans", "--json"])).toThrow(
-      /unknown flag '--json' \('orphans' takes no flags\)/,
+    expect(() => parseArgs(["doctor", "--source", "x"])).toThrow(
+      /unknown flag '--source' \('doctor' takes no flags\)/,
     );
   });
 
@@ -295,7 +266,7 @@ describe("the accepted vocabulary is per command (CLI-4)", () => {
   });
 
   it("answers --help everywhere without listing it per command", () => {
-    for (const cmd of ["watch", "reindex", "orphans", "auth"]) {
+    for (const cmd of ["serve", "reindex", "doctor", "auth"]) {
       expect(() => parseArgs([cmd, "--help"])).not.toThrow();
       expect(COMMAND_FLAGS.get(cmd)?.has("--help")).toBe(false);
     }
@@ -304,7 +275,7 @@ describe("the accepted vocabulary is per command (CLI-4)", () => {
   it("falls back to the global vocabulary for an unknown command", () => {
     // cli.ts owns the "unknown command" message; hijacking it with a flag
     // complaint would name the wrong problem.
-    expect(() => parseArgs(["frobnicate", "--k", "5"])).not.toThrow();
+    expect(() => parseArgs(["frobnicate", "--limit", "5"])).not.toThrow();
     expect(() => parseArgs(["frobnicate", "--kk", "5"])).toThrow(/unknown flag '--kk'/);
   });
 });
@@ -323,8 +294,8 @@ describe("a value-taking flag given no value is an error (CLI-5)", () => {
   });
 
   it("fires at the end of the line too", () => {
-    expect(() => parseArgs(["search", "hello", "--k"])).toThrow(
-      /memrain search: --k requires a value/,
+    expect(() => parseArgs(["embed", "notes/x", "--limit"])).toThrow(
+      /memrain embed: --limit requires a value/,
     );
   });
 
@@ -335,17 +306,17 @@ describe("a value-taking flag given no value is an error (CLI-5)", () => {
     expect(r.flags.has("--dry-run")).toBe(true);
     expect(r.positional).toEqual(["notes/x"]);
     expect(() => parseArgs(["reindex", "--all"])).not.toThrow();
-    expect(() => parseArgs(["extract", "--stale", "--dry-run"])).not.toThrow();
+    expect(() => parseArgs(["embed", "--stale", "--dry-run"])).not.toThrow();
   });
 
   it("covers the checks the command cases used to carry one by one", () => {
-    // salience/cycle/embed each hand-rolled this guard for their own flags;
-    // every other command had none. It belongs to the parser, once.
-    expect(() => parseArgs(["salience", "--type"])).toThrow(
-      /memrain salience: --type requires a value/,
+    // Commands used to hand-roll this guard for their own flags; every other
+    // command had none. It belongs to the parser, once.
+    expect(() => parseArgs(["transcripts", "--since"])).toThrow(
+      /memrain transcripts: --since requires a value/,
     );
-    expect(() => parseArgs(["cycle", "--phases"])).toThrow(
-      /memrain cycle: --phases requires a value/,
+    expect(() => parseArgs(["export", "--dir"])).toThrow(
+      /memrain export: --dir requires a value/,
     );
     expect(() => parseArgs(["embed", "--limit"])).toThrow(
       /memrain embed: --limit requires a value/,
@@ -433,34 +404,5 @@ describe("COMMAND_FLAGS is derived from the code, not hand-maintained", () => {
         );
       }
     }
-  });
-});
-
-describe("migrate-engine flags", () => {
-  it("parses --to-pglite-path, --verify-only and --tables", () => {
-    const r = parseArgs([
-      "migrate-engine", "--from", "pglite", "--to", "pglite", "--pglite-path", "/a",
-      "--to-pglite-path", "/b", "--verify-only", "--tables", "pages,links",
-    ]);
-    expect(r.values.get("--to-pglite-path")).toBe("/b");
-    expect(r.values.get("--tables")).toBe("pages,links");
-    expect(r.flags.has("--verify-only")).toBe(true);
-    expect(r.positional).toEqual([]);
-  });
-
-  it("keeps --verify-only boolean wherever it sits", () => {
-    const r = parseArgs(["migrate-engine", "--verify-only", "--tables", "pages"]);
-    expect(r.flags.has("--verify-only")).toBe(true);
-    expect(r.values.get("--tables")).toBe("pages");
-  });
-
-  it("keeps --allow-dropped-columns boolean", () => {
-    const r = parseArgs(["migrate-engine", "--allow-dropped-columns", "--tables", "pages"]);
-    expect(r.flags.has("--allow-dropped-columns")).toBe(true);
-    expect(r.values.get("--tables")).toBe("pages");
-  });
-
-  it("refuses --tables without a value", () => {
-    expect(() => parseArgs(["migrate-engine", "--tables"])).toThrow(/requires a value/);
   });
 });

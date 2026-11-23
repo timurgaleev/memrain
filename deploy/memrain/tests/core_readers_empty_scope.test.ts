@@ -12,33 +12,22 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
-import type { Engine } from "../src/core/engine/interface.ts";
 import { NO_SOURCE_SENTINEL } from "../src/core/auth-info.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { deletePage, getPage, listPages, pageVersions, putPage } from "../src/core/pages.ts";
 import { purgeDeletedPages } from "../src/core/pages-purge.ts";
-import { addFact, countUnconsolidatedFacts, entityRecall, listFacts, listSupersessions } from "../src/core/facts.ts";
-import { forgetFact, recallFact } from "../src/core/facts-recall.ts";
-import { addTimelineEvent, getEntityTimeline } from "../src/core/timeline.ts";
-import {
-  addLink, countStalePagesForExtraction, graphNeighbors, graphQuery, listStalePagesForExtraction, traverseGraph,
-} from "../src/core/links.ts";
+import { addLink, graphNeighbors, graphQuery, traverseGraph } from "../src/core/links.ts";
 import { getLinks, listLinkSources } from "../src/core/links-read.ts";
 import { addTag, getTags } from "../src/core/tags.ts";
-import { getRawData, putRawData } from "../src/core/raw-data.ts";
 import { getIngestLog, logIngest } from "../src/core/ingest-log.ts";
 import { resolveSlugWithAlias, setSlugAlias } from "../src/core/slug-aliases.ts";
 import { resolveAliasCandidates, resolveAliasUnique } from "../src/core/page-aliases.ts";
 import { makeSlugResolver } from "../src/core/slug-canonicalize.ts";
 import { resolveSlugs } from "../src/core/slug-resolve.ts";
-import { buildGazetteer } from "../src/core/gazetteer.ts";
 import { getChunksForPage, getChunksForSource } from "../src/core/chunks-read.ts";
 import { findBacklinks } from "../src/core/backlinks.ts";
 import { entityId } from "../src/core/entities.ts";
 import { indexPageIntoSearch, pageSourcePath } from "../src/core/page-index.ts";
-import { resolveEntitiesToPointers } from "../src/core/context/reflex.ts";
-import { volunteerContext, volunteerUsageStats } from "../src/core/context/volunteer.ts";
-import { collectChronicle } from "../src/core/advisor/collectors.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 
 setDefaultTimeout(60000);
@@ -55,8 +44,6 @@ const SENTINEL = [NO_SOURCE_SENTINEL];
 
 let tmp: string;
 let storage: Storage;
-let factId: number;
-let retiredId: number;
 
 beforeAll(async () => {
   tmp = mkdtempSync(join(tmpdir(), "memrain-empty-scope-"));
@@ -75,16 +62,8 @@ beforeAll(async () => {
     compiled_truth: { aliases: ["Zeddo"] },
   });
   await putPage(storage, { slug: TARGET, type: "note", title: "Target", markdown_body: "t", source_id: B });
-  factId = (await addFact(storage, { entity_slug: SLUG, fact: TOKEN, source_id: B, visibility: "world" })).id!;
-  retiredId = (await addFact(storage, { entity_slug: SLUG, fact: `${TOKEN} old`, source_id: B, visibility: "world" })).id!;
-  await e.query(
-    `UPDATE entity_facts SET forgotten_at = NOW(), superseded_by = $1 WHERE id = $2`,
-    [factId, retiredId],
-  );
-  await addTimelineEvent(storage, { slug: SLUG, occurred_at: "2026-01-01T00:00:00Z", event: TOKEN, source_id: B });
   await addLink(storage, { source_slug: SLUG, target_slug: TARGET, type: "mentions", source_id: B });
   await addTag(storage, SLUG, "btag", B);
-  await putRawData(storage, SLUG, "crm", { token: TOKEN }, B);
   await logIngest(e, { source_type: "vault", summary: TOKEN, source_id: B });
   await setSlugAlias(e, { alias_slug: OLD_SLUG, canonical_slug: SLUG, source_id: B });
   await indexPageIntoSearch(
@@ -133,8 +112,7 @@ describe("pages", () => {
     await putPage(storage, { slug: PURGE_SLUG, type: "note", markdown_body: "p", source_id: B });
     await deletePage(storage, PURGE_SLUG, undefined, B);
     const none = await purgeDeletedPages(storage.engine(), 0, NONE);
-    expect(none).toEqual({ count: 0, slugs: [], blocked: [], ttl_hours: 0, raw_data_rows: 0, tags_rows: 0, slug_aliases_rows: 0, volunteer_event_rows: 0, hot_memory_rows: 0, synthesis_evidence_rows: 0, held_rows: 0, facts_retired: 0,
-      synthesis: { atoms: 0, takes: 0, contradictions: 0, concepts: 0, atom_pages: 0, concepts_regenerated: 0, concept_pages: 0, facts: 0 }, tombstoned: 0, secret_originals: 0 });
+    expect(none).toMatchObject({ count: 0, slugs: [], blocked: [], tombstoned: 0, secret_originals: 0 });
     const rows = await storage.engine().query(`SELECT 1 FROM pages WHERE slug = $1`, [PURGE_SLUG]);
     expect(rows.rows.length).toBe(1);
     const all = await purgeDeletedPages(storage.engine(), 0);
@@ -142,49 +120,7 @@ describe("pages", () => {
   });
 });
 
-describe("facts", () => {
-  it("listFacts", async () => {
-    expect(await listFacts(storage, SLUG, { sourceIds: NONE })).toEqual([]);
-    expect(await listFacts(storage, SLUG, { sourceIds: SENTINEL })).toEqual([]);
-    expect(JSON.stringify(await listFacts(storage, SLUG))).toContain(TOKEN);
-  });
-
-  it("listSupersessions", async () => {
-    expect(await listSupersessions(storage, { sourceIds: NONE })).toEqual([]);
-    expect((await listSupersessions(storage)).map(f => f.id)).toContain(retiredId);
-  });
-
-  it("countUnconsolidatedFacts", async () => {
-    expect(await countUnconsolidatedFacts(storage, NONE)).toBe(0);
-    expect(await countUnconsolidatedFacts(storage)).toBeGreaterThan(0);
-  });
-
-  it("entityRecall", async () => {
-    const r = await entityRecall(storage, SLUG, { sourceIds: NONE, include_pending: true });
-    expect(r.page).toBeNull();
-    expect(r.facts).toEqual([]);
-    expect(r.timeline).toEqual([]);
-    expect(JSON.stringify(r)).not.toContain(TOKEN);
-    expect(JSON.stringify(await entityRecall(storage, SLUG))).toContain(TOKEN);
-  });
-
-  it("recallFact", async () => {
-    expect(await recallFact(storage, factId, NONE)).toBeNull();
-    expect((await recallFact(storage, factId))?.fact).toBe(TOKEN);
-  });
-
-  it("forgetFact with [] neither forgets nor proves existence", async () => {
-    expect(await forgetFact(storage, factId, {}, NONE)).toEqual({ id: factId, found: false, forgotten: false, withdrawn_duplicates: 0 });
-    expect((await recallFact(storage, factId))?.forgotten_at).toBeNull();
-  });
-});
-
-describe("timeline, links, tags, raw data, ingest log", () => {
-  it("getEntityTimeline", async () => {
-    expect(await getEntityTimeline(storage, SLUG, { sourceIds: NONE })).toEqual([]);
-    expect(JSON.stringify(await getEntityTimeline(storage, SLUG))).toContain(TOKEN);
-  });
-
+describe("links, tags, ingest log", () => {
   it("graphNeighbors", async () => {
     expect(await graphNeighbors(storage, SLUG, { sourceIds: NONE })).toEqual([]);
     expect((await graphNeighbors(storage, SLUG)).length).toBeGreaterThan(0);
@@ -199,15 +135,6 @@ describe("timeline, links, tags, raw data, ingest log", () => {
     const scoped = await traverseGraph(storage, SLUG, { sourceIds: NONE });
     expect(scoped.map(h => h.slug)).not.toContain(TARGET);
     expect((await traverseGraph(storage, SLUG)).map(h => h.slug)).toContain(TARGET);
-  });
-
-  it("stale-extraction count and batch", async () => {
-    const versionTs = "2999-01-01T00:00:00Z";
-    const e = storage.engine();
-    expect(await countStalePagesForExtraction(e, { versionTs, sourceIds: NONE })).toBe(0);
-    expect(await listStalePagesForExtraction(e, { versionTs, batchSize: 50, sourceIds: NONE })).toEqual([]);
-    expect(await countStalePagesForExtraction(e, { versionTs })).toBeGreaterThan(0);
-    expect((await listStalePagesForExtraction(e, { versionTs, batchSize: 50 })).length).toBeGreaterThan(0);
   });
 
   it("getLinks", async () => {
@@ -226,11 +153,6 @@ describe("timeline, links, tags, raw data, ingest log", () => {
   it("getTags", async () => {
     expect(await getTags(storage, SLUG, NONE)).toEqual([]);
     expect(await getTags(storage, SLUG)).toContain("btag");
-  });
-
-  it("getRawData", async () => {
-    expect(await getRawData(storage, SLUG, { sourceIds: NONE })).toEqual([]);
-    expect(JSON.stringify(await getRawData(storage, SLUG))).toContain(TOKEN);
   });
 
   it("getIngestLog", async () => {
@@ -265,10 +187,6 @@ describe("slug and alias resolution", () => {
     expect((await resolveSlugs(storage, SLUG)).map(r => r.slug)).toEqual([SLUG]);
   });
 
-  it("buildGazetteer", async () => {
-    expect(await buildGazetteer(storage, "notes/elsewhere", NONE)).toEqual([]);
-    expect((await buildGazetteer(storage, "notes/elsewhere")).map(g => g.slug)).toContain(SLUG);
-  });
 });
 
 describe("chunks and backlinks", () => {
@@ -285,42 +203,5 @@ describe("chunks and backlinks", () => {
     expect((await findBacklinks(storage, TARGET)).length).toBe(1);
     expect(await findBacklinks(storage, "zeddicus", { type: "tag", sourceIds: NONE })).toEqual([]);
     expect((await findBacklinks(storage, "zeddicus", { type: "tag" })).length).toBe(1);
-  });
-});
-
-describe("context and advisor", () => {
-  const candidates = [{ display: TITLE, query: TITLE }];
-
-  it("resolveEntitiesToPointers", async () => {
-    expect(await resolveEntitiesToPointers(storage, candidates, { sourceIds: NONE })).toEqual([]);
-    expect((await resolveEntitiesToPointers(storage, candidates)).map(p => p.slug)).toContain(SLUG);
-  });
-
-  it("volunteerContext", async () => {
-    const window = [{ role: "user" as const, text: `I met ${TITLE} today. ${TITLE} said hello.` }];
-    expect(await volunteerContext(storage, { window, minConfidence: 0, sourceIds: NONE })).toEqual([]);
-    expect((await volunteerContext(storage, { window, minConfidence: 0 })).map(p => p.slug)).toContain(SLUG);
-  });
-
-  it("volunteerUsageStats counts nothing for an empty scope", async () => {
-    expect((await volunteerUsageStats(storage, 30, NONE)).total_volunteered).toBe(0);
-    await volunteerUsageStats(storage, 30);
-  });
-
-  it("collectChronicle stays silent without reading tenant data", async () => {
-    const seen: string[] = [];
-    const raw = storage.engine();
-    const engine = {
-      ...raw,
-      query: (sql: string, params?: unknown[]) => {
-        seen.push(sql);
-        return raw.query(sql, params);
-      },
-    } as unknown as Engine;
-    const ctx = { engine, version: "test", now: new Date() };
-    expect(await collectChronicle.collect({ ...ctx, sourceIds: NONE })).toEqual([]);
-    expect(seen).toEqual([]);
-    await collectChronicle.collect(ctx);
-    expect(seen.length).toBeGreaterThan(0);
   });
 });

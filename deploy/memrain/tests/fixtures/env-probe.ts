@@ -10,7 +10,6 @@ import type { Config } from "../../src/core/config.ts";
 import { oauthRequireLoginFromEnv } from "../../src/core/oauth-provider.ts";
 import { tenantFailClosedEnabled } from "../../src/core/auth-info.ts";
 import { resolveQuiescence } from "../../src/core/quiescence.ts";
-import { resolveModel } from "../../src/core/llm/resolve-model.ts";
 import { resolveIssuer } from "../../src/http/oauth-metadata.ts";
 import { isPublicMcpToolForbidden } from "../../src/http/public_guard.ts";
 
@@ -30,6 +29,5 @@ console.log(
     publicWrite: !isPublicMcpToolForbidden("page_put"),
     tenantFailClosed: tenantFailClosedEnabled(),
     quiescence: resolveQuiescence(),
-    expansionModel: resolveModel("utility", undefined, "expansion"),
   }),
 );

@@ -12,8 +12,6 @@ import { deletePage, getPage, putPage, renamePage } from "../src/core/pages.ts";
 import { purgeDeletedPages } from "../src/core/pages-purge.ts";
 import { withSecretDisposition } from "../src/core/secret-scan.ts";
 import { kekFromBytes } from "../src/core/vault.ts";
-import { rotateKek } from "../src/core/connectors/vault-rotate.ts";
-import { parseFactsFence, renderFactsFence } from "../src/core/facts-fence.ts";
 import { OUTSIDE_NEUTRALIZED } from "../src/core/fence-carry.ts";
 import {
   applySecretRestore,
@@ -152,81 +150,6 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     });
   });
 
-  describe("restore of a false positive", () => {
-    it("puts the original back under a preview hash, records a version, and stays back on later edits", async () => {
-      await putPage(storage, { slug: "notes/fp", markdown_body: `id ${AWS} and ${AWS2}\n` });
-      await putPage(storage, { slug: "notes/other", markdown_body: `x\n` });
-      const [first] = markersOf(await bodyOf("notes/fp"));
-      const preview = await previewSecretRestore(storage.engine(), { slug: "notes/fp", fingerprint: first!.fingerprint });
-      expect(preview.fields).toEqual(["body"]);
-      expect(JSON.stringify(preview)).not.toContain(AWS);
-      await expect(applySecretRestore(storage, { slug: "notes/fp", fingerprint: first!.fingerprint, expect: "0000000000000000" }, "t"))
-        .rejects.toMatchObject({ code: "conflict" });
-      const before = (await storage.engine().query<{ n: number }>(`SELECT max(version_n)::int AS n FROM page_versions WHERE slug = 'notes/fp'`)).rows[0]!.n;
-      const r = await applySecretRestore(storage, { slug: "notes/fp", fingerprint: first!.fingerprint, expect: preview.hash }, "t");
-      expect(r.version_n).toBe(before + 1);
-      expect(JSON.stringify(r)).not.toContain(AWS);
-      const body = await bodyOf("notes/fp");
-      expect(body).toContain(AWS);
-      expect(body).not.toContain(AWS2);
-      expect(markersOf(body)).toHaveLength(1);
-
-      await putPage(storage, { slug: "notes/fp", markdown_body: `${body}more\n` });
-      expect(await bodyOf("notes/fp")).toContain(AWS);
-      // Allowed only in this source's pages and only that value.
-      await putPage(storage, { slug: "notes/new", markdown_body: `again ${AWS}\n` });
-      expect(await bodyOf("notes/new")).toContain(AWS);
-    });
-
-    it("allows the value before writing it back, so a failed write leaves the entry as it was", async () => {
-      await putPage(storage, { slug: "notes/order", markdown_body: `x ${AWS}\n` });
-      const [m] = markersOf(await bodyOf("notes/order"));
-      const preview = await previewSecretRestore(storage.engine(), { slug: "notes/order", fingerprint: m!.fingerprint });
-      // A tombstone of the restored text makes the page write refuse.
-      await storage.engine().query(`INSERT INTO page_purges (source_id, content_hash, slug) VALUES ('default', $1, 'notes/gone')`,
-        [createHash("sha256").update(`x ${AWS}\n`, "utf8").digest("hex")]);
-      await expect(applySecretRestore(storage, { slug: "notes/order", fingerprint: m!.fingerprint, expect: preview.hash }, "t")).rejects.toThrow();
-      expect((await storage.engine().query<{ status: string }>(`SELECT status FROM secret_store`)).rows[0]!.status).toBe("active");
-      expect(await bodyOf("notes/order")).not.toContain(AWS);
-    });
-
-    it("keeps a neutralized transcript neutralized, so its next re-import still carries the brain's fence", async () => {
-      const slug = "transcripts/chatgpt/restore-p1";
-      const render = `session ${AWS}\n`;
-      await putPage(storage, { slug, type: "conversation", allowAdHocType: true, markdown_body: render, written_by: "transcripts-ingest", outsideText: true });
-      const page = (await getPage(storage, slug))!;
-      const fence = renderFactsFence([{ rowNum: 1, claim: "Uses staging.", confidence: 1, active: true }]);
-      await putPage(storage, { slug, type: "conversation", allowAdHocType: true, compiled_truth: page.compiled_truth,
-        markdown_body: `${page.markdown_body}\n## Facts\n\n${fence}\n`, written_by: "agent" });
-      const [m] = markersOf(await bodyOf(slug));
-      const preview = await previewSecretRestore(storage.engine(), { slug, fingerprint: m!.fingerprint });
-      await applySecretRestore(storage, { slug, fingerprint: m!.fingerprint, expect: preview.hash }, "t");
-      expect((await getPage(storage, slug))!.compiled_truth).toMatchObject({ [OUTSIDE_NEUTRALIZED]: 1 });
-
-      const again = await putPage(storage, { slug, type: "conversation", allowAdHocType: true, markdown_body: render, written_by: "transcripts-ingest", outsideText: true });
-      expect(again.held).toBeUndefined();
-      const body = await bodyOf(slug);
-      expect(body).toContain(AWS);
-      expect(parseFactsFence(body).map((f) => f.claim)).toEqual(["Uses staging."]);
-    });
-
-    it("refuses once the page no longer holds the marker", async () => {
-      await putPage(storage, { slug: "notes/gone", markdown_body: `x ${AWS}\n` });
-      const [m] = markersOf(await bodyOf("notes/gone"));
-      await putPage(storage, { slug: "notes/gone", markdown_body: `rewritten\n` });
-      await expect(previewSecretRestore(storage.engine(), { slug: "notes/gone", fingerprint: m!.fingerprint })).rejects.toMatchObject({ code: "not_found" });
-    });
-
-    it("refuses when the page changed since the preview", async () => {
-      await putPage(storage, { slug: "notes/race", markdown_body: `x ${AWS}\n` });
-      const [m] = markersOf(await bodyOf("notes/race"));
-      const preview = await previewSecretRestore(storage.engine(), { slug: "notes/race", fingerprint: m!.fingerprint });
-      await putPage(storage, { slug: "notes/race", markdown_body: `${await bodyOf("notes/race")}edit\n` });
-      await expect(applySecretRestore(storage, { slug: "notes/race", fingerprint: m!.fingerprint, expect: preview.hash }, "t"))
-        .rejects.toMatchObject({ code: "conflict" });
-      expect(await bodyOf("notes/race")).not.toContain(AWS);
-    });
-  });
 
   describe("purge and rename", () => {
     it("purging a page removes the originals only it held", async () => {
@@ -266,13 +189,4 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     });
   });
 
-  it("a connector key rotation reseals the store", async () => {
-    await putPage(storage, { slug: "notes/rot", markdown_body: `${AWS}\n` });
-    const [m] = markersOf(await bodyOf("notes/rot"));
-    const next = randomBytes(32);
-    const r = await rotateKek(storage.engine(), kekFromBytes(KEY), kekFromBytes(next));
-    expect(r.secretOriginals).toBe(1);
-    process.env.MEMRAIN_CONNECTOR_KEK = next.toString("base64");
-    expect((await revealSecret(storage.engine(), { slug: "notes/rot", fingerprint: m!.fingerprint }, "t")).value).toBe(AWS);
-  });
 });

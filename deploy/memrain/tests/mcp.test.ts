@@ -11,7 +11,6 @@ import { Storage } from "../src/core/storage.ts";
 import { startServer, type ServerHandle } from "../src/http/server.ts";
 import { RateLimiter } from "../src/mcp/rate_limit.ts";
 import { TOOL_DEFS } from "../src/mcp/tool_defs.ts";
-import { ADMIN_PANEL_ONLY_TOOLS } from "../src/mcp/visibility.ts";
 import { VERSION } from "../src/version.ts";
 
 let tmp: string;
@@ -86,8 +85,7 @@ describe("MCP HTTP transport", () => {
     expect(Object.keys(r.result).sort()).toEqual(
       ["_meta", "capabilities", "instructions", "protocolVersion", "serverInfo"],
     );
-    // The shipped pack offers read-only skills as prompts, so the handshake advertises them.
-    expect(r.result.capabilities).toEqual({ prompts: {}, tools: {} });
+    expect(r.result.capabilities).toEqual({ tools: {} });
   });
 
   it("refuses an unsupported MCP-Protocol-Version header after initialize, accepts a supported or absent one", async () => {
@@ -110,75 +108,17 @@ describe("MCP HTTP transport", () => {
 
   it("tools/list returns the registered tools", async () => {
     const r = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-    expect(r.result.tools.length).toBe(TOOL_DEFS.length - ADMIN_PANEL_ONLY_TOOLS.size);
+    expect(r.result.tools.length).toBe(TOOL_DEFS.length);
     const names = r.result.tools.map((t: any) => t.name).sort();
     expect(names).toEqual([
-      "add_fact",
       "add_tag",
-      "add_timeline_event",
-      "advisor",
       "backlinks",
-      "chronicle_backfill",
-      "chronicle_day",
-      "chronicle_last_seen",
-      "chronicle_on_this_day",
-      "chronicle_since",
-      "code_blast",
-      "code_callees",
-      "code_callers",
-      "code_def",
-      "code_flow",
-      "code_refs",
-      "context_delta",
-      "context_pack",
-      "daemons_status",
-      "entity_facts",
-      "entity_recall",
-      "entity_timeline",
-      "extract_facts",
-      "extraction_review",
-      "fact_supersessions",
-      "find_anomalies",
-      "find_contradictions",
-      "find_experts",
-      "find_orphans",
-      "find_trajectory",
-      "forget_fact",
-      "get_agent_job",
       "get_brain_identity",
-      "get_calibration_profile",
       "get_chunks",
-      "get_ingest_log",
-      "get_job_progress",
       "get_links",
-      "get_raw_data",
-      "get_recent_salience",
-      "get_recent_transcripts",
-      "get_skill",
-      "get_status_snapshot",
       "get_tags",
-      "graph_neighbors",
-      "graph_query",
       "index",
-      "jobs_cancel",
-      "jobs_get",
-      "jobs_list",
-      "jobs_logs",
-      "jobs_submit",
       "link",
-      "list_brain_skillpack",
-      "list_concepts",
-      "list_link_sources",
-      "list_skills",
-      "list_takes",
-      "log_friction",
-      "log_ingest",
-      "loops_list",
-      "loops_update",
-      "ontology_conflicts",
-      "ontology_dimensions",
-      "ontology_get",
-      "ontology_propose",
       "page_append",
       "page_delete",
       "page_edit",
@@ -190,35 +130,15 @@ describe("MCP HTTP transport", () => {
       "page_revert",
       "page_versions",
       "purge_deleted_pages",
-      "put_raw_data",
-      "quarantine_list",
-      "query",
-      "recall",
-      "relational_recall",
       "remove_tag",
       "resolve_slugs",
-      "retry_job",
       "run_doctor",
       "search",
       "search_exact",
-      "set_take_status",
-      "source_health",
       "sources_list",
       "sources_status",
       "stats",
-      "submit_agent",
-      "takes_add",
-      "takes_calibration",
-      "takes_resolve",
-      "takes_scorecard",
-      "takes_search",
-      "takes_update",
-      "think",
-      "traverse_graph",
       "unlink",
-      "volunteer_chronicle",
-      "volunteer_context",
-      "wanted_pages",
       "whoami",
     ]);
   });
@@ -270,7 +190,7 @@ describe("MCP HTTP transport", () => {
     expect(Array.isArray(r)).toBe(true);
     expect(r.length).toBe(2);
     expect(r[0].result).toEqual({});
-    expect(r[1].result.tools.length).toBe(TOOL_DEFS.length - ADMIN_PANEL_ONLY_TOOLS.size);
+    expect(r[1].result.tools.length).toBe(TOOL_DEFS.length);
   });
 });
 

@@ -389,7 +389,7 @@ describe("HTTP server end-to-end with public guard", () => {
     const body = (await r.json()) as { result: { tools: { name: string }[] } };
     const names = body.result.tools.map((t) => t.name).sort();
     expect(names).toContain("index");
-    expect(names).toContain("log_friction");
+    expect(names).toContain("page_put");
   });
 
   it("public MCP tools/call name=index → JSON-RPC error", async () => {

@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { discoverMigrations, revertMigration, runMigrations } from "../src/core/migrate.ts";
 import { Storage } from "../src/core/storage.ts";
 import { OAuthProvider } from "../src/core/oauth-provider.ts";
-import type { loadConfig } from "../src/core/config.ts";
 import { MAINTENANCE_ENV, resolveQuiescence } from "../src/core/quiescence.ts";
 import { bootTokenSweep, startBackgroundWork, type BackgroundDeps } from "../src/commands/serve.ts";
 import { setSpendLedgerEngine } from "../src/core/budget.ts";
@@ -65,28 +64,19 @@ for (const { name, open } of ENGINES) {
       const sweep = mock(() => provider.sweepExpiredTokens());
       await bootTokenSweep({ sweepExpiredTokens: sweep }, q);
       const deps = {
-        registerSource: mock(async () => {}),
-        sweepCodeRoots: mock(async () => ({ scanned: 0, reindexed: 0, skipped: 0, parseErrors: 0, errors: [], perRoot: [] })),
-        startCycleLoop: mock(() => ({ stop: async () => {} })),
-        startWorker: mock(() => {}),
-        workerIntervalMs: 20,
+        startHousekeeping: mock(() => ({ stop: async () => {} })),
       };
       const log = console.log;
       console.log = () => {};
       try {
-        const { worker } = startBackgroundWork(
-          storage,
-          {} as ReturnType<typeof loadConfig>,
-          q,
-          deps as unknown as BackgroundDeps,
-        );
+        const housekeeping = startBackgroundWork(storage, q, undefined, deps as unknown as BackgroundDeps);
         await new Promise((res) => setTimeout(res, 50));
-        await worker.stop();
+        expect(housekeeping).toBeNull();
       } finally {
         console.log = log;
       }
       expect(sweep).not.toHaveBeenCalled();
-      for (const fn of [deps.registerSource, deps.sweepCodeRoots, deps.startCycleLoop, deps.startWorker]) {
+      for (const fn of [deps.startHousekeeping]) {
         expect(fn).not.toHaveBeenCalled();
       }
       expect(await db.manifest()).toBe(up);

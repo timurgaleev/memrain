@@ -23,7 +23,6 @@ import {
   trackedInvoke,
 } from "../src/core/budget.ts";
 import { dispatchTool } from "../src/mcp/dispatch.ts";
-import { FactsQueue } from "../src/core/facts-queue.ts";
 
 /** A tiny worst case: holds a fraction of a cent against a capped client. */
 const SMALL = { input: "x", maxOutputTokens: 0 };
@@ -221,66 +220,3 @@ describe("a personal access token's cap", () => {
   });
 });
 
-describe("the cap travels with the request", () => {
-  it("reaches a paid op from the caller's AuthInfo, with no row to look it up in", async () => {
-    const r = await dispatchTool(
-      storage,
-      { name: "extract_facts", arguments: { text: "Ada founded Acme in 2020." } },
-      { authInfo: { token: "t", clientId: "nobody-in-the-db", scopes: ["read", "write"], isPublic: false, budgetUsdPerDay: 0 } },
-    );
-    expect(r.isError).toBe(true);
-    expect(JSON.stringify(r.content)).toContain("budget_exhausted");
-  });
-
-  it("is charged to the enrolled person, not the connector they share", async () => {
-    await runWithSpendClient({ clientId: "memex_enr_person", capUsd: 0.5 }, () =>
-      trackedInvoke({ operation: "think", model: HAIKU, worstCase: SMALL }, async (m) => {
-        m.report({ inputTokens: 600_000, outputTokens: 0 });
-      }),
-    );
-    const as = (spendId?: string) =>
-      dispatchTool(
-        storage,
-        { name: "extract_facts", arguments: { text: "Ada founded Acme in 2020." } },
-        {
-          authInfo: {
-            token: "t",
-            clientId: "shared-connector",
-            scopes: ["read", "write"],
-            isPublic: false,
-            budgetUsdPerDay: 0.5,
-            ...(spendId ? { spendId } : {}),
-          },
-        },
-      );
-    expect(JSON.stringify((await as("memex_enr_person")).content)).toContain("budget_exhausted");
-    expect(JSON.stringify((await as()).content)).not.toContain("budget_exhausted");
-  });
-
-  it("is carried into a queued extraction", async () => {
-    const q = new FactsQueue({ perSessionInflightCap: 1 });
-    let seen: unknown;
-    await runWithSpendClient({ clientId: "alpha", capUsd: 3 }, async () => {
-      q.enqueue(async () => {
-        seen = currentSpendContext();
-      }, "s");
-    });
-    await new Promise((r) => setTimeout(r, 30));
-    expect(seen).toEqual({ clientId: "alpha", capUsd: 3 });
-  });
-
-  it("is found for a PAT when authentication did not carry it", async () => {
-    await storage.engine().query(
-      `INSERT INTO access_tokens (name, token_hash, scopes, budget_usd_per_day) VALUES ('queued-pat', 'h', $1, 0.01)`,
-      [["read"]],
-    );
-    await runWithSpendClient("queued-pat", () =>
-      trackedInvoke({ operation: "think", model: HAIKU, worstCase: SMALL }, async (m) => {
-        m.report({ inputTokens: 1_000_000, outputTokens: 0 });
-      }),
-    );
-    await expect(
-      runWithSpendClient("queued-pat", () => trackedInvoke({ operation: "think", model: HAIKU, worstCase: SMALL }, async () => {})),
-    ).rejects.toMatchObject({ code: "budget_exhausted" });
-  });
-});

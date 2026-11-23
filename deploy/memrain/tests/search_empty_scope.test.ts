@@ -12,8 +12,6 @@ import { putPage } from "../src/core/pages.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { indexPageIntoSearch } from "../src/core/page-index.ts";
 import { hybridSearch } from "../src/core/search/hybrid.ts";
-import { currentDocumentClock } from "../src/core/generation.ts";
-import { putCachedQuery, queryCacheBucketKey, queryCacheKey } from "../src/core/search/query-cache.ts";
 import { NO_SOURCE_SENTINEL } from "../src/core/auth-info.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 
@@ -47,10 +45,10 @@ afterAll(async () => {
 
 describe("hybridSearch with no grant", () => {
   for (const [label, scope] of [["[]", []], ["sentinel", [NO_SOURCE_SENTINEL]]] as const) {
-    it(`returns nothing for ${label} on the keyword, vector and title arms`, async () => {
+    it(`returns nothing for ${label} on the keyword and vector arms`, async () => {
       embedCalls = 0;
       for (const q of ["wombat", TITLE]) {
-        const hits = await hybridSearch(storage, q, { k: 10, sourceIds: scope, rerank: false, embedQuery: embedFn });
+        const hits = await hybridSearch(storage, q, { k: 10, sourceIds: scope, embedQuery: embedFn });
         expect(JSON.stringify(hits)).not.toContain(TOKEN);
         expect(hits).toEqual([]);
       }
@@ -58,32 +56,10 @@ describe("hybridSearch with no grant", () => {
     });
   }
 
-  it("never serves an operator-cached or poisoned cache entry to a caller with no grant", async () => {
-    const engine = storage.engine();
-    const q = "wombat cached probe";
-    const warm = await hybridSearch(storage, q, { k: 10, rerank: false, embedQuery: embedFn });
-    expect(JSON.stringify(warm)).toContain(TOKEN);
-    const hits = await hybridSearch(storage, q, { k: 10, sourceIds: [], rerank: false, embedQuery: embedFn });
-    expect(hits).toEqual([]);
 
-    const chunk = await engine.query<{ id: string; document_id: string }>(
-      `SELECT id, document_id FROM chunks WHERE content LIKE '%' || $1 || '%' LIMIT 1`,
-      [TOKEN],
-    );
-    const { id, document_id } = chunk.rows[0]!;
-    const poisoned = "wombat poisoned probe";
-    await putCachedQuery(engine, queryCacheKey(poisoned, 10, [], false), poisoned, 10, "topic", [id], await currentDocumentClock(engine), [document_id]);
-    const served = await hybridSearch(storage, poisoned, { k: 10, sourceIds: [], rerank: false, embedQuery: embedFn });
-    expect(JSON.stringify(served)).not.toContain(TOKEN);
-  });
-
-  it("keys an empty grant apart from the operator on both cache arms", () => {
-    expect(queryCacheKey("q", 10, [], false)).not.toBe(queryCacheKey("q", 10, undefined, false));
-    expect(queryCacheBucketKey(10, [], false)).not.toBe(queryCacheBucketKey(10, undefined, false));
-  });
 
   it("still serves the operator the whole brain", async () => {
-    const hits = await hybridSearch(storage, "wombat", { k: 10, rerank: false, embedQuery: embedFn });
+    const hits = await hybridSearch(storage, "wombat", { k: 10, embedQuery: embedFn });
     expect(JSON.stringify(hits)).toContain(TOKEN);
   });
 });

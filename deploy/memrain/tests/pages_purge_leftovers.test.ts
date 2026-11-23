@@ -15,20 +15,16 @@ import type { PostgresEngine } from "../src/core/engine/postgres.ts";
 import { pgTestEngine } from "./helpers/pg-test-engine.ts";
 import { purgeDeletedPages } from "../src/core/pages-purge.ts";
 import { deletePage, putPage } from "../src/core/pages.ts";
-import { putRawData } from "../src/core/raw-data.ts";
 import { addTag } from "../src/core/tags.ts";
-import { orphansPurgePhase } from "../src/core/cycle/orphans-purge.ts";
 import { PageNotFoundError } from "../src/core/operation-error.ts";
 import { storageEngines } from "./helpers/storage-engines.ts";
-import { addFact, entityRecall } from "../src/core/facts.ts";
-import { renderFactsFence } from "../src/core/facts-fence.ts";
-import { reconcileFactsForPage } from "../src/core/facts-reconcile.ts";
+import { seedFact, seedRawData } from "./helpers/seed-rows.ts";
 
 const PG_URL = process.env.MEMRAIN_TEST_POSTGRES_URL;
 
 async function seedPurgeable(storage: Storage, slug: string): Promise<void> {
   await putPage(storage, { slug, type: "person", source_id: "default" });
-  await putRawData(storage, slug, "crm", { v: 1 });
+  await seedRawData(storage, slug, "crm", { v: 1 });
   await addTag(storage, slug, "vip");
   await deletePage(storage, slug);
   await storage.engine().query(
@@ -112,14 +108,6 @@ describe("purge leftovers (PGLite)", () => {
     expect(await leftovers(storage, "people/a")).toEqual({ raw: 1, tags: 1 });
   });
 
-  it("the orphans phase reports raw_data and tags rows that have no page", async () => {
-    await storage.engine().query(`INSERT INTO raw_data (slug, source, data) VALUES ('people/gone', 'crm', '{}')`);
-    await storage.engine().query(`INSERT INTO tags (slug, tag, source_id) VALUES ('people/gone', 'vip', 'default')`);
-    const r = await orphansPurgePhase(storage.engine());
-    expect(r.flagged.raw_data_without_page).toBe(1);
-    expect(r.flagged.tags_without_page).toBe(1);
-    expect(await leftovers(storage, "people/gone")).toEqual({ raw: 1, tags: 1 });
-  });
 });
 
 describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
@@ -157,7 +145,7 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
   it("a fact forgotten while the purge waits on its row keeps the forget", async () => {
     const page = `notes/purge-forget-race-${run}`;
     await putPage(storage, { slug: page, markdown_body: "gone" });
-    const id = (await addFact(storage, { entity_slug: `people/purge-forget-race-${run}`, fact: "Likes tea.", source_slug: page })).id!;
+    const id = (await seedFact(storage, { entity_slug: `people/purge-forget-race-${run}`, fact: "Likes tea.", source_slug: page })).id!;
     await deletePage(storage, page);
     await pg.query(`UPDATE pages SET deleted_at = NOW() - interval '1000 hours' WHERE slug = $1`, [page]);
     const forgetter = pgTestEngine({ url: PG_URL!, max: 2 });
@@ -193,7 +181,7 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
   // and its leftover DELETE has already run by then. A write that checked the
   // page without locking it would insert in that window and outlive the purge.
   const racers = [
-    ["putRawData", (s: Storage) => putRawData(s, raceSlug, "crm", { v: 2 })],
+    ["putRawData", (s: Storage) => seedRawData(s, raceSlug, "crm", { v: 2 })],
     ["addTag", (s: Storage) => addTag(s, raceSlug, "vip")],
   ] as const;
   for (const [name, write] of racers) {
@@ -260,10 +248,15 @@ for (const { name, open } of storageEngines(PG_URL)) describe(`purge retires fac
   beforeEach(async () => { db = await open(); });
   afterEach(async () => { await db.close(); });
 
-  const fenced = (claim: string) => `## Facts\n\n${renderFactsFence([{ rowNum: 1, claim, confidence: 1, active: true }])}\n`;
+  // A page whose facts fence an earlier build projected: the page, and the fact
+  // row its fence reconcile wrote.
   async function writeFenced(slug: string, claim: string): Promise<void> {
-    const p = await putPage(db.storage, { slug, markdown_body: fenced(claim) });
-    await reconcileFactsForPage(db.storage, slug, p.content_hash, "default");
+    await putPage(db.storage, { slug, markdown_body: `# ${slug}\n\n${claim}\n` });
+    await db.storage.engine().query(
+      `INSERT INTO entity_facts (entity_slug, fact, source_slug, source_markdown_slug, row_num, source_id, visibility, written_by)
+       VALUES ($1, $2, $1, $1, 1, 'default', 'world', 'facts-fence')`,
+      [slug, claim],
+    );
   }
   async function expire(slug: string): Promise<void> {
     await deletePage(db.storage, slug);
@@ -273,7 +266,12 @@ for (const { name, open } of storageEngines(PG_URL)) describe(`purge retires fac
     await db.storage.engine().query(
       "INSERT INTO sources (id, kind, path_prefix) VALUES ($1, 'other', $2) ON CONFLICT (id) DO NOTHING", [id, `/${id}`]);
   }
-  const recalled = async (slug: string) => (await entityRecall(db.storage, slug)).facts.map((f) => f.fact).sort();
+  // The facts a reader would see: not forgotten, and not from a soft-deleted page.
+  const recalled = async (slug: string) => (await db.storage.engine().query<{ fact: string }>(
+    `SELECT f.fact FROM entity_facts f
+      WHERE f.entity_slug = $1 AND f.forgotten_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM pages p WHERE p.slug = COALESCE(f.source_markdown_slug, f.source_slug) AND p.deleted_at IS NOT NULL)
+      ORDER BY f.fact`, [slug])).rows.map((r) => r.fact);
   const state = async (id: number) => (await db.storage.engine().query<{ forgotten_at: string | null; forgotten_cause: string | null }>(
     `SELECT forgotten_at::text AS forgotten_at, forgotten_cause FROM entity_facts WHERE id = $1`, [id])).rows[0]!;
   const LIVE = { forgotten_at: null, forgotten_cause: null };
@@ -281,7 +279,7 @@ for (const { name, open } of storageEngines(PG_URL)) describe(`purge retires fac
   it("purged-page facts stay out of entity_recall after the purge and after the slug is reused", async () => {
     await writeFenced("people/gone", "Likes tea.");
     await putPage(db.storage, { slug: "notes/gone-src", markdown_body: "source" });
-    const about = (await addFact(db.storage, { entity_slug: "people/other", fact: "Met at the gone page.", source_slug: "notes/gone-src" })).id!;
+    const about = (await seedFact(db.storage, { entity_slug: "people/other", fact: "Met at the gone page.", source_slug: "notes/gone-src" })).id!;
     await expire("people/gone");
     await expire("notes/gone-src");
     expect(await recalled("people/gone")).toEqual([]);
@@ -310,9 +308,9 @@ for (const { name, open } of storageEngines(PG_URL)) describe(`purge retires fac
   it("facts written on another live page, or naming no source, survive", async () => {
     await putPage(db.storage, { slug: "notes/gone", markdown_body: "gone" });
     await putPage(db.storage, { slug: "notes/kept", markdown_body: "kept" });
-    await addFact(db.storage, { entity_slug: "people/x", fact: "Lives in Oslo.", source_slug: "notes/gone" });
-    await addFact(db.storage, { entity_slug: "people/x", fact: "Works at Acme.", source_slug: "notes/kept" });
-    await addFact(db.storage, { entity_slug: "notes/gone", fact: "Was a draft." });
+    await seedFact(db.storage, { entity_slug: "people/x", fact: "Lives in Oslo.", source_slug: "notes/gone" });
+    await seedFact(db.storage, { entity_slug: "people/x", fact: "Works at Acme.", source_slug: "notes/kept" });
+    await seedFact(db.storage, { entity_slug: "notes/gone", fact: "Was a draft." });
     await expire("notes/gone");
     expect(await purgeDeletedPages(db.storage.engine())).toMatchObject({ count: 1, facts_retired: 1 });
     expect(await recalled("people/x")).toEqual(["Works at Acme."]);
@@ -322,8 +320,8 @@ for (const { name, open } of storageEngines(PG_URL)) describe(`purge retires fac
   it("retires the purged page's copy of a claim and keeps the supporting page's own fact", async () => {
     await putPage(db.storage, { slug: "notes/gone", markdown_body: "gone" });
     await putPage(db.storage, { slug: "notes/kept", markdown_body: "kept" });
-    const onGone = (await addFact(db.storage, { entity_slug: "people/x", fact: "Speaks Dutch.", source_slug: "notes/gone", written_by: "w1" })).id!;
-    const onKept = (await addFact(db.storage, { entity_slug: "people/x", fact: "speaks  dutch.", source_slug: "notes/kept", written_by: "w2" })).id!;
+    const onGone = (await seedFact(db.storage, { entity_slug: "people/x", fact: "Speaks Dutch.", source_slug: "notes/gone", written_by: "w1" })).id!;
+    const onKept = (await seedFact(db.storage, { entity_slug: "people/x", fact: "speaks  dutch.", source_slug: "notes/kept", written_by: "w2" })).id!;
     await expire("notes/gone");
     expect(await purgeDeletedPages(db.storage.engine())).toMatchObject({ count: 1, facts_retired: 1 });
     expect(await state(onGone)).toMatchObject({ forgotten_cause: "purge" });
@@ -334,8 +332,8 @@ for (const { name, open } of storageEngines(PG_URL)) describe(`purge retires fac
   it("purging both pages that state a claim, one after the other, leaves no visible copy", async () => {
     await putPage(db.storage, { slug: "notes/first", markdown_body: "first" });
     await putPage(db.storage, { slug: "notes/second", markdown_body: "second" });
-    await addFact(db.storage, { entity_slug: "people/x", fact: "Speaks Dutch.", source_slug: "notes/first", written_by: "w1" });
-    await addFact(db.storage, { entity_slug: "people/x", fact: "Speaks Dutch.", source_slug: "notes/second", written_by: "w2" });
+    await seedFact(db.storage, { entity_slug: "people/x", fact: "Speaks Dutch.", source_slug: "notes/first", written_by: "w1" });
+    await seedFact(db.storage, { entity_slug: "people/x", fact: "Speaks Dutch.", source_slug: "notes/second", written_by: "w2" });
     await expire("notes/first");
     expect(await purgeDeletedPages(db.storage.engine())).toMatchObject({ slugs: ["notes/first"], facts_retired: 1 });
     await expire("notes/second");
@@ -355,11 +353,11 @@ for (const { name, open } of storageEngines(PG_URL)) describe(`purge retires fac
       `INSERT INTO documents (id, source_path, frontmatter) VALUES ('held-mirror', 'page://notes/held', '{"quarantine": {"detail": "x"}}'::jsonb)`);
     const ids: number[] = [];
     for (const fact of ["Owns a boat.", "Plays chess.", "Runs daily."])
-      ids.push((await addFact(db.storage, { entity_slug: "people/x", fact, source_slug: "notes/gone", written_by: "w1" })).id!);
-    await addFact(db.storage, { entity_slug: "people/x", fact: "Owns a boat.", source_slug: "notes/held", written_by: "w2" });
-    await addFact(db.storage, { entity_slug: "people/x", fact: "Plays chess.", source_slug: "notes/deleted", written_by: "w2" });
+      ids.push((await seedFact(db.storage, { entity_slug: "people/x", fact, source_slug: "notes/gone", written_by: "w1" })).id!);
+    await seedFact(db.storage, { entity_slug: "people/x", fact: "Owns a boat.", source_slug: "notes/held", written_by: "w2" });
+    await seedFact(db.storage, { entity_slug: "people/x", fact: "Plays chess.", source_slug: "notes/deleted", written_by: "w2" });
     await deletePage(db.storage, "notes/deleted");
-    await addFact(db.storage, { entity_slug: "people/x", fact: "Runs daily.", source_slug: "notes/foreign", written_by: "w2", source_id: "other" });
+    await seedFact(db.storage, { entity_slug: "people/x", fact: "Runs daily.", source_slug: "notes/foreign", written_by: "w2", source_id: "other" });
     await expire("notes/gone");
     expect(await purgeDeletedPages(db.storage.engine(), undefined, undefined, { slugs: ["notes/gone"] }))
       .toMatchObject({ count: 1, facts_retired: 3 });
@@ -369,7 +367,7 @@ for (const { name, open } of storageEngines(PG_URL)) describe(`purge retires fac
   it("leaves another source's fact that names the purged slug alone", async () => {
     await addSource("other");
     await putPage(db.storage, { slug: "notes/gone", markdown_body: "gone" });
-    const foreign = (await addFact(db.storage, { entity_slug: "people/x", fact: "Cited elsewhere.", source_slug: "notes/gone", source_id: "other" })).id!;
+    const foreign = (await seedFact(db.storage, { entity_slug: "people/x", fact: "Cited elsewhere.", source_slug: "notes/gone", source_id: "other" })).id!;
     await expire("notes/gone");
     expect(await purgeDeletedPages(db.storage.engine())).toMatchObject({ count: 1, facts_retired: 0 });
     expect(await state(foreign)).toEqual(LIVE);

@@ -88,14 +88,6 @@ describe("stamping", () => {
     expect(await principals("page_versions", "slug", "wbp/op")).toEqual(["operator", null]);
   });
 
-  it("records the grant on facts and timeline events", async () => {
-    const who = auth();
-    await call("page_put", { slug: "wbp/ent", markdown_body: "x" }, who);
-    await call("add_fact", { entity_slug: "wbp/ent", fact: "likes tea", written_by: "someone-else" }, who);
-    await call("add_timeline_event", { slug: "wbp/ent", occurred_at: "2026-01-02T00:00:00Z", event: "met" }, who);
-    expect(await principals("entity_facts", "entity_slug", "wbp/ent")).toEqual(["client:client-a"]);
-    expect(await principals("timeline_events", "slug", "wbp/ent")).toEqual(["client:client-a"]);
-  });
 });
 
 describe("visibility", () => {

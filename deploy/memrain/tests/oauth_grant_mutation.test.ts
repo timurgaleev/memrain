@@ -21,7 +21,6 @@ import {
 } from "../src/core/oauth-provider.ts";
 import type { ClientGrantSnapshot, GrantMutationOptions } from "../src/core/oauth-provider.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { setCredentialMinTrust } from "../src/core/token-min-trust.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -485,20 +484,3 @@ describe("grantWidens", () => {
   });
 });
 
-describe("setCredentialMinTrust — OAuth client", () => {
-  // protects: the trust floor is part of the grant revision, so a grant editor
-  // that previewed the old floor cannot overwrite a CLI change.
-  // fails_when: the CLI writer skips the revision bump or the audit row.
-  it("bumps the revision and writes one audit row with the floor before and after", async () => {
-    const { clientId } = await register();
-    const change = await setCredentialMinTrust(storage.raw(), clientId, "owner", { actor: "ops", via: "cli" });
-    expect(change).toMatchObject({ kind: "oauth_client", id: clientId, before: null, after: "owner" });
-    expect(Number((await clientRow(clientId)).grant_revision)).toBe(1);
-    const [row] = await provider.listGrantAudit(clientId);
-    expect(row).toMatchObject({ revision: 1, actor: "ops", via: "cli" });
-    expect((row!.before as ClientGrantSnapshot).min_trust).toBeNull();
-    expect(row!.after).toMatchObject({ min_trust: "owner", action: "set_min_trust" });
-    await expect(provider.rescopeClient(clientId, { minTrust: "agent" }, { ...CLI, expectedRevision: 0 }))
-      .rejects.toBeInstanceOf(GrantConflictError);
-  });
-});

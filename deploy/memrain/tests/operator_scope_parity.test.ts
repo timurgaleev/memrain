@@ -15,8 +15,10 @@ import { Storage } from "../src/core/storage.ts";
 import { dispatchTool, type ToolCallResult } from "../src/mcp/dispatch.ts";
 import type { AuthInfo } from "../src/core/auth-info.ts";
 import {
-  A, auth, B, CODE_SYM, ENTITY_SLUG, GATEWAY, KEYWORD, SHARED_PATH, SHARED_TITLE, seedTenantContract, WIKI_NAME,
+  A, auth, B, GATEWAY, KEYWORD, SHARED_PATH, SHARED_TITLE, seedTenantContract, WIKI_NAME,
 } from "./helpers/tenant_seed.ts";
+import { seedRawData, seedTimelineEvent } from "./helpers/seed-rows.ts";
+import { logIngest } from "../src/core/ingest-log.ts";
 
 setDefaultTimeout(60000);
 
@@ -26,51 +28,16 @@ const RECORD = process.env["MEMRAIN_RECORD_OPERATOR_PARITY"] === "1";
 const CALLS: Array<[string, Record<string, unknown>]> = [
   ["search", { q: KEYWORD }],
   ["search", { q: SHARED_TITLE }],
-  ["query", { q: KEYWORD }],
   ["get_chunks", { source_path: SHARED_PATH }],
   ["page_list", {}],
   ["page_get", { slug: GATEWAY }],
   ["get_links", { slug: GATEWAY }],
   ["backlinks", { name: WIKI_NAME }],
   ["get_tags", { slug: GATEWAY }],
-  ["graph_neighbors", { slug: GATEWAY }],
-  ["graph_query", { type: "mentions", source_slug: GATEWAY }],
-  ["traverse_graph", { start_slug: GATEWAY, direction: "outbound", max_depth: 3 }],
-  ["list_link_sources", {}],
-  ["find_experts", { limit: 5 }],
-  ["find_contradictions", {}],
-  ["find_trajectory", { entity_slug: ENTITY_SLUG }],
-  ["find_anomalies", { sigma: 1, limit: 50 }],
-  ["find_orphans", {}],
-  ["wanted_pages", {}],
-  ["get_recent_salience", { limit: 100 }],
-  ["entity_recall", { slug: ENTITY_SLUG }],
-  ["entity_facts", { entity_slug: ENTITY_SLUG }],
-  ["entity_timeline", { slug: ENTITY_SLUG }],
   ["resolve_slugs", { query: SHARED_TITLE }],
-  ["code_def", { name: CODE_SYM }],
-  ["code_refs", { name: CODE_SYM }],
-  ["code_callers", { name: CODE_SYM }],
-  ["code_callees", { target: `${SHARED_PATH}:2` }],
-  ["code_flow", { symbol: CODE_SYM, exact: true }],
-  ["code_blast", { symbol: CODE_SYM, exact: true }],
-  ["list_takes", {}],
-  ["takes_search", { q: "claim" }],
-  ["list_concepts", {}],
-  ["chronicle_since", { since: "2020-01-01" }],
-  ["volunteer_context", { window: KEYWORD }],
   ["sources_list", {}],
   ["whoami", {}],
   ["page_versions", { slug: "team-b/alice" }],
-  ["get_raw_data", { slug: "team-b/alice" }],
-  ["get_ingest_log", {}],
-  ["fact_supersessions", { limit: 500 }],
-  ["recall", { id: "$factIdB" }],
-  ["get_recent_transcripts", { days: 36500 }],
-  ["source_health", {}],
-  ["chronicle_day", { date: "2026-01-02" }],
-  ["chronicle_on_this_day", { date: "2027-01-02" }],
-  ["ontology_get", { entity: ENTITY_SLUG }],
 ];
 
 type Recorded = { call: string; sql: Array<{ text: string; params: unknown }>; result: unknown };
@@ -133,10 +100,10 @@ beforeAll(async () => {
   const write = (name: string, args: Record<string, unknown>, who: AuthInfo): Promise<ToolCallResult> =>
     dispatchTool(storage, { name, arguments: args }, { authInfo: who });
   for (const [who, tag, slug] of [[A, "AAA", "team-a/alice"], [B, "BBB", "team-b/alice"]] as const) {
-    await write("put_raw_data", { slug, source: "parity", data: { note: `${tag}_RAW_note` } }, auth(who));
-    await write("log_ingest", { source_type: "parity", source_ref: `${tag}_INGEST_ref` }, auth(who));
-    await write("ontology_propose", { entity: ENTITY_SLUG, dimension: "role", value: `${tag}_ONTO`, visibility: "world" }, auth(who));
-    await write("add_timeline_event", { slug, occurred_at: "2026-01-02T12:00:00Z", event: `${tag}_EVENT_fixed` }, auth(who));
+    // Rows an earlier build's tools wrote; no kept read may surface them differently.
+    await seedRawData(storage, slug, "parity", { note: `${tag}_RAW_note` });
+    await logIngest(storage.engine(), { source_type: "parity", source_ref: `${tag}_INGEST_ref`, source_id: who });
+    await seedTimelineEvent(storage, { slug, occurred_at: "2026-01-02T12:00:00Z", event: `${tag}_EVENT_fixed`, source_id: who });
     await write("page_append", { slug, content: `${tag}_APPENDED` }, auth(who));
   }
 });

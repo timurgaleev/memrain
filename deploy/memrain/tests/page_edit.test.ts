@@ -375,16 +375,21 @@ describe("request_id replay", () => {
   it("replays page_edit's own response after the derived work failed", async () => {
     await putPage(storage, { slug: "notes/plan", markdown_body: "Status: draft\n" });
     const engine = storage.engine();
-    const query = engine.query.bind(engine);
+    const transaction = engine.transaction.bind(engine);
     let failed = false;
-    // The derived work after the commit (link watermark) throws once.
-    engine.query = (async (sql: string, params?: unknown[]) => {
-      if (!failed && sql.includes("links_extracted_at = NOW()")) {
-        failed = true;
-        throw new Error("derived sync failed");
-      }
-      return query(sql, params);
-    }) as typeof engine.query;
+    // The derived work after the commit (the wikilink sync) throws once.
+    engine.transaction = (async (fn: Parameters<typeof engine.transaction>[0]) =>
+      transaction(async (tx) => {
+        const txQuery = tx.query.bind(tx);
+        tx.query = (async (sql: string, params?: unknown[]) => {
+          if (!failed && sql.includes("link_source = 'markdown'") && sql.includes("DELETE FROM links")) {
+            failed = true;
+            throw new Error("derived sync failed");
+          }
+          return txQuery(sql, params);
+        }) as typeof tx.query;
+        return fn(tx);
+      })) as typeof engine.transaction;
     const args = {
       slug: "notes/plan",
       expected_version: 1,
@@ -395,7 +400,7 @@ describe("request_id replay", () => {
     try {
       first = await edit(args);
     } finally {
-      engine.query = query;
+      engine.transaction = transaction;
     }
     expect(failed).toBe(true);
     expect(first.isError).toBe(true);

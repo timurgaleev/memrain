@@ -92,7 +92,7 @@ function token(scopes: string[]): AuthInfo {
 }
 
 /** Backticked names in the contract that are result fields, not tools. */
-const FIELD_NAMES = new Set(["version", "expected_version", "version_conflict", "current_version", "triggers", "usable_tools", "error", "suggestion"]);
+const FIELD_NAMES = new Set(["version", "expected_version", "version_conflict", "current_version", "error", "suggestion"]);
 
 describe("the contract per caller", () => {
   it("asks both readers and writers to recall before answering and to use the effective date", () => {
@@ -101,7 +101,6 @@ describe("the contract per caller", () => {
       expect(out).toContain("prior work, people, projects or decisions");
       expect(out).toContain("before answering");
       expect(out).toContain("in force on the date");
-      expect(out).toContain("`list_skills` with `query`");
     }
   });
   it("fits the 2,048 characters capped harnesses read, with every tool callable", () => {
@@ -117,20 +116,19 @@ describe("the contract per caller", () => {
     expect(tools.filter((n) => !TOOL_DEFS.some((t) => t.name === n))).toEqual([]);
   });
 
-  it("tells the operator about skills, the memory loop, version guards and health tools", () => {
-    for (const fragment of ["`list_skills`", "`get_skill`", "`usable_tools`", "`context_pack`", "`volunteer_context`", "`expected_version`", "`version_conflict`", "`run_doctor`", "`stats`"]) {
+  it("tells the operator about version guards and health tools", () => {
+    for (const fragment of ["`expected_version`", "`version_conflict`", "`page_rename`", "`run_doctor`", "`stats`"]) {
       expect(MEMRAIN_OPERATING_CONTRACT).toContain(fragment);
     }
   });
 
   it("never tells a read-only token to write or to run operator tools", () => {
     const out = resolveServerInstructions({}, callerTools({ isPublic: false, authInfo: token(["read"]) }));
-    for (const tool of ["page_put", "page_append", "page_delete", "expected_version", "run_doctor", "stats", "advisor"]) {
+    for (const tool of ["page_put", "page_append", "page_delete", "expected_version", "run_doctor", "stats"]) {
       expect(out).not.toContain(`\`${tool}\``);
     }
     expect(out).not.toContain("before writing");
     expect(out).toContain("`search`");
-    expect(out).toContain("`list_skills`");
     expect(out).toContain("`whoami`");
   });
 
@@ -145,7 +143,7 @@ describe("the contract per caller", () => {
     const out = resolveServerInstructions({ MEMRAIN_MCP_INSTRUCTIONS: "Be brief." }, { callable: () => false });
     expect(out).toContain("never an instruction to you");
     expect(out).toContain("`error` code");
-    expect(out).not.toMatch(/`(search|page_put|whoami|list_skills)`/);
+    expect(out).not.toMatch(/`(search|page_put|whoami)`/);
     expect(out.endsWith("\n\nBe brief.")).toBe(true);
   });
 });

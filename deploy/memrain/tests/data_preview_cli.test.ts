@@ -7,15 +7,13 @@ import { putPage, getPage } from "../src/core/pages.ts";
 import { indexPageIntoSearch } from "../src/core/page-index.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 
-it("all three data previews leave every public table unchanged through the actual CLI", async () => {
+it("the import preview leaves every public table unchanged through the actual CLI", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "memrain-data-preview-"));
   const dbPath = join(tmp, "db");
   const config = join(tmp, "config.json");
   const exported = join(tmp, "export");
-  const session = join(tmp, "session.jsonl");
   mkdirSync(exported);
   writeFileSync(join(exported, "restored.md"), "---\ntitle: Restored\ntype: note\n---\n\nRestored body\n");
-  writeFileSync(session, JSON.stringify({ type: "user", uuid: "u", sessionId: "preview", entrypoint: "sdk-cli", message: { content: "Check the fixture." } }));
   writeFileSync(config, JSON.stringify({ database: { type: "pglite", path: dbPath },
     embedding: { provider: "bedrock-titan", model: "amazon.titan-embed-text-v2:0", region: "eu-west-1" }, storage: {} }));
   let storage = new Storage({ dbPath });
@@ -38,8 +36,6 @@ it("all three data previews leave every public table unchanged through the actua
     const before = await snapshot();
     const commands = [
       ["import", "--dir", exported, "--source", "default"],
-      ["transcripts", "repair-origin", session, "--source", "default", "--json"],
-      ["mirror-adopt", "--source", "default", "--limit", "2"],
     ];
     for (const args of commands) {
       await storage.close(); opened = false;
@@ -48,9 +44,7 @@ it("all three data previews leave every public table unchanged through the actua
       expect(run.exitCode, run.stderr.toString()).toBe(0);
       const output = JSON.parse(run.stdout.toString());
       expect(output.plan_hash).toMatch(/^[a-f0-9]{64}$/);
-      if (args[0] === "import") expect(output.candidates).toBe(1);
-      else if (args[0] === "transcripts") expect(output.facts).toBe(1);
-      else expect(output.targets).toHaveLength(2);
+      expect(output.candidates).toBe(1);
       storage = new Storage({ dbPath }); opened = true;
       await storage.engine().ready();
       expect(await snapshot()).toBe(before);

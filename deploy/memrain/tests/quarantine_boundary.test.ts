@@ -13,12 +13,6 @@ import { indexDocument } from "../src/core/indexer.ts";
 import { mirrorPage, mirrorPageVerdict } from "../src/core/page-index.ts";
 import { getChunksForPage, getChunksForSource } from "../src/core/chunks-read.ts";
 import { readQuarantineVerdict } from "../src/core/quarantine.ts";
-import {
-  getTakesCalibration,
-  getTakesScorecard,
-  listTakes,
-  searchTakes,
-} from "../src/core/synthesis/reads.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 
 const embedFn = (t: string) => Promise.resolve(deterministicEmbed(t));
@@ -96,46 +90,3 @@ describe("chunk reads hide a quarantined document", () => {
   });
 });
 
-describe("takes distilled from a quarantined document stay out of reads", () => {
-  async function docId(path: string): Promise<string> {
-    const r = await storage
-      .engine()
-      .query<{ id: string }>("SELECT id FROM documents WHERE source_path = $1", [path]);
-    return r.rows[0]!.id;
-  }
-
-  async function seedTake(key: string, sourceRef: string, verdict: "correct" | "incorrect") {
-    const e = storage.engine();
-    const r = await e.query<{ id: number }>(
-      `INSERT INTO synth_takes (take_key, source_ref, source_hash, prompt_version, claim_text, kind, weight, status, model_id)
-       VALUES ($1, $2, 'h', 'v1', $1, 'bet', 0.8, 'queued', 'fake') RETURNING id`,
-      [key, sourceRef],
-    );
-    await e.query(
-      `INSERT INTO synth_take_grades (take_id, prompt_version, evidence_signature, verdict, confidence, model_id)
-       VALUES ($1, 'v1', $2, $3, 0.9, 'fake')`,
-      [r.rows[0]!.id, `sig-${key}`, verdict],
-    );
-  }
-
-  beforeAll(async () => {
-    await seedTake("claim from junk source", await docId("/b/junk.md"), "incorrect");
-    await seedTake("claim from clean source", await docId("/b/clean.md"), "correct");
-    await seedTake("claim with no document", "not-a-document", "correct");
-  });
-
-  it("listTakes and searchTakes drop the junk-sourced take", async () => {
-    const listed = (await listTakes(storage.engine())).map((t) => t.take_key).sort();
-    expect(listed).toEqual(["claim from clean source", "claim with no document"]);
-    const found = (await searchTakes(storage.engine(), { q: "claim from" })).map((t) => t.take_key);
-    expect(found).toEqual(["claim from clean source"]);
-  });
-
-  it("scorecard and calibration do not count it", async () => {
-    const card = await getTakesScorecard(storage.engine());
-    expect(card.total_takes).toBe(2);
-    expect(card.incorrect).toBe(0);
-    const buckets = await getTakesCalibration(storage.engine());
-    expect(buckets.reduce((n, b) => n + b.n, 0)).toBe(2);
-  });
-});

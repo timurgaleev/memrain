@@ -1,6 +1,6 @@
 /**
  * Latent multi-tenant read-scope holes closed (security review F1–F4):
- *  - F1/F2: operator-only operational tools (stats/advisor/jobs_*) are refused for
+ *  - F1/F2: operator-only operational tools (stats/run_doctor) are refused for
  *    an authenticated tenant token, allowed for the static/internal path.
  *  - F3: the MEMRAIN_TENANT_FAIL_CLOSED floor is reachable for ANY authenticated
  *    principal with no grant (not only isPublic===true), and the static bearer
@@ -81,11 +81,11 @@ describe("F1/F2 — operator-only tools refuse a tenant token", () => {
     await rm(tmp, { recursive: true, force: true });
   });
 
-  for (const name of ["stats", "advisor", "jobs_list", "jobs_get", "jobs_logs"]) {
+  for (const name of ["stats", "run_doctor"]) {
     it(`${name} → permission_denied for a tenant token`, async () => {
       const res = await dispatchTool(
         storage,
-        { name, arguments: name === "jobs_get" || name === "jobs_logs" ? { id: "x" } : {} },
+        { name, arguments: {} },
         { authInfo: tenant("acme"), isPublic: false },
       );
       expect(res.isError).toBe(true);

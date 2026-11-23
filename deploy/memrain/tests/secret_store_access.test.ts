@@ -13,9 +13,8 @@ import { storageEngines } from "./helpers/storage-engines.ts";
 import { deletePage, getPage, putPage } from "../src/core/pages.ts";
 import { purgeDeletedPages } from "../src/core/pages-purge.ts";
 import { dispatchTool } from "../src/mcp/dispatch.ts";
-import { toolRefusal } from "../src/mcp/visibility.ts";
-import { isPublicMcpToolForbidden } from "../src/http/public_guard.ts";
-import { ADMIN_TOOLS } from "../src/http/admin-tool.ts";
+import { TOOL_DEFS } from "../src/mcp/tool_defs.ts";
+import { ADMIN_TOOLS, handleAdminTool } from "../src/http/admin-tool.ts";
 import { listSecretOriginals } from "../src/core/secret-store.ts";
 import { backupSecretStore, readBackupStatus, restoreSecretStoreBackup, secretStoreBackupDue } from "../src/core/secret-store-backup.ts";
 import { checkSecretStore } from "../src/core/doctor-secrets.ts";
@@ -58,50 +57,50 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
   });
 
   describe("reveal_secret", () => {
+    const reveal = async (slug: string, fingerprint: string) => handleAdminTool(
+      new Request("http://x/admin/api/tool", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "reveal_secret", arguments: { slug, fingerprint } }),
+      }),
+      { storage },
+    );
+
     it("the admin panel session reads the original", async () => {
       await putPage(storage, { slug: "notes/r", markdown_body: `k ${AWS}\n` });
       const fingerprint = await fingerprintOn("notes/r");
-      const panel = await dispatchTool(storage, { name: "reveal_secret", arguments: { slug: "notes/r", fingerprint } }, { adminPanel: true });
-      expect(panel.isError).toBeFalsy();
-      expect(JSON.parse(panel.content[0]!.text).value).toBe(AWS);
+      const res = await reveal("notes/r", fingerprint);
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { data: { value: string } }).data.value).toBe(AWS);
       expect(ADMIN_TOOLS.has("reveal_secret")).toBe(true);
     });
 
-    it("the internal MCP path (internal token, stdio) neither lists nor calls it", async () => {
+    it("no MCP caller lists or calls it: the internal path, every token, the public bearer", async () => {
       await putPage(storage, { slug: "notes/r", markdown_body: `k ${AWS}\n` });
       const fingerprint = await fingerprintOn("notes/r");
-      const r = await dispatchTool(storage, { name: "reveal_secret", arguments: { slug: "notes/r", fingerprint } });
-      expect(r.isError).toBe(true);
-      expect(JSON.stringify(r)).not.toContain(AWS);
-      for (const internalAuthOk of [true, false, undefined]) {
-        expect(toolRefusal("reveal_secret", { isPublic: false, ...(internalAuthOk === undefined ? {} : { internalAuthOk }) }, isPublicMcpToolForbidden)?.kind)
-          .toBe("operator_only");
-      }
-    });
-
-    it("every token, whatever its scope, the public bearer and the public ingress are refused", async () => {
-      await putPage(storage, { slug: "notes/r", markdown_body: `k ${AWS}\n` });
-      const fingerprint = await fingerprintOn("notes/r");
-      for (const scopes of [["read"], ["read", "write"], ["admin"], ["agent"]]) {
-        const r = await dispatchTool(storage, { name: "reveal_secret", arguments: { slug: "notes/r", fingerprint } }, { authInfo: admin(scopes), adminPanel: true });
+      const callers: Parameters<typeof dispatchTool>[2][] = [
+        {},
+        { adminPanel: true },
+        { isPublic: true, adminPanel: true },
+        ...[["read"], ["read", "write"], ["admin"], ["agent"]].map((scopes) => ({ authInfo: admin(scopes), adminPanel: true })),
+      ];
+      for (const ctx of callers) {
+        const r = await dispatchTool(storage, { name: "reveal_secret", arguments: { slug: "notes/r", fingerprint } }, ctx);
         expect(r.isError).toBe(true);
         expect(JSON.stringify(r)).not.toContain(AWS);
-        expect(toolRefusal("reveal_secret", { isPublic: false, authInfo: admin(scopes) }, isPublicMcpToolForbidden)?.kind).toBe("operator_only");
       }
-      const pub = await dispatchTool(storage, { name: "reveal_secret", arguments: { slug: "notes/r", fingerprint } }, { isPublic: true, adminPanel: true });
-      expect(pub.isError).toBe(true);
-      expect(JSON.stringify(pub)).not.toContain(AWS);
-      expect(isPublicMcpToolForbidden("reveal_secret")).toBe(true);
-      expect(toolRefusal("reveal_secret", { isPublic: true }, isPublicMcpToolForbidden)?.kind).toBe("public_ingress");
+      expect(TOOL_DEFS.some((t) => t.name === "reveal_secret")).toBe(false);
     });
 
     it("a tampered entry is refused without the value", async () => {
       await putPage(storage, { slug: "notes/r", markdown_body: `k ${AWS}\n` });
       const fingerprint = await fingerprintOn("notes/r");
       await storage.engine().query(`UPDATE secret_store SET nonce = $1`, [randomBytes(12).toString("base64")]);
-      const r = await dispatchTool(storage, { name: "reveal_secret", arguments: { slug: "notes/r", fingerprint } }, { adminPanel: true });
-      expect(r.isError).toBe(true);
-      expect(r.content[0]!.text).toContain("vault_tamper");
+      const res = await reveal("notes/r", fingerprint);
+      expect(res.status).not.toBe(200);
+      const text = await res.text();
+      expect(text).toContain("vault_tamper");
+      expect(text).not.toContain(AWS);
     });
   });
 

@@ -1,13 +1,12 @@
 /**
  * This build refuses to start in an environment meant for a wrapped,
- * multi-tenant deployment, and refuses any extension. The page writer and the
- * spend chokepoint no longer consult an extension's page-add gate or spend
- * hold, so either would otherwise run with those gates open.
+ * multi-tenant deployment. It has no extension hooks: the page writer and the
+ * spend chokepoint consult no page-add gate or spend hold, so a wrapped
+ * deployment would otherwise run with those gates open.
  */
 import { describe, expect, it, setDefaultTimeout } from "bun:test";
 import { join } from "node:path";
 import { assertNotWrapped } from "../src/core/startup-guard.ts";
-import { extension, registerExtension } from "../src/core/extension.ts";
 import { runServe } from "../src/commands/serve.ts";
 import { isEnvOnlyKey, isNeverStoredKey } from "../src/core/runtime-config.ts";
 import { startServer } from "../src/http/server.ts";
@@ -39,14 +38,6 @@ describe("startup guard", () => {
     for (const env of WRAPPED) expect(() => assertNotWrapped(env)).toThrow(/refusing to start/);
     expect(() => assertNotWrapped({ MEMRAIN_TENANT_ID: "  ", MEMRAIN_CONTROL_URL: "" })).not.toThrow();
     expect(() => assertNotWrapped({})).not.toThrow();
-  });
-
-  // Value: protects=no extension can register and expect its hooks to run; fails_when=a
-  // registration is accepted again; why_new=same; seam=none
-  it("refuses every extension, and every hook stays the default", async () => {
-    expect(() => registerExtension({ name: "wrapped", holdSpend: async () => null })).toThrow(/refused/);
-    expect(extension().name).toBe("none");
-    expect(await extension().holdSpend({ operation: "x", model: "m" } as never, 1, {} as never)).toBeNull();
   });
 
   // Value: protects=serve refuses before it opens anything; fails_when=runServe drops the

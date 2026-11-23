@@ -1,6 +1,6 @@
 /**
  * `memrain status` — one-shot snapshot. Runs against a fresh PGLite + temp
- * config; asserts the bundled stats/health/cache shape.
+ * config; asserts the bundled stats/health shape.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -35,7 +35,7 @@ afterAll(() => {
 });
 
 describe("memrain status", () => {
-  it("bundles stats + health + cache into one snapshot", async () => {
+  it("bundles stats + health into one snapshot", async () => {
     const lines: string[] = [];
     const orig = console.log;
     console.log = (...a: unknown[]) => lines.push(a.map(String).join(" "));
@@ -49,7 +49,6 @@ describe("memrain status", () => {
       version: string;
       stats: { documents: number; chunks: number; embeddings: number };
       health: { embed_coverage_pct: number; queue_depth: number; failed_jobs_24h: number };
-      cache: { total: number; fresh: number; stale: number };
     };
     expect(parsed.ok).toBe(true);
     // The BUILD stamp, not package.json — pinned at 0.1.0, so the old
@@ -60,6 +59,6 @@ describe("memrain status", () => {
     expect(parsed.stats.documents).toBe(0);
     expect(parsed.health.embed_coverage_pct).toBe(1);
     expect(parsed.health.failed_jobs_24h).toBe(0);
-    expect(parsed.cache.total).toBe(0);
+    expect(parsed).not.toHaveProperty("cache");
   });
 });

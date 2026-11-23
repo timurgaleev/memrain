@@ -216,107 +216,28 @@ describe("token principal reaches the rest of the walled surface", () => {
     expect(parsed.hits?.[0]?.slug).toBe("notes/findable");
   });
 
-  it("log_friction: a write token records the event", async () => {
+  it("page_put: a write token writes the page", async () => {
     const writer = await mint("read write");
     const r = await call(
-      "log_friction",
-      { kind: "tool-error", reason: "regression probe" },
+      "page_put",
+      { slug: "notes/probe", markdown_body: "regression probe" },
       writer,
     );
     expect(r.error?.code).not.toBe(ERR_UNAUTHORIZED);
     expect(toolError(r)).toBeUndefined();
   });
 
-  it("log_friction: a read token is refused with insufficient_scope", async () => {
+  it("page_put: a read token is refused with insufficient_scope", async () => {
     const reader = await mint("read");
     const r = await call(
-      "log_friction",
-      { kind: "tool-error", reason: "read token probe" },
+      "page_put",
+      { slug: "notes/probe", markdown_body: "read token probe" },
       reader,
     );
     // The refusal must come from the per-op scope gate, not the transport wall:
     // a read token reaches dispatch and is turned away for lacking `write`.
     expect(r.error?.code).not.toBe(ERR_UNAUTHORIZED);
     expect(toolError(r)).toBe("insufficient_scope");
-  });
-
-  it("relational_recall: the LLM arm reserves against the client's daily budget", async () => {
-    const caller = await mint("read write");
-    // No provider API sets the cap, so pin it on the row directly. The DB is
-    // per-test, so the only clients here are the ones this test minted.
-    await storage
-      .engine()
-      .query(`UPDATE oauth_clients SET budget_usd_per_day = 0`);
-
-    const prev = process.env["MEMRAIN_RELATIONAL_LLM"];
-    process.env["MEMRAIN_RELATIONAL_LLM"] = "1";
-    try {
-      // Nothing in this brain can seed the deterministic arm, so it returns
-      // zero hits and the paid fallback is entered — where the zero cap makes
-      // reserveSpend refuse before any Bedrock call is made.
-      const r = await call(
-        "relational_recall",
-        { query: "who does zzqqxnobody report to?" },
-        caller,
-      );
-      expect(r.error?.code).not.toBe(ERR_UNAUTHORIZED);
-      expect(toolError(r)).toBe("budget_exhausted");
-    } finally {
-      if (prev === undefined) delete process.env["MEMRAIN_RELATIONAL_LLM"];
-      else process.env["MEMRAIN_RELATIONAL_LLM"] = prev;
-    }
-  });
-
-  it("volunteer_context stays inside the token's read grant", async () => {
-    const owner = await mint("read write"); // source: default
-    await call(
-      "page_put",
-      { slug: "people/alice", type: "person", title: "Alice" },
-      owner,
-    );
-
-    const stranger = await mint("read write", "othersrc");
-    const r = await call(
-      "volunteer_context",
-      { window: "user: what did Alice say about the contract?" },
-      stranger,
-    );
-    expect(toolError(r)).toBeUndefined();
-    expect(JSON.parse(r.result.content[0].text).pages).toEqual([]);
-
-    // The owning token still gets it — the scope filter is not a blanket mute.
-    const own = await call(
-      "volunteer_context",
-      { window: "user: what did Alice say about the contract?" },
-      owner,
-    );
-    const pages = JSON.parse(own.result.content[0].text).pages;
-    expect(pages.map((p: { slug: string }) => p.slug)).toContain("people/alice");
-  });
-
-  it("volunteer_context never volunteers a diary page to a remote caller", async () => {
-    const owner = await mint("read write");
-    await call(
-      "page_put",
-      {
-        slug: "life/diary/2026-07-27",
-        type: "journal",
-        title: "Reflection",
-        allowAdHocType: true,
-      },
-      owner,
-    );
-
-    const r = await call(
-      "volunteer_context",
-      { window: "user: pull up my Reflection notes" },
-      owner,
-    );
-    expect(toolError(r)).toBeUndefined();
-    const slugs = JSON.parse(r.result.content[0].text).pages.map(
-      (p: { slug: string }) => p.slug,
-    );
-    expect(slugs).not.toContain("life/diary/2026-07-27");
   });
 
   it("listed walled tools no longer answer with the internal-token wall", async () => {
@@ -330,9 +251,8 @@ describe("token principal reaches the rest of the walled surface", () => {
     const probes = [
       "resolve_slugs",
       "get_links",
-      "get_ingest_log",
-      "find_orphans",
-      "log_friction",
+      "get_tags",
+      "sources_status",
     ];
     for (const name of probes) expect(names).toContain(name);
 
@@ -427,7 +347,7 @@ describe("slug-prefix write fence (bound_slug_prefixes)", () => {
 
   it("a slug-less write tool is refused for a bound client (deny-by-default)", async () => {
     const t = await mintBound(["inbox"]);
-    const r = await call("extract_facts", { text: "Alice works at Acme." }, t);
+    const r = await call("index", {}, t);
     expect(toolError(r)).toBe("permission_denied");
   });
 
@@ -463,24 +383,4 @@ describe("slug-prefix write fence (bound_slug_prefixes)", () => {
     expect(toolError(bad)).toBe("permission_denied");
   });
 
-  it("POST /ingest honors the fence at the ingress", async () => {
-    const t = await mintBound(["inbox"]);
-    const post = (slug?: string) =>
-      fetch(`${url}/ingest`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "text/plain",
-          Authorization: `Bearer ${t}`,
-          "Cf-Connecting-Ip": "1.2.3.4",
-          ...(slug ? { "X-Memex-Slug": slug } : {}),
-        },
-        body: "captured note",
-      });
-    const outside = await post("people/evil");
-    expect(outside.status).toBe(403);
-    const missing = await post(undefined);
-    expect(missing.status).toBe(403);
-    const inside = await post("inbox/captured");
-    expect(inside.status).toBe(202);
-  });
 });

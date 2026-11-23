@@ -19,7 +19,7 @@ import { isPublicMcpToolForbidden } from "../src/http/public_guard.ts";
 import { TOOL_DEFS } from "../src/mcp/tool_defs.ts";
 import { OPERATOR_ONLY_TOOLS } from "../src/mcp/dispatch.ts";
 import { WRITE_SCOPED_TOOLS } from "../src/mcp/operations.ts";
-import { ADMIN_PANEL_ONLY_TOOLS, dispatchRefusal, SLUG_PARAMS_BY_WRITE_TOOL } from "../src/mcp/visibility.ts";
+import { dispatchRefusal, SLUG_PARAMS_BY_WRITE_TOOL } from "../src/mcp/visibility.ts";
 
 setDefaultTimeout(60000);
 
@@ -155,7 +155,7 @@ describe("tools/list equals the callable set", () => {
 
 describe("what each caller sees", () => {
   it("the operator sees every tool but the admin-panel-only ones", async () => {
-    expect(await listed(CALLERS["operator"]!)).toEqual(TOOL_DEFS.map((t) => t.name).filter((n) => !ADMIN_PANEL_ONLY_TOOLS.has(n)).sort());
+    expect(await listed(CALLERS["operator"]!)).toEqual(TOOL_DEFS.map((t) => t.name).sort());
   });
 
   it("the public bearer loses exactly the ingress denylist", async () => {

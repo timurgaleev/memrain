@@ -6,7 +6,6 @@
  * as the other tenant's token in the response.
  */
 import { putPage } from "../../src/core/pages.ts";
-import { addFact } from "../../src/core/facts.ts";
 import { addLink } from "../../src/core/links.ts";
 import { registerSource } from "../../src/core/sources.ts";
 import { indexPageIntoSearch } from "../../src/core/page-index.ts";
@@ -129,8 +128,13 @@ export async function seedTenantContract(storage: Storage): Promise<{ factIdA: n
 
   // --- Shared entity page + per-source facts / timeline (trajectory, recall) ---
   await putPage(storage, { slug: ENTITY_SLUG, type: "person", title: "Alice Entity" });
-  const fa = await addFact(storage, { entity_slug: ENTITY_SLUG, fact: A_FACT, source_id: A });
-  const fb = await addFact(storage, { entity_slug: ENTITY_SLUG, fact: B_FACT, source_id: B });
+  // Facts an earlier build wrote, seeded as rows: nothing in this build reads them.
+  const seedFact = async (fact: string, sourceId: string) => (await storage.engine().query<{ id: number }>(
+    `INSERT INTO entity_facts (entity_slug, fact, source_id, written_by) VALUES ($1, $2, $3, 'test') RETURNING id`,
+    [ENTITY_SLUG, fact, sourceId],
+  )).rows[0]!;
+  const fa = await seedFact(A_FACT, A);
+  const fb = await seedFact(B_FACT, B);
   // The shared entity page is owned by 'default', so addTimelineEvent's ownership
   // guard (a scoped caller may only annotate a page its own source owns) blocks a
   // per-source append here. Seed the two events directly to build the cross-source
