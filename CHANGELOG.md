@@ -6,6 +6,40 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.7.0] — 2026-11-23
+
+A release about the surface agents see. The admin panel gets a grant editor with signed previews and a passkey step-up, open loops can be closed and muted over MCP, an incident switch can narrow every client's tools, and the Claude Code and Codex plugin ships 31 skills.
+
+### Added
+
+- Grant editor in the admin panel (Agents → Credentials → Permissions).
+  - The owner previews a change before applying it. The server signs the plan with a key derived from its secret.
+  - Apply sends only the partial change. The server recomputes the result under a row lock and refuses it when the revision or the signed plan no longer matches.
+  - A stale preview returns the current grant and offers to refresh while keeping the pending edits.
+  - Any change that widens a client's rights needs a passkey confirmation from the last five minutes.
+- `loops_update` MCP tool: mark a loop done or dropped, or mute or unmute a sender or thread, with `dry_run`.
+  - It acts inside the caller's write source and is refused to the public bearer.
+  - Muting a key closes its open reply-owed loops in one transaction. Unmuting re-judges them from the stored replies.
+  - A loops sweep never reopens a loop a mute closed.
+- `MEMRAIN_MCP_FORCE_SURFACE`, an incident switch that can only narrow the `/mcp` tool surface. It is read per request and set in the host `.env`.
+- `memrain waiting done|drop|mute|unmute --dry-run`.
+
+### Changed
+
+- Registering a client, minting an API key, issuing an enrollment, changing redirect URIs and setting a token TTL now need a fresh passkey confirmation. The panel asks for it.
+- `memrain auth min-trust`, the profile recorded at registration and the admin token-TTL change now bump the grant revision and write an audit row.
+- The plugin ships 31 skills, up from 14.
+  - Every skill in the pack is recorded as shipped, host-only or excluded, with a reason.
+  - The generator refuses a skill with no lane, and a shipped skill that names an operator-only tool or hands off to a skill the plugin does not ship.
+- The `ingest-gate` skill resolves a named person, company or project by exact name and alias before searching, and never treats a weak vector score as proof that something is absent.
+- Tool and parameter descriptions are shorter, so the tool list has room again: about 93 KB of the 95 KB budget.
+
+### Upgrading
+
+- No migrations.
+- An admin who mints keys or registers clients from the panel will be asked for a passkey once per five minutes.
+- Before rolling back below this release, unmute every sender muted since the upgrade. Older releases do not reopen loops a mute closed.
+
 ## [2.6.0] — 2026-11-22
 
 A connectors release. Gmail learns your send-as addresses and can reach further back on request, Fireflies waits for a meeting's summary, Slack keeps a channel that turned private private, conversation facts survive model refusals, and connector pages can feed facts under their own opt-in cap.
