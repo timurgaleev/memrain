@@ -58,7 +58,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect((await call(post("/admin/api/groups/sales-team/members", { member_id: "alice" }), d)).status).toBe(200);
 
       const provider = new OAuthProvider({ engine: s.engine() });
-      expect((await provider.verifyAccessToken(token)).allowedSources).toEqual(["alice", "sales"]);
+      // A key bound to a member other than the owner is refused, groups or not.
+      await expect(provider.verifyAccessToken(token)).rejects.toThrow("credential_unsupported");
 
       const shown = (await (await call(get("/admin/api/members/alice"), d)).json()) as { member: { groups: string[] }; credentials: unknown[]; audit: Array<{ via: string; actor: string }> };
       expect(shown.member.groups).toEqual(["sales-team"]);
@@ -66,7 +67,6 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(shown.audit[0]).toMatchObject({ via: "admin_api", actor: "admin" });
 
       expect((await call(post("/admin/api/members/alice/disable"), d)).status).toBe(200);
-      await expect(provider.verifyAccessToken(token)).rejects.toThrow("member_disabled");
       expect((await call(post("/admin/api/members/alice/enable"), d)).status).toBe(200);
 
       // Unbinding names the member that holds the key.

@@ -2,13 +2,13 @@
  * MEMRAIN_REQUIRE_MEMBER=1: on a hosted brain every credential belongs to a
  * person, so the verifier refuses a PAT or OAuth token bound to no member,
  * on /mcp and /ingest alike (both verify through it). Off, an unbound
- * credential verifies exactly as before.
+ * credential verifies exactly as before. A bound credential still has to be
+ * bound to the brain's enabled owner.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { InvalidTokenError, OAuthProvider } from "../src/core/oauth-provider.ts";
-import { addMember } from "../src/core/members.ts";
 
 const saved = process.env["MEMRAIN_REQUIRE_MEMBER"];
 afterEach(() => {
@@ -25,7 +25,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     const db = await open();
     const e = db.storage.engine();
     try {
-      await addMember(e, "alice", {}, { actor: "ops", via: "cli" });
+      await e.exec(`INSERT INTO members (id, status) VALUES ('alice', 'enabled'); INSERT INTO config (key, value) VALUES ('access.owner_member', 'alice');`);
       await e.query(`INSERT INTO access_tokens (name, token_hash, scopes) VALUES ('ci', $1, ARRAY['read'])`, [hash(UNBOUND)]);
       await e.query(`INSERT INTO access_tokens (name, token_hash, scopes, member_id) VALUES ('alice-laptop', $1, ARRAY['read'], 'alice')`, [hash(BOUND)]);
       const p = new OAuthProvider({ engine: e });

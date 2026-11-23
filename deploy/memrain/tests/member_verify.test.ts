@@ -1,11 +1,11 @@
 /**
- * Disabling a member stops every one of that person's keys.
+ * A credential bound to a member works only while that member is the brain's
+ * enabled owner (config access.owner_member). Any other binding is refused,
+ * so a 2.x team key never turns back on as an unbound one, and disabling the
+ * owner stops the owner's keys too. An unbound credential verifies as before.
  *
- * The check lives in the token verifier, so it is driven here through the
- * real paths a request takes: verifyAccessToken (what /mcp and /ingest call),
- * resolvePrincipal (what a queued ingest job re-checks before it writes) and
- * the HTTP server itself with the headers a client really sends. A brain with
- * no members must verify exactly as before.
+ * Driven through the real paths a request takes: verifyAccessToken (what /mcp
+ * calls), resolvePrincipal (what a queued job re-checks) and the HTTP server.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash, randomBytes } from "node:crypto";
@@ -15,10 +15,8 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { InvalidTokenError, OAuthProvider, type OAuthClientInfo } from "../src/core/oauth-provider.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { addMember, bindCredential, disableMember, enableMember, removeMember, type MemberActor } from "../src/core/members.ts";
 import { startServer, type ServerHandle } from "../src/http/server.ts";
 
-const OPS: MemberActor = { actor: "ops", via: "cli" };
 const CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 const CB = "https://example.invalid/cb";
 
@@ -31,6 +29,10 @@ beforeAll(async () => {
   storage = new Storage({ dbPath: join(tmp, "db") });
   await storage.init();
   await registerSource(storage.engine(), { id: "team", kind: "other", pathPrefix: "tenant:team" });
+  await storage.engine().exec(`
+    INSERT INTO members (id, status) VALUES ('ora', 'enabled'), ('bob', 'enabled'), ('carl', 'disabled');
+    INSERT INTO config (key, value) VALUES ('access.owner_member', 'ora');
+  `);
   provider = new OAuthProvider({ engine: storage.raw() });
 }, 30_000);
 
@@ -39,12 +41,12 @@ afterAll(async () => {
   rmSync(tmp, { recursive: true, force: true });
 }, 30_000);
 
-async function mintPat(name: string, permissions: Record<string, unknown> = { source_id: "team" }) {
+async function mintPat(name: string, member: string | null = null) {
   const token = "memrain_" + randomBytes(24).toString("hex");
   const hash = createHash("sha256").update(token).digest("hex");
   const r = await storage.raw().query<{ id: number }>(
-    `INSERT INTO access_tokens (name, token_hash, scopes, permissions) VALUES ($1, $2, ARRAY['read','write'], $3::jsonb) RETURNING id`,
-    [name, hash, permissions],
+    `INSERT INTO access_tokens (name, token_hash, scopes, permissions, member_id) VALUES ($1, $2, ARRAY['read','write'], $3::jsonb, $4) RETURNING id`,
+    [name, hash, { source_id: "team" }, member],
   );
   return { token, id: String(r.rows[0]!.id) };
 }
@@ -59,38 +61,57 @@ async function refused(p: Promise<unknown>): Promise<string> {
   }
 }
 
-describe("a brain with no members", () => {
-  it("verifies an unbound token exactly as before", async () => {
+const setOwnerStatus = (status: "enabled" | "disabled") =>
+  storage.engine().query(`UPDATE members SET status = $1 WHERE id = 'ora'`, [status]);
+
+describe("personal access tokens", () => {
+  // Value: protects=unbound keys keep working unchanged; fails_when=the member check starts
+  // querying or refusing credentials that name no member; why_new=the rule changed; seam=none
+  it("an unbound token verifies exactly as before", async () => {
     const { token } = await mintPat("plain");
     const info = await provider.verifyAccessToken(token);
     expect(info).toMatchObject({ clientId: "plain", sourceId: "team", allowedSources: ["team"], scopes: ["read", "write"] });
-    expect(info.toolSurface).toBeUndefined();
-  });
-});
-
-describe("personal access tokens", () => {
-  it("are refused while their member is disabled and work again once enabled", async () => {
-    await addMember(storage.engine(), "alice", {}, OPS);
-    const { token, id } = await mintPat("alice-laptop");
-    await bindCredential(storage.engine(), "alice", { kind: "token", id: "alice-laptop" }, OPS);
-    expect((await provider.verifyAccessToken(token)).clientId).toBe("alice-laptop");
-
-    await disableMember(storage.engine(), "alice", OPS);
-    expect(await refused(provider.verifyAccessToken(token))).toContain("member_disabled");
-    // A capture queued before the disable must not write after it.
-    expect(await refused(provider.resolvePrincipal({ kind: "pat", id }))).toContain("member_disabled");
-
-    await enableMember(storage.engine(), "alice", OPS);
-    expect((await provider.verifyAccessToken(token)).clientId).toBe("alice-laptop");
-    expect((await provider.resolvePrincipal({ kind: "pat", id })).clientId).toBe("alice-laptop");
+    expect(info.memberId).toBeUndefined();
   });
 
-  it("are refused for good once their member is removed", async () => {
-    await addMember(storage.engine(), "bob", {}, OPS);
-    const { token } = await mintPat("bob-key");
-    await bindCredential(storage.engine(), "bob", { kind: "token", id: "bob-key" }, OPS);
-    await removeMember(storage.engine(), "bob", OPS);
-    expect(await refused(provider.verifyAccessToken(token))).toContain("member_disabled");
+  // Value: protects=the owner's key reads as the owner and nothing wider; fails_when=the owner
+  // binding is refused, or widens the source grant; why_new=groups no longer widen reads; seam=none
+  it("a token bound to the enabled owner works, reads as the owner and keeps its own grant", async () => {
+    const { token, id } = await mintPat("ora-laptop", "ora");
+    const info = await provider.verifyAccessToken(token);
+    expect(info).toMatchObject({ clientId: "ora-laptop", memberId: "ora", allowedSources: ["team"] });
+    expect((await provider.resolvePrincipal({ kind: "pat", id })).clientId).toBe("ora-laptop");
+  });
+
+  // Value: protects=a 2.x team key never verifies; fails_when=a non-owner binding is treated as
+  // unbound; why_new=members are gone, so the binding can no longer be checked; seam=none
+  it("a token bound to another member is refused, enabled or not", async () => {
+    const bob = await mintPat("bob-key", "bob");
+    const carl = await mintPat("carl-key", "carl");
+    expect(await refused(provider.verifyAccessToken(bob.token))).toContain("credential_unsupported");
+    expect(await refused(provider.verifyAccessToken(carl.token))).toContain("credential_unsupported");
+    expect(await refused(provider.resolvePrincipal({ kind: "pat", id: bob.id }))).toContain("credential_unsupported");
+  });
+
+  // Value: protects=disabling the owner still stops the owner's keys; fails_when=the owner is
+  // read from config without its status; why_new=the owner is the only member a key may name; seam=none
+  it("the owner's token is refused while the owner is disabled and works again once enabled", async () => {
+    const { token } = await mintPat("ora-phone", "ora");
+    await setOwnerStatus("disabled");
+    try {
+      expect(await refused(provider.verifyAccessToken(token))).toContain("credential_unsupported");
+    } finally {
+      await setOwnerStatus("enabled");
+    }
+    expect((await provider.verifyAccessToken(token)).memberId).toBe("ora");
+  });
+
+  // Value: protects=a credential issued with a read floor never reads unfiltered text;
+  // fails_when=min_trust is ignored again; why_new=no tool filters by tier any more; seam=none
+  it("a token with a read floor is refused", async () => {
+    const { token } = await mintPat("floored");
+    await storage.engine().query(`UPDATE access_tokens SET min_trust = 'member' WHERE name = 'floored'`);
+    expect(await refused(provider.verifyAccessToken(token))).toContain("credential_unsupported");
   });
 });
 
@@ -110,38 +131,36 @@ describe("OAuth credentials", () => {
     return { enrollmentId: issued.id, tokens: await provider.exchangeAuthorizationCode(client, code, undefined, CB) };
   }
 
-  it("an enrollment bound to a disabled member is refused; the connector's other people keep working", async () => {
-    await addMember(storage.engine(), "carol", {}, OPS);
-    const carol = await enroll();
-    const dave = await enroll();
-    await bindCredential(storage.engine(), "carol", { kind: "enrollment", id: carol.enrollmentId }, OPS);
-    await disableMember(storage.engine(), "carol", OPS);
-    expect(await refused(provider.verifyAccessToken(carol.tokens.access_token))).toContain("member_disabled");
-    expect((await provider.verifyAccessToken(dave.tokens.access_token)).spendId).toBe(dave.enrollmentId);
-    await enableMember(storage.engine(), "carol", OPS);
+  // Value: protects=an enrollment of another person is refused, the owner's keeps working;
+  // fails_when=the enrollment binding is skipped; why_new=the rule changed; seam=none
+  it("an enrollment bound to the owner works; one bound to another member is refused", async () => {
+    const mine = await enroll();
+    const theirs = await enroll();
+    await storage.engine().query(`UPDATE oauth_enrollments SET member_id = 'ora' WHERE id = $1`, [mine.enrollmentId]);
+    await storage.engine().query(`UPDATE oauth_enrollments SET member_id = 'bob' WHERE id = $1`, [theirs.enrollmentId]);
+    expect((await provider.verifyAccessToken(mine.tokens.access_token)).memberId).toBe("ora");
+    expect(await refused(provider.verifyAccessToken(theirs.tokens.access_token))).toContain("credential_unsupported");
+    const rotated = await provider.exchangeRefreshToken(client, mine.tokens.refresh_token!);
+    expect((await provider.verifyAccessToken(rotated.access_token)).memberId).toBe("ora");
   });
 
-  it("a replacement code for a disabled member's enrollment inherits the binding and stays refused", async () => {
-    await addMember(storage.engine(), "gina", {}, OPS);
-    const gina = await enroll();
-    await bindCredential(storage.engine(), "gina", { kind: "enrollment", id: gina.enrollmentId }, OPS);
-    await disableMember(storage.engine(), "gina", OPS);
-    const issued = await provider.issueEnrollment({ replaces: gina.enrollmentId });
-    const grant = await provider.claimEnrollment(issued.code, client.client_id);
-    const { redirectUrl } = await provider.authorize(client, { redirectUri: CB, codeChallenge: CHALLENGE, scopes: ["read", "write"] }, grant);
-    const code = new URL(redirectUrl).searchParams.get("code")!;
-    const tokens = await provider.exchangeAuthorizationCode(client, code, undefined, CB);
-    expect(await refused(provider.verifyAccessToken(tokens.access_token))).toContain("member_disabled");
-  });
-
-  it("a client bound to a disabled member refuses every token it issued", async () => {
-    await addMember(storage.engine(), "erin", {}, OPS);
-    const reg = await provider.registerClientManual("erin-agent", ["client_credentials"], "read", [], "team");
+  // Value: protects=a client bound to another member refuses every token it issued;
+  // fails_when=the client binding is skipped; why_new=the rule changed; seam=none
+  it("a client bound to another member refuses every token it issued", async () => {
+    const reg = await provider.registerClientManual("bob-agent", ["client_credentials"], "read", [], "team");
     const tokens = await provider.exchangeClientCredentials(reg.clientId, reg.clientSecret!);
-    await bindCredential(storage.engine(), "erin", { kind: "client", id: reg.clientId }, OPS);
     expect((await provider.verifyAccessToken(tokens.access_token)).clientId).toBe(reg.clientId);
-    await disableMember(storage.engine(), "erin", OPS);
-    expect(await refused(provider.verifyAccessToken(tokens.access_token))).toContain("member_disabled");
+    await storage.engine().query(`UPDATE oauth_clients SET member_id = 'bob' WHERE client_id = $1`, [reg.clientId]);
+    expect(await refused(provider.verifyAccessToken(tokens.access_token))).toContain("credential_unsupported");
+  });
+
+  // Value: protects=a client with a read floor is refused; fails_when=min_trust on a client is
+  // ignored; why_new=same as the token case; seam=none
+  it("a client with a read floor refuses every token it issued", async () => {
+    const reg = await provider.registerClientManual("floored-agent", ["client_credentials"], "read", [], "team");
+    const tokens = await provider.exchangeClientCredentials(reg.clientId, reg.clientSecret!);
+    await storage.engine().query(`UPDATE oauth_clients SET min_trust = 'owner' WHERE client_id = $1`, [reg.clientId]);
+    expect(await refused(provider.verifyAccessToken(tokens.access_token))).toContain("credential_unsupported");
   });
 });
 
@@ -166,19 +185,12 @@ describe("over HTTP", () => {
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
   });
 
-  const ingest = (bearer: string) => fetch(`${url}/ingest`, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain", Authorization: `Bearer ${bearer}`, "Cf-Connecting-Ip": "9.9.9.9" },
-    body: "a note",
-  });
-
-  it("a disabled member's token is turned away on /mcp and /ingest", async () => {
-    await addMember(storage.engine(), "frank", {}, OPS);
-    const { token } = await mintPat("frank-key");
-    await bindCredential(storage.engine(), "frank", { kind: "token", id: "frank-key" }, OPS);
-    expect((await listTools(token)).status).toBe(200);
-    await disableMember(storage.engine(), "frank", OPS);
-    expect((await listTools(token)).status).toBe(401);
-    expect((await ingest(token)).status).toBe(401);
+  // Value: protects=the refusal reaches the wire as 401; fails_when=the transport maps the
+  // refusal to anything else; why_new=the rule changed; seam=none
+  it("a key bound to another member is turned away on /mcp; the owner's is served", async () => {
+    const theirs = await mintPat("bob-http", "bob");
+    const mine = await mintPat("ora-http", "ora");
+    expect((await listTools(theirs.token)).status).toBe(401);
+    expect((await listTools(mine.token)).status).toBe(200);
   });
 });

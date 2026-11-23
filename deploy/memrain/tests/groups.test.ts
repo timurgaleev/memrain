@@ -95,28 +95,4 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await code(addGroupMember(e, "g1", "gone", OPS))).toBe("member_retired");
     } finally { await db.close(); }
   });
-
-  it("membership widens reads on the next request and never moves writes", async () => {
-    const db = await open();
-    const e = db.storage.engine();
-    try {
-      await registerSource(e, { id: "alice-src", kind: "other", pathPrefix: "tenant:alice" });
-      await registerSource(e, { id: "sales", kind: "other", pathPrefix: "tenant:sales" });
-      const provider = new OAuthProvider({ engine: e });
-      await addMember(e, "alice", {}, OPS);
-      const token = await mintPat(e, "alice-laptop", "alice-src");
-      await bindCredential(e, "alice", { kind: "token", id: "alice-laptop" }, OPS);
-      await addGroup(e, "team-sales", {}, OPS);
-      await grantGroupSource(e, "team-sales", "sales", {}, OPS);
-      expect((await provider.verifyAccessToken(token)).allowedSources).toEqual(["alice-src"]);
-
-      await addGroupMember(e, "team-sales", "alice", OPS);
-      const widened = await provider.verifyAccessToken(token);
-      expect(widened.allowedSources).toEqual(["alice-src", "sales"]);
-      expect(widened.sourceId).toBe("alice-src");
-
-      await removeGroupMember(e, "team-sales", "alice", OPS);
-      expect((await provider.verifyAccessToken(token)).allowedSources).toEqual(["alice-src"]);
-    } finally { await db.close(); }
-  });
 });

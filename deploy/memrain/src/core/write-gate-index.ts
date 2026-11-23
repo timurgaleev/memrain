@@ -21,7 +21,7 @@
 import type { Engine } from "./engine/interface.ts";
 import { GATE_OWNED_KEYS } from "./quarantine.ts";
 import { logIngest } from "./ingest-log.ts";
-import { isOwnerConnectorSource } from "./owner-identity.ts";
+import { isOwnerConnectorSource } from "./caller-access.ts";
 import { lowerTier, sourceKindTier, type TrustTier } from "./trust-tier.ts";
 import {
   WRITE_GATE_APPROVAL_KEY,

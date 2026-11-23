@@ -14,9 +14,11 @@
  * Only the trusted local CLI writes the setting; no MCP operation does.
  */
 import type { Engine } from "./engine/interface.ts";
-import { existingMember, MemberError, MEMBER_ID_RE, boundCredentials, type CredentialRef } from "./members.ts";
+import { existingMember, MemberError, boundCredentials, type CredentialRef } from "./members.ts";
 
-export const OWNER_MEMBER_KEY = "access.owner_member";
+import { OWNER_MEMBER_KEY, ownerMemberId } from "./caller-access.ts";
+
+export { OWNER_MEMBER_KEY, ownerMemberId };
 
 export interface OwnerView {
   owner: string | null;
@@ -28,16 +30,6 @@ export interface OwnerView {
 async function readConfig(engine: Pick<Engine, "query">, key: string): Promise<string | null> {
   const r = await engine.query<{ value: string }>(`SELECT value FROM config WHERE key = $1`, [key]);
   return r.rows[0]?.value ?? null;
-}
-
-/** The configured owner member id, or null when unset or ill-formed (fail closed). */
-export async function ownerMemberId(engine: Pick<Engine, "query">): Promise<string | null> {
-  try {
-    const raw = (await readConfig(engine, OWNER_MEMBER_KEY))?.trim();
-    return raw && MEMBER_ID_RE.test(raw) ? raw : null;
-  } catch {
-    return null;
-  }
 }
 
 /** The configured owner, whether it is live, and the credentials that read as it. */

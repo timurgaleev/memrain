@@ -138,25 +138,22 @@ describe("read floor over HTTP, through the real verifier", () => {
     );
     return token;
   }
-  const rpc = async (bearer: string, method: string, params: unknown) => {
-    const r = await fetch(`${url}/mcp`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${bearer}`, "Cf-Connecting-Ip": "9.9.9.9" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-    });
-    expect(r.status).toBe(200);
-    return (await r.json()) as { result: { tools?: { name: string }[]; content?: { text: string }[]; isError?: boolean } };
-  };
+  const rpc = (bearer: string, method: string, params: unknown) => fetch(`${url}/mcp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${bearer}`, "Cf-Connecting-Ip": "9.9.9.9" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
 
-  it("a floored token lists no unfiltered read tool and is refused one; an unfloored token is not", async () => {
+  // Value: protects=a credential issued with a read floor never reads unfiltered text;
+  // fails_when=the verifier accepts min_trust again while no tool filters by tier;
+  // why_new=the floor used to be enforced per tool, which this build no longer does; seam=none
+  it("a floored token is refused at the verifier; an unfloored token is not", async () => {
     const floored = await mint("floored", "owner");
     const plain = await mint("plain", null);
-    expect((await rpc(floored, "tools/list", {})).result.tools!.map(t => t.name)).not.toContain("page_get");
-    expect((await rpc(plain, "tools/list", {})).result.tools!.map(t => t.name)).toContain("page_get");
-    const refused = await rpc(floored, "tools/call", { name: "page_get", arguments: { slug: "x" } });
-    expect(refused.result.isError).toBe(true);
-    expect(refused.result.content![0]!.text).toContain("permission_denied");
-    const who = await rpc(floored, "tools/call", { name: "whoami", arguments: {} });
-    expect(JSON.parse(who.result.content![0]!.text).min_trust).toBe("owner");
+    const refused = await rpc(floored, "tools/list", {});
+    expect(refused.status).toBe(401);
+    const listed = await rpc(plain, "tools/list", {});
+    expect(listed.status).toBe(200);
+    expect(((await listed.json()) as { result: { tools: { name: string }[] } }).result.tools.map(t => t.name)).toContain("page_get");
   });
 });

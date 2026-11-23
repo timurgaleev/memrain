@@ -13,7 +13,6 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { discoverMigrations, revertMigration } from "../src/core/migrate.ts";
 import { InvalidTokenError, OAuthProvider } from "../src/core/oauth-provider.ts";
-import { addMember, bindCredential, disableMember } from "../src/core/members.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -38,11 +37,10 @@ it("still refuses a disabled member's token when only tool_surface is missing", 
   await e.query(`INSERT INTO access_tokens (name, token_hash, scopes) VALUES ('k', $1, ARRAY['read'])`, [
     createHash("sha256").update(token).digest("hex"),
   ]);
-  const who = { actor: "ops", via: "cli" } as const;
-  await addMember(e, "alice", {}, who);
-  await bindCredential(e, "alice", { kind: "token", id: "k" }, who);
+  await e.exec(`INSERT INTO members (id, status) VALUES ('alice', 'enabled'); INSERT INTO config (key, value) VALUES ('access.owner_member', 'alice');`);
+  await e.query(`UPDATE access_tokens SET member_id = 'alice' WHERE name = 'k'`);
   const provider = new OAuthProvider({ engine: e });
   expect((await provider.verifyAccessToken(token)).clientId).toBe("k");
-  await disableMember(e, "alice", who);
+  await e.query(`UPDATE members SET status = 'disabled' WHERE id = 'alice'`);
   await expect(provider.verifyAccessToken(token)).rejects.toBeInstanceOf(InvalidTokenError);
 });

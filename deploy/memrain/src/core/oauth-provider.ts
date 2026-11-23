@@ -25,9 +25,8 @@ import type { Engine } from "./engine/interface.ts";
 import type { PrincipalRef } from "./auth-info.ts";
 import { isTrustTier, trustRank, type TrustTier } from "./trust-tier.ts";
 import { isToolSurface, type ToolSurface } from "../mcp/surface.ts";
-import { memberAccess, memberRequired, widenReadSources, writeMemberAudit } from "./members.ts";
+import { liveOwnerMember, memberRequired } from "./caller-access.ts";
 import { validateSlug as validatePageSlug } from "./pages.ts";
-import { INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND } from "./jobs/kinds.ts";
 import {
   hasScope,
   intersectGrantedScopes,
@@ -453,12 +452,17 @@ function toCapUsd(raw: unknown): number | null {
   return n;
 }
 
-/** A row's min_trust as AuthInfo carries it: absent for none. A value that
- *  names no tier fails the token rather than lifting the floor. */
-function readFloor(raw: unknown): { minTrust?: TrustTier } {
+/**
+ * A credential with a read floor (min_trust) is refused. This build keeps no
+ * trust tiers to filter reads by, so honouring the credential would let it
+ * read more than it was issued for.
+ */
+function readFloor(raw: unknown): Record<string, never> {
   if (raw === undefined || raw === null) return {};
-  if (isTrustTier(raw)) return { minTrust: raw };
-  throw new InvalidTokenError("Corrupt min_trust on credential row");
+  throw new InvalidTokenError(
+    "credential_unsupported: this credential carries a read floor (min_trust), which this brain does not enforce; " +
+      "ask the brain operator to issue a credential without one",
+  );
 }
 
 /** A row's tool_surface as AuthInfo carries it: absent for full. An
@@ -1332,9 +1336,6 @@ function legacyGrantFromRow(row: Record<string, unknown>): PrincipalGrant {
     budgetUsdPerDay: toCapUsd(row.budget_usd_per_day),
   };
 }
-
-/** The label of an enrollment code a member issued for itself, on its own session. */
-export const MEMBER_APP_ENROLLMENT_LABEL = "app-connect";
 
 export class OAuthProvider {
   private engine: Engine;
@@ -2358,71 +2359,6 @@ export class OAuthProvider {
   }
 
   /**
-   * Issue a member's own enrollment code, in one transaction with
-   * everything that makes it the member's: the member binding (`member_id`
-   * on the row itself), the revocation of the member's last unused self-issued code,
-   * and both audit trails. A failure anywhere leaves no code and no binding,
-   * and the code is returned only after the commit.
-   *
-   * The grant writes `sourceId` (the member's personal source) and reads it;
-   * the verifier widens the read by the member's groups on every request, so
-   * a group change applies to a code already redeemed.
-   */
-  async issueMemberEnrollment(input: {
-    memberId: string;
-    sourceId: string;
-    clientId: string;
-    ttlSeconds: number;
-  }): Promise<{ id: string; code: string; expiresAt: string; clientId: string }> {
-    const client = await this.getClient(input.clientId);
-    if (!client || client.tenant_mode !== "enrollment") throw new Error(`Client '${input.clientId}' is not an enrollment connector`);
-    const id = generateToken("memrain_enr_");
-    const code = generateToken("memrain_en_");
-    const expiresAt = new Date(Date.now() + input.ttlSeconds * 1000).toISOString();
-    const who: EnrollmentAuditActor = { actor: `member:${input.memberId}`, via: "enrollment" };
-    await this.engine.transaction(async (tx) => {
-      const member = await tx.query<{ status: string; personal_source_id: string | null }>(
-        `SELECT status, personal_source_id FROM members WHERE id = $1 FOR UPDATE`,
-        [input.memberId],
-      );
-      const m = member.rows[0];
-      if (!m || m.status !== "enabled" || m.personal_source_id !== input.sourceId) {
-        throw new Error(`member '${input.memberId}' cannot be issued a code for '${input.sourceId}'`);
-      }
-      const superseded = await tx.query<{ id: string; client_id: string | null }>(
-        // scope: upstream the member's own unused self-issued codes, keyed by the member the session resolved
-        `UPDATE oauth_enrollments SET revoked_at = NOW()
-          WHERE member_id = $1 AND label = $2 AND used_at IS NULL AND revoked_at IS NULL
-          RETURNING id, client_id`,
-        [input.memberId, MEMBER_APP_ENROLLMENT_LABEL],
-      );
-      for (const old of superseded.rows) {
-        await writeEnrollmentAudit(tx, old.id, old.client_id, "revoke_code", who, { revoked: false }, { revoked: true, superseded_by: id });
-      }
-      await tx.query(
-        `INSERT INTO oauth_enrollments
-           (id, code_hash, client_id, source_id, federated_read, label, expires_at, member_id)
-         VALUES ($1, $2, $3, $4, $5::text[], $6, $7::timestamptz, $8)`,
-        [id, hashToken(code), input.clientId, input.sourceId, [input.sourceId], MEMBER_APP_ENROLLMENT_LABEL, expiresAt, input.memberId],
-      );
-      await writeEnrollmentAudit(tx, id, input.clientId, "issue", who, null, {
-        source_id: input.sourceId,
-        federated_read: [input.sourceId],
-        label: MEMBER_APP_ENROLLMENT_LABEL,
-        expires_at: expiresAt,
-        spend_id: id,
-        member_id: input.memberId,
-      });
-      await writeMemberAudit(tx, { actor: `member:${input.memberId}`, via: "app" }, {
-        memberId: input.memberId,
-        action: "bind",
-        detail: { credential: { kind: "enrollment", id }, previous_member_id: null },
-      });
-    });
-    return { id, code, expiresAt, clientId: input.clientId };
-  }
-
-  /**
    * Redeem an enrollment code for `clientId`. ONE atomic UPDATE claims the row
    * — there is no check-then-act, so two concurrent redemptions cannot both
    * succeed. Returns the grant to bind, or undefined for wrong / used /
@@ -3416,21 +3352,27 @@ export class OAuthProvider {
   }
 
   /**
-   * Refuse a credential whose member is disabled, removed or missing, and
-   * widen an enabled member's reads by its groups' sources. A credential that
-   * names no member is returned untouched, without a query.
+   * A credential that names no member is returned untouched, without a query.
+   * One bound to a member works only while that member is the brain's enabled
+   * owner (config access.owner_member), and then reads as the owner. Any other
+   * binding is refused: this build has no team members, and treating such a
+   * key as unbound would turn a disabled person's key back on.
    */
   private async withMembers<G extends PrincipalGrant>(grant: G, bound: unknown[]): Promise<G> {
-    const access = await memberAccess(this.engine, bound);
-    if (access === null && memberRequired()) throw new InvalidTokenError("member_required: this brain accepts only credentials that belong to a member");
-    if (access === null) return grant;
-    if (access.refused) {
+    const named = bound.filter((id) => id !== null && id !== undefined).map(String);
+    if (named.length === 0) {
+      if (memberRequired()) throw new InvalidTokenError("member_required: this brain accepts only credentials that belong to a member");
+      return grant;
+    }
+    const owner = await liveOwnerMember(this.engine);
+    const other = named.find((id) => id !== owner);
+    if (owner === null || other !== undefined) {
       throw new InvalidTokenError(
-        `member_disabled: this credential belongs to member "${access.refused.memberId}", which is ${access.refused.reason}; ` +
-          "ask the brain operator to enable the member or rebind the credential",
+        `credential_unsupported: this credential belongs to member "${other ?? named[0]}", which is not the brain's owner; ` +
+          "ask the brain operator to issue an unbound credential",
       );
     }
-    return { ...widenReadSources(grant, access.groupSources), memberId: access.memberId };
+    return { ...grant, memberId: owner };
   }
 
   // -------------------------------------------------------------------------
@@ -3553,26 +3495,12 @@ export class OAuthProvider {
   // -------------------------------------------------------------------------
 
   /** Delete expired access/refresh tokens and authorization codes. Returns
-   *  the total row count swept. A queued ingest job re-reads the token rows
-   *  it names (one family-less token, or every row of a refresh family; see
-   *  resolvePrincipal), so rows still named by a pending or running ingest
-   *  job stay until that job is done: reaching the TTL is not a revocation. */
+   *  the total row count swept. */
   async sweepExpiredTokens(): Promise<number> {
     const now = Math.floor(Date.now() / 1000);
     const tokens = await this.rows(
-      `WITH held AS (
-         SELECT DISTINCT payload->'principal'->>'kind' AS kind, payload->'principal'->>'id' AS id
-           FROM jobs
-          WHERE kind = ANY($2::text[])
-            AND status IN ('pending', 'running')
-            AND payload->'principal'->>'kind' IN ('oauth_token', 'oauth_family')
-       )
-       DELETE FROM oauth_tokens
-        WHERE expires_at < $1
-          AND NOT (family_id IS NULL AND token_hash IN (SELECT id FROM held WHERE kind = 'oauth_token' AND id IS NOT NULL))
-          AND (family_id IS NULL OR family_id NOT IN (SELECT id FROM held WHERE kind = 'oauth_family' AND id IS NOT NULL))
-       RETURNING 1`,
-      [now, [INGEST_CAPTURE_JOB_KIND, TRANSCRIPTS_INGEST_JOB_KIND]],
+      `DELETE FROM oauth_tokens WHERE expires_at < $1 RETURNING 1`,
+      [now],
     );
     const codes = await this.rows(
       `DELETE FROM oauth_codes WHERE expires_at < $1 RETURNING 1`,

@@ -19,7 +19,7 @@
  *     and is refused on another member's personal source.
  */
 import type { Engine } from "./engine/interface.ts";
-import { ownerMemberId } from "./brain-owner.ts";
+import { ownerMemberId } from "./caller-access.ts";
 
 export const SPEAKER_OWNER_KEY = "speaker_owner";
 export const SPEAKER_OWNER_BASES = ["is_from_me", "gmail_sent", "session_user", "export_user"] as const;

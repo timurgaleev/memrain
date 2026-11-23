@@ -207,6 +207,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
         expect((await asReader(pats.plain)).clientId).toBe("pat-plain");
         const rotated = await provider.exchangeRefreshToken(client, ownerClientRefresh);
         expect((await asReader(rotated.access_token)).clientId).toBe(client.client_id);
+        ownerClientRefresh = rotated.refresh_token!;
       });
 
       it("a PAT bound to a disabled member is refused", async () => {
@@ -290,10 +291,27 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
     });
 
     describe("lite-only", () => {
-      it.todo("a PAT bound to the owner member works and reads owner-only pages");
-      it.todo("a PAT bound to another enabled member is refused as credential_unsupported");
-      it.todo("a PAT with min_trust is refused as credential_unsupported");
-      it.todo("an OAuth client bound to the owner member keeps working through refresh");
+      it("a PAT bound to the owner member works, reads as the owner and reads owner-only pages", async () => {
+        const owner = await asReader(pats.owner);
+        expect(owner.memberId).toBe("ora");
+        const page = await call("page_get", { slug: "mail/private", source_id: "mail" }, owner);
+        expect(page.text).toContain("Private zephyrine ledger thread");
+      });
+
+      it("a PAT bound to another enabled member is refused as credential_unsupported", async () => {
+        expect(await refusal(asReader(pats.otherMember))).toContain("credential_unsupported");
+      });
+
+      it("a PAT with min_trust is refused as credential_unsupported", async () => {
+        expect(await refusal(asReader(pats.floored))).toContain("credential_unsupported");
+      });
+
+      it("an OAuth client bound to the owner member keeps working through refresh", async () => {
+        const rotated = await provider.exchangeRefreshToken(client, ownerClientRefresh);
+        const info = await asReader(rotated.access_token);
+        expect(info.memberId).toBe("ora");
+        expect(info.clientId).toBe(client.client_id);
+      });
     });
   });
 }
