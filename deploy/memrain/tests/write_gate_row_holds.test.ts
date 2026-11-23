@@ -430,6 +430,8 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       const holds = await listRowHolds(s.engine());
       expect(holds).toHaveLength(2);
       for (const h of holds) expect((await releaseRowHold(s, h.id, "operator")).status).toBe("released");
+      // Released fence takes are stored by the takes writer's next sync of the page.
+      await syncTakesFromFence(s.engine(), "people/ana", body);
       expect(await count(s, `SELECT count(*)::int AS n FROM synth_takes WHERE source_ref = 'people/ana'`)).toBe(2);
     });
   });

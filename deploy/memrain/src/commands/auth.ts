@@ -107,7 +107,7 @@ import {
   type Config,
 } from "../core/config.ts";
 import { patNameSpendConflict } from "../core/budget.ts";
-import { bindCredential, existingMember } from "../core/members.ts";
+import { liveOwnerMember } from "../core/caller-access.ts";
 import { assertCredentialScoped } from "../core/requester-scope.ts";
 import { resolveGrantProfile } from "../core/grant-profiles.ts";
 import { isTrustTier, TRUST_TIERS, type TrustTier } from "../core/trust-tier.ts";
@@ -759,11 +759,13 @@ async function createToken(name: string, rest: string[]): Promise<void> {
       ...(profile ? { scopes: profile.scopes } : flags["scopes"] !== undefined ? { scopes: listFlag(flags["scopes"])! } : {}),
       ...(flags["federated-read"] !== undefined ? { federatedRead: listFlag(flags["federated-read"])! } : {}),
     });
-    const member = flags["member"] !== undefined ? await existingMember(storage.engine(), flags["member"]) : undefined;
-    if (member !== undefined && member.status !== "enabled") {
-      throw new Error(`member "${member.id}" is ${member.status}; only an enabled member can be bound`);
+    // A key may be bound only to the brain's enabled owner: the verifier
+    // refuses a key bound to anyone else.
+    const memberId = flags["member"];
+    if (memberId !== undefined && memberId !== await liveOwnerMember(storage.engine())) {
+      throw new Error(`--member "${memberId}" is not the brain's enabled owner; a key can be bound only to the owner`);
     }
-    await assertCredentialScoped(storage.raw(), { memberId: member?.id ?? null, sourceId: grant.sourceGrant ?? null }, "token", name);
+    await assertCredentialScoped(storage.raw(), { memberId: memberId ?? null, sourceId: grant.sourceGrant ?? null }, "token", name);
     const existing = await storage
       .raw()
       .query<{ id: number }>(
@@ -802,8 +804,10 @@ async function createToken(name: string, rest: string[]): Promise<void> {
         ...(minTrust ? [minTrust] : []),
       ],
     );
-    if (member !== undefined) await bindCredential(storage.engine(), member.id, { kind: "token", id: name }, { actor: cliActor(), via: "cli" });
-    return { ...grant, memberId: member?.id };
+    if (memberId !== undefined) {
+      await storage.raw().query(`UPDATE access_tokens SET member_id = $2 WHERE name = $1 AND revoked_at IS NULL`, [name, memberId]);
+    }
+    return { ...grant, memberId };
   });
   console.log(
     JSON.stringify(

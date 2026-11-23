@@ -73,7 +73,8 @@ describe("owner commands", () => {
     const refused = cli("auth", "create", "loose");
     expect(refused.code).not.toBe(0);
     expect(refused.err + refused.out).toContain("serves several people");
-    expect(cli("auth", "create", "bob-laptop", "--member", "bob").code).toBe(0);
+    // A key bound to a member other than the owner would never verify.
+    expect(cli("auth", "create", "bob-laptop", "--member", "bob").code).not.toBe(0);
     expect(cli("auth", "create", "mail-reader", "--source", "me-mail").code).toBe(0);
   });
 

@@ -50,7 +50,6 @@ describe("memrain status", () => {
       stats: { documents: number; chunks: number; embeddings: number };
       health: { embed_coverage_pct: number; queue_depth: number; failed_jobs_24h: number };
       cache: { total: number; fresh: number; stale: number };
-      worker: { holder: string; stale: boolean } | null;
     };
     expect(parsed.ok).toBe(true);
     // The BUILD stamp, not package.json — pinned at 0.1.0, so the old
@@ -62,7 +61,5 @@ describe("memrain status", () => {
     expect(parsed.health.embed_coverage_pct).toBe(1);
     expect(parsed.health.failed_jobs_24h).toBe(0);
     expect(parsed.cache.total).toBe(0);
-    // No worker has acquired the lock on a fresh brain.
-    expect(parsed.worker).toBeNull();
   });
 });

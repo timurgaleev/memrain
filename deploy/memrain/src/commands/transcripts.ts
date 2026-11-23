@@ -28,9 +28,9 @@ import { resolveDateBoundary } from "../core/search/filters.ts";
  * `--facts` runs the paid fact extractor over the parts this run wrote,
  * capped at `--max-cost-usd` (needs MEMRAIN_FACTS_EXTRACTION=1).
  *
- * `status` reports what the brain holds per source and format, the pushed
- * logs in the job queue, and the watermarks. `push` sends one session log to
- * a hosted brain's POST /ingest (see docs/TRANSCRIPTS.md).
+ * `status` reports what the brain holds per source and format, and the
+ * watermarks. `push` sends one session log to a hosted brain's POST /ingest
+ * (see docs/TRANSCRIPTS.md).
  */
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -39,7 +39,6 @@ import { looksBinary } from "../core/binary-guard.ts";
 import { loadConfig } from "../core/config.ts";
 import { extractFactsForPage, factsExtractionEnabled } from "../core/facts-extract.ts";
 import type { EmbedFn } from "../core/indexer.ts";
-import { TRANSCRIPTS_INGEST_JOB_KIND } from "../core/jobs/kinds.ts";
 import type { SonnetFn } from "../core/llm/sonnet.ts";
 import { getRecipeState, setRecipeState } from "../core/recipe-state.ts";
 import { SecretRejectedError } from "../core/secret-scan.ts";
@@ -579,17 +578,12 @@ async function runStatus(opts: TranscriptsCmdOptions): Promise<number> {
         GROUP BY 1, 2 ORDER BY 1, 2`,
       params,
     );
-    const jobs = await engine.query<{ status: string; n: number }>(
-      `SELECT status, COUNT(*)::int AS n FROM jobs WHERE kind = $1 GROUP BY 1 ORDER BY 1`,
-      [TRANSCRIPTS_INGEST_JOB_KIND],
-    );
     const marks = await engine.query<{ recipe_id: string; value: TranscriptWatermark | string }>(
       `SELECT recipe_id, value FROM recipe_state WHERE recipe_id LIKE $1 AND key = $2 ORDER BY recipe_id`,
       [`${WATERMARK_RECIPE_PREFIX}${opts.sourceId ? `${opts.sourceId}:` : ""}%`, WATERMARK_KEY],
     );
     return {
       transcripts: pages.rows,
-      push_jobs: Object.fromEntries(jobs.rows.map((r) => [r.status, r.n])),
       watermarks: marks.rows.map((r) => {
         const v = (typeof r.value === "string" ? JSON.parse(r.value) : r.value) as TranscriptWatermark;
         const source = r.recipe_id.slice(WATERMARK_RECIPE_PREFIX.length).replace(/:[0-9a-f]{16}$/, "");
@@ -605,8 +599,6 @@ async function runStatus(opts: TranscriptsCmdOptions): Promise<number> {
   for (const r of report.transcripts) {
     console.log(`${r.source_id} ${r.format}: ${r.sessions} sessions, ${r.parts} parts, last written ${r.last_write}`);
   }
-  const queued = Object.entries(report.push_jobs);
-  if (queued.length > 0) console.log(`pushed logs: ${queued.map(([k, n]) => `${n} ${k}`).join(", ")}`);
   for (const w of report.watermarks) console.log(`watermark ${w.source_id} ${w.path}: ${w.watermark}`);
   return 0;
 }

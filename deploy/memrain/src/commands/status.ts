@@ -23,10 +23,6 @@ import { loadConfig } from "../core/config.ts";
 import { currentDocumentClock } from "../core/generation.ts";
 import { brainHealthMetrics, collectPerSourceHealth } from "../core/source-health.ts";
 import { cacheStats } from "../core/search/query-cache.ts";
-import {
-  readWorkerLock,
-  DEFAULT_WORKER_LOCK_ID,
-} from "../core/jobs/worker-lock.ts";
 import { VERSION } from "../version.ts";
 import type { Engine } from "../core/engine/interface.ts";
 import { isQuiet, resolveQuiescence } from "../core/quiescence.ts";
@@ -34,11 +30,12 @@ import { CYCLE_LOCK_ID } from "../core/db-lock.ts";
 import { LEGACY_CYCLE_LOCK_ID, LEGACY_WORKER_LOCK_ID } from "../core/brand.ts";
 
 /**
- * Cycle-lock namespaces and worker-lock ids of both brands. The legacy ones are
- * only read here, so a live pre-rename process blocks `--quiescent`.
+ * Cycle-lock namespaces and worker-lock ids of both brands. The worker ids are
+ * the ones a 2.x job worker heartbeats under, and the legacy ones are only read
+ * here, so a live older process still blocks `--quiescent`.
  */
 const CYCLE_LOCK_NAMESPACES = [CYCLE_LOCK_ID, LEGACY_CYCLE_LOCK_ID];
-const WORKER_LOCK_IDS = [DEFAULT_WORKER_LOCK_ID, LEGACY_WORKER_LOCK_ID];
+const WORKER_LOCK_IDS = ["memrain-jobs-worker", LEGACY_WORKER_LOCK_ID];
 
 export interface QuiescenceStatus {
   maintenance: boolean;
@@ -150,10 +147,6 @@ export async function runStatus(opts: StatusCmdOptions = {}): Promise<number> {
     const health = await brainHealthMetrics(engine);
     const clock = await currentDocumentClock(engine);
     const cache = await cacheStats(engine, clock);
-    // Active job worker: holder + heartbeat staleness. `null` = no worker has
-    // ever acquired the lock; `stale: true` = the holder crashed or wedged
-    // (heartbeat older than its TTL) and a survivor will steal on next tick.
-    const worker = await readWorkerLock(engine, DEFAULT_WORKER_LOCK_ID);
     // Unscoped (no sourceIds) → whole-brain breakdown incl. '(unclassified)'.
     const perSource = opts.perSource
       ? await collectPerSourceHealth(engine)
@@ -170,7 +163,6 @@ export async function runStatus(opts: StatusCmdOptions = {}): Promise<number> {
           health,
           ...(perSource ? { perSource } : {}),
           cache,
-          worker,
           quiescence,
         },
         null,

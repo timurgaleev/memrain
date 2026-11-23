@@ -287,28 +287,10 @@ async function publishReleased(storage: Storage, hold: RowHold, path: WriterPath
   const engine = storage.engine();
   const p = hold.payload;
   const rowNum = typeof p["row_num"] === "number" ? p["row_num"] : null;
-  if (path === "fence_take" && rowNum !== null) {
-    const { getPage, lockPageSlugs } = await import("./pages.ts");
-    const { syncTakesFromFence } = await import("./synthesis/takes-canon.ts");
-    const page = await getPage(storage, p["source_ref"] as string);
-    if (!page) return null;
-    // Under the page's lock, and only while the page is still the one read: a
-    // page edit that commits meanwhile ran its own sync, which found the
-    // content released.
-    const current = await engine.transaction(async (tx) => {
-      await lockPageSlugs(tx, page.slug);
-      // scope: upstream the page slug comes from the released hold's own payload
-      const now = await tx.query<{ content_hash: string }>(`SELECT content_hash FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [page.slug]);
-      if (now.rows[0]?.content_hash !== page.content_hash) return false;
-      await syncTakesFromFence(tx, page.slug, page.markdown_body, { changedRowNums: [rowNum], deactivateMissing: false });
-      return true;
-    });
-    if (!current) return null;
-    // scope: upstream the take key comes from the released hold's own payload
-    const r = await engine.query<{ take_key: string }>(
-      `SELECT take_key FROM synth_takes WHERE take_key = $1 AND claim_text = $2`, [p["take_key"], p["claim_text"]]);
-    return r.rows[0]?.take_key ?? null;
-  }
+  // A released fence take is stored by the takes writer the next time it
+  // syncs the page, which finds the content released; nothing here writes
+  // synth_takes.
+  if (path === "fence_take") return null;
   if (path === "fence_fact" && rowNum !== null) {
     const { getPage } = await import("./pages.ts");
     const { reconcileFactsForPage } = await import("./facts-reconcile.ts");
