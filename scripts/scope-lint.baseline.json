@@ -46,7 +46,7 @@
   "core/links.ts": 5,
   "core/lint.ts": 1,
   "core/mixed-script-targets.ts": 3,
-  "core/oauth-provider.ts": 27,
+  "core/oauth-provider.ts": 26,
   "core/orphan-policy.ts": 1,
   "core/page-index.ts": 1,
   "core/page-mirror-adoption.ts": 8,
