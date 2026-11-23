@@ -9,59 +9,25 @@
  * page and diary fences, so on an empty fenced result they would still tell
  * the caller that hidden content matched its query.
  */
-import type { Intent } from "./intent.ts";
-import type { RerankGateReason, SearchConfidence } from "./confidence-grade.ts";
-import type { FanoutMeta } from "./alias-fanout.ts";
-
 export const DEGRADED_REASONS = [
   "embed_timeout",
   "vector_arm_failed",
   "keyword_timeout",
   "keyword_arm_failed",
-  "keyword_candidates_incomplete",
-  "title_arm_failed",
   "keyword_zero",
-  "expansion_failed",
   "budget_truncated",
-  "rerank_skipped",
   "vector_candidates_incomplete",
 ] as const;
 
 export type DegradedReason = (typeof DEGRADED_REASONS)[number];
 
-/** "error": the cache read threw, so it was never consulted. */
-export type SearchCacheState = "hit" | "miss" | "off" | "error";
-
 export interface SearchMeta {
-  /** A query vector was available, so the vector arm (or a cache built on one) served this call. */
+  /** A query vector was available, so the vector arm served this call. */
   vectorEnabled: boolean;
-  intent: Intent;
-  /** The active search mode bundle name. */
-  mode: string;
-  cache: SearchCacheState;
   degraded: DegradedReason[];
-  /** Candidates in the fused pool (or the cached ranked set on a cache hit), before hydrate, dedup and the k trim. */
+  /** Candidates in the fused pool, before hydrate, dedup and the k trim. */
   retrieved: number;
   returned: number;
-  /** How sure the answer is, from the returned hits' evidence (operator-only); "unknown" on a cache hit. */
-  confidence?: SearchConfidence;
-  /** What the two-pass rerank did, when it was on (operator-only). */
-  rerank?: RerankOutcome;
-  /** What the alias fan-out searched, when the query named an entity (operator-only). */
-  fanout?: FanoutMeta;
-  /** Operator explain only. Stage intervals use a monotonic clock. */
-  timings_ms?: Record<string, number>;
-  pending_embeddings?: number | null;
-}
-
-/** `ran`: the model was asked (its fail-open paths included). */
-export interface RerankOutcome {
-  outcome: "ran";
-  /** Relational pages the pin placed at the head of the rerank window. */
-  pinned: number;
-  /** MEMRAIN_RERANK_GATE=shadow only: whether the gate would have skipped the call, and on what. */
-  would_skip?: boolean;
-  gate_reason?: RerankGateReason;
 }
 
 export interface PublicSearchMeta {
@@ -75,8 +41,6 @@ const CORPUS_INDEPENDENT_REASONS: ReadonlySet<DegradedReason> = new Set([
   "vector_arm_failed",
   "keyword_timeout",
   "keyword_arm_failed",
-  "keyword_candidates_incomplete",
-  "title_arm_failed",
 ]);
 
 /** The meta a non-operator caller (public ingress or an OAuth tenant) sees. */
@@ -92,12 +56,8 @@ const REASON_TEXT: Record<DegradedReason, string> = {
   vector_arm_failed: "vector arm unavailable (vector_arm_failed)",
   keyword_timeout: "keyword arm timed out",
   keyword_arm_failed: "keyword arm unavailable",
-  keyword_candidates_incomplete: "identifier keyword probe unavailable",
-  title_arm_failed: "title arm unavailable",
   keyword_zero: "keyword search found nothing",
-  expansion_failed: "query expansion failed",
   budget_truncated: "token budget dropped hits",
-  rerank_skipped: "rerank skipped",
   vector_candidates_incomplete: "vector arm ran out of candidates inside the filter",
 };
 

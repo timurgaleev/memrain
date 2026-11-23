@@ -9,11 +9,8 @@
  * opens silently. This walks the missing chunks and computes their Titan
  * vectors so the vector arm sees the whole corpus again.
  *
- * The default candidate set is `source-health`'s `embeddable` definition, the
- * same SQL (`embeddableChunkFragment`), which leaves code out. A code run
- * (`kind: "code"`, `memrain embed --code`) walks code chunks instead
- * (`codeEmbeddableChunkFragment`), embeds the input the code indexer would
- * (`codeEmbeddingInput`), and is usually held to a dollar cap (`maxUsd`).
+ * The candidate set is `source-health`'s `embeddable` definition, the same SQL
+ * (`embeddableChunkFragment`), which leaves code out.
  *
  * Provenance auto-invalidation (migration 066, OPT-IN): when
  * `reembedOnSignatureChange` (env `MEMRAIN_REEMBED_ON_SIGNATURE_CHANGE=1`) is set,
@@ -50,39 +47,20 @@
  * back as `startAfterId` to RESUME a capped or interrupted run from where it
  * stopped, and the `IS NULL` predicate makes a plain re-run resumable too.
  *
- * Contextual-retrieval parity (migration 057): a chunk marked
- * `chunks.contextual_embedded` had its CURRENT vector computed under the
- * `<context>title\nsynopsis</context>` prefix (`search/contextual-embed.ts`).
- * Every re-embed here — gap-fill, signature-stale, `forceReembed` — rebuilds
- * that same prefix (document title + first-two-sentence synopsis of the opening
- * chunk) and embeds the wrapped text, so a backfill never silently downgrades a
- * contextual vector to a raw one and the marker stays truthful on every path.
- * Unmarked chunks embed raw content, unchanged.
+ * Every chunk embeds its raw content. A chunk an earlier build marked
+ * `chunks.contextual_embedded` (migration 057) is re-embedded raw like the
+ * rest, and its marker and tier are cleared with the new vector, so the marker
+ * stays truthful.
  */
 import { classifyBedrockError, runInBatchScope } from "./llm/bedrock-errors.ts";
 import { withLongHold } from "./pool-budget.ts";
-import { BudgetExhausted, costUsd, isBudgetRefusal, worstCaseUsd } from "./budget.ts";
-import {
-  CODE_EMBED_MAX_BYTES,
-  codeEmbeddingInput,
-  EmbedSpendCap,
-  hnswIndexMb,
-  readVectorIndexBudget,
-  vectorIndexFullReason,
-  type VectorIndexBudget,
-} from "./code-embed.ts";
+import { isBudgetRefusal } from "./budget.ts";
 import type { Engine } from "./engine/interface.ts";
 import { embedText, DEFAULT_MODEL_ID, embeddingSignature } from "./embedding.ts";
 import { embeddingInputHash } from "./embedding-input-hash.ts";
 import { embeddingCast } from "./embedding-column.ts";
-import { codeEmbeddableChunkFragment, embeddableChunkFragment } from "./embed-skip.ts";
-import {
-  buildContextualPrefix,
-  wrapChunkForEmbedding,
-  extractFirstTwoSentences,
-} from "./search/contextual-embed.ts";
+import { embeddableChunkFragment } from "./embed-skip.ts";
 import { bumpDocumentClock } from "./generation.ts";
-import { clearCache } from "./search/query-cache.ts";
 import { withRetry, BULK_RETRY_OPTS } from "./retry.ts";
 
 /** Default in-flight embed calls when `MEMRAIN_EMBED_CONCURRENCY` is unset. */
@@ -165,17 +143,6 @@ export interface EmbedBackfillOptions {
    * whole-corpus `--all`. Off by default: a routine backfill only fills gaps.
    */
   forceReembed?: boolean;
-  /**
-   * `"code"`: embed the chunks of code documents (`memrain embed --code`)
-   * instead of the prose corpus. Never combined with `forceReembed` or a
-   * signature swap: a code run only fills code chunks that have no vector.
-   */
-  kind?: "code";
-  /**
-   * Dollar cap for this run: each embed call reserves its worst case first and
-   * the run stops cleanly (`capReached`) at the first one that would cross it.
-   */
-  maxUsd?: number;
 }
 
 export interface EmbedBackfillResult {
@@ -205,50 +172,11 @@ export interface EmbedBackfillResult {
    * when no candidate was processed (dry run, or nothing left to embed).
    */
   lastId: string | null;
-  /** `maxUsd` runs: the cap stopped the run before every candidate was embedded. */
-  capReached?: boolean;
-  /** `maxUsd` runs: worst-case dollars reserved by the calls made. */
-  reservedUsd?: number;
-  /**
-   * Code dry runs: UTF-8 bytes of the embedding inputs, a typical cost
-   * (bytes / 4 tokens) and the worst-case bound the cap is checked against.
-   */
-  bytes?: number;
-  estimatedUsd?: number;
-  costUpperBoundUsd?: number;
-  /**
-   * Code runs: the embeddings index now and after this run's candidates are
-   * embedded (HNSW estimate, MB), and the database cache it must fit (null on
-   * PGLite, where no cache bound applies).
-   */
-  vectorIndex?: { rows: number; indexMb: number; projectedMb: number; sharedBuffersMb: number | null; fits: boolean };
-  /** Code runs: refused before any call because the projected index would not fit the database cache. */
-  indexFull?: string;
-}
-
-/** The run's own dollar cap stopped it (not a wallet or client cap). */
-class EmbedCapReached extends BudgetExhausted {
-  constructor(reason: string) {
-    super("cost", reason);
-  }
 }
 
 interface CandidateRow {
   id: string;
   content: string;
-  /** What a code chunk's embedding input is built from besides its text. */
-  source_path: string;
-  language: string | null;
-  symbol_name: string | null;
-  symbol_type: string | null;
-  parent_symbol_path: string[] | null;
-  doc_comment: string | null;
-  /** Migration 057 marker — this chunk's vector carries the contextual prefix. */
-  contextual_embedded: boolean;
-  /** Document title — the contextual prefix's first line (marked chunks). */
-  title: string | null;
-  /** Document's opening chunk — synopsis source. NULL for unmarked rows. */
-  opening_content: string | null;
 }
 
 /** Escape LIKE metacharacters so a slug's `_`/`%` stays literal in patterns. */
@@ -262,8 +190,6 @@ export interface EmbedScope {
   slugs?: string[];
   /** Candidates only: chunks below this many counted embed failures. */
   maxFailures?: number;
-  /** Candidates only: code chunks instead of the prose corpus. */
-  code?: boolean;
 }
 
 /**
@@ -311,7 +237,7 @@ function buildCandidateWhere(
   scope: EmbedScope | undefined,
 ): { where: string; params: unknown[] } {
   const params: unknown[] = [];
-  const corpus = scope?.code ? codeEmbeddableChunkFragment("d", "c") : embeddableChunkFragment("d", "c");
+  const corpus = embeddableChunkFragment("d", "c");
   let where = `em.chunk_id IS NULL
         AND ${corpus}`;
   where += scopeFragment(params, scope);
@@ -337,17 +263,8 @@ async function fetchCandidatePage(
   scope?: EmbedScope,
 ): Promise<CandidateRow[]> {
   const { where, params } = buildCandidateWhere(cursor, scope);
-  // The opening-chunk subquery only runs for marked rows — it feeds the
-  // contextual prefix's synopsis, exactly the source `reindex --contextual`
-  // uses, so a backfilled vector matches what that command would produce.
   const r = await engine.query<CandidateRow>(
-    `SELECT c.id, c.content, c.contextual_embedded, d.title, d.source_path,
-            c.language, c.symbol_name, c.symbol_type, c.parent_symbol_path, c.doc_comment,
-            CASE WHEN c.contextual_embedded THEN (
-              SELECT c2.content FROM chunks c2
-               WHERE c2.document_id = c.document_id
-               ORDER BY c2.chunk_index ASC LIMIT 1
-            ) END AS opening_content
+    `SELECT c.id, c.content
        FROM chunks c
        JOIN documents d ON d.id = c.document_id
        LEFT JOIN embeddings em ON em.chunk_id = c.id
@@ -382,53 +299,6 @@ async function countCandidates(
   const raw = r.rows[0]?.n;
   const n = typeof raw === "number" ? raw : Number(raw) || 0;
   return limit !== undefined && limit > 0 ? Math.min(n, Math.floor(limit)) : n;
-}
-
-/**
- * Price a code run before it is paid for: the candidates' embedding-input
- * bytes, a typical cost at four bytes a token, and the worst case the cap
- * reserves (a token per byte plus per-call framing — `worstCaseUsd` summed).
- * The bytes bound each input from above: the stored text, the doc comment, the
- * full source path and the symbol names, plus the header's fixed characters,
- * capped at CODE_EMBED_MAX_BYTES. With `limit`, only the chunks that run would
- * take: the first `limit` in the walk's id order.
- */
-async function priceCodeCandidates(
-  engine: Engine,
-  model: string,
-  cursor: string | undefined,
-  scope: EmbedScope,
-  limit: number | undefined,
-): Promise<{ bytes: number; estimatedUsd: number; costUpperBoundUsd: number }> {
-  const { where, params } = buildCandidateWhere(cursor, scope);
-  params.push(CODE_EMBED_MAX_BYTES);
-  const cut = `$${params.length}::int`;
-  const bounded = limit !== undefined && limit > 0 ? `LIMIT ${Math.floor(limit)}` : "";
-  // scope: operator-only the operator prices a code backfill from the local CLI
-  const r = await engine.query<{ n: number | string; bytes: number | string | null }>(
-    `SELECT count(*)::int AS n, COALESCE(sum(s.b), 0)::bigint AS bytes
-       FROM (SELECT LEAST(octet_length(c.content) + COALESCE(octet_length(c.doc_comment), 0)
-                          + octet_length(d.source_path) + COALESCE(octet_length(c.symbol_type), 0)
-                          + COALESCE(octet_length(c.symbol_name), 0)
-                          + COALESCE(octet_length(array_to_string(c.parent_symbol_path, '.')), 0)
-                          + ${CODE_HEADER_FIXED_BYTES}, ${cut}) AS b
-               FROM chunks c
-               JOIN documents d ON d.id = c.document_id
-               LEFT JOIN embeddings em ON em.chunk_id = c.id
-              WHERE ${where}
-              ORDER BY c.id COLLATE "C" ASC
-              ${bounded}) s`,
-    params,
-  );
-  const n = Number(r.rows[0]?.n ?? 0);
-  const bytes = Number(r.rows[0]?.bytes ?? 0);
-  // One empty-input call prices the per-call framing the worst case adds.
-  const perCall = worstCaseUsd({ operation: "embedding", model, worstCase: { input: "", maxOutputTokens: 0 } }) ?? 0;
-  return {
-    bytes,
-    estimatedUsd: costUsd(model, { inputTokens: bytes / 4, outputTokens: 0 }),
-    costUpperBoundUsd: costUsd(model, { inputTokens: bytes, outputTokens: 0 }) + n * perCall,
-  };
 }
 
 /**
@@ -561,35 +431,6 @@ function resolvePageSize(opt?: number): number {
 }
 
 /**
- * The text handed to the embedder for a candidate. A chunk marked
- * `contextual_embedded` re-wraps under the deterministic contextual prefix
- * (document title + first-two-sentence synopsis of the opening chunk) so its
- * replacement vector keeps the prefix its marker promises; anything else
- * embeds the raw content. A code run embeds what the code indexer would
- * (`codeEmbeddingInput`), so the stored input hash matches a later re-index.
- */
-function embedInput(row: CandidateRow, code: boolean): string {
-  if (code) {
-    return codeEmbeddingInput({
-      text: row.content,
-      sourcePath: row.source_path,
-      language: row.language,
-      symbolName: row.symbol_name,
-      symbolType: row.symbol_type,
-      parentSymbolPath: row.parent_symbol_path,
-      docComment: row.doc_comment,
-    });
-  }
-  if (!row.contextual_embedded) return row.content;
-  const prefix = buildContextualPrefix(
-    row.title,
-    extractFirstTwoSentences(row.opening_content ?? ""),
-    { isCode: false },
-  );
-  return wrapChunkForEmbedding(row.content, prefix, { isCode: false });
-}
-
-/**
  * Embed one keyset page through the bounded worker pool. Each real insert calls
  * `onEmbedded`, each per-chunk embed failure `onFailed`; neither aborts the
  * page (one bad row never strands the rest). A failure every row would share
@@ -606,7 +447,6 @@ async function embedPage(
   onEmbedded: () => void,
   onFailed: () => void,
   onStale: () => void,
-  code: boolean,
 ): Promise<void> {
   let next = 0;
   const total = page.length;
@@ -622,7 +462,7 @@ async function embedPage(
       const row = page[i]!;
       let vec: number[];
       try {
-        vec = await embedWithRetry(embed, embedInput(row, code));
+        vec = await embedWithRetry(embed, row.content);
       } catch (err) {
         if (stopsTheRun(err)) {
           fatal ??= { err };
@@ -643,33 +483,26 @@ async function embedPage(
         // counts a real insert exactly once.
         const ins = await withRetry(
           () =>
-            // The vector and the tier it was produced under land together: this
-            // path wraps with the deterministic prefix at most, so a chunk that
-            // was on the LLM tier must not keep claiming it.
+            // The vector and the tier it was produced under land together: the
+            // input is the raw text, so the chunk's tier and contextual marker
+            // are cleared with it.
             // Chunk ids are positional (`<doc>_c<i>`), so a re-index during the
             // embed call can leave this id holding different text: the insert
             // only lands while the chunk still holds the text that was embedded
             // (FOR SHARE: a concurrent re-index's delete is waited for, not
-            // raced). A code input is also built from the doc comment and the
-            // symbol, which change without the body (a reworded comment, a
-            // renamed class), so they must still match too.
+            // raced).
             engine.query<{ fresh: number; inserted: number }>(
               `WITH cur AS (
                  SELECT id FROM chunks
-                  WHERE id = $1 AND content = $6
-                    AND ($8::boolean IS NOT TRUE OR (
-                      doc_comment IS NOT DISTINCT FROM $9
-                      AND symbol_name IS NOT DISTINCT FROM $10
-                      AND symbol_type IS NOT DISTINCT FROM $11
-                      AND parent_symbol_path IS NOT DISTINCT FROM $12::text[]))
+                  WHERE id = $1 AND content = $5
                   FOR SHARE
                ), ins AS (
                  INSERT INTO embeddings (chunk_id, vector, model, embedding_signature, input_hash)
-                 SELECT cur.id, $2${vectorCast}, $3, $4, $7 FROM cur
+                 SELECT cur.id, $2${vectorCast}, $3, $4, $6 FROM cur
                  ON CONFLICT (chunk_id) DO NOTHING
                  RETURNING chunk_id
                ), upd AS (
-                 UPDATE chunks c SET contextual_tier = $5, embed_failures = 0
+                 UPDATE chunks c SET contextual_tier = 'none', contextual_embedded = false, embed_failures = 0
                    FROM ins WHERE c.id = ins.chunk_id
                  RETURNING c.id
                )
@@ -680,19 +513,8 @@ async function embedPage(
                 JSON.stringify(vec),
                 model,
                 embeddingSignature(model, vec.length),
-                row.contextual_embedded && !code ? "deterministic" : "none",
                 row.content,
-                embeddingInputHash({
-                  model,
-                  dimensions: vec.length,
-                  tier: row.contextual_embedded && !code ? "deterministic" : "none",
-                  input: embedInput(row, code),
-                }),
-                code,
-                row.doc_comment,
-                row.symbol_name,
-                row.symbol_type,
-                row.parent_symbol_path,
+                embeddingInputHash({ model, dimensions: vec.length, tier: "none", input: row.content }),
               ],
             ),
           BULK_RETRY_OPTS,
@@ -711,24 +533,6 @@ async function embedPage(
   const pool = Array.from({ length: Math.min(concurrency, total) }, () => worker());
   await Promise.all(pool);
   if (fatal) throw fatal.err;
-}
-
-/**
- * Fixed header characters a code embedding input adds around the path and the
- * symbol names: the bracketed language label, spaces, ` (in )`, and the blank
- * line and newline around the doc comment. A bound, not an exact count.
- */
-const CODE_HEADER_FIXED_BYTES = 32;
-
-/** The embeddings index now and once `newRows` more vectors land, for the code dry run. */
-function indexProjection(budget: VectorIndexBudget, newRows: number): NonNullable<EmbedBackfillResult["vectorIndex"]> {
-  return {
-    rows: budget.rows,
-    indexMb: hnswIndexMb(budget.rows, budget.vectorBytes),
-    projectedMb: hnswIndexMb(budget.rows + newRows, budget.vectorBytes),
-    sharedBuffersMb: budget.cacheBytes === null ? null : Math.floor(budget.cacheBytes / (1024 * 1024)),
-    fits: budget.headroomRows === null || newRows <= budget.headroomRows,
-  };
 }
 
 /** An embed failure every later row would hit too: a budget refusal, or a
@@ -780,41 +584,14 @@ async function runEmbedBackfillBody(
   // Record the same model id the embedder actually uses, so a backfilled row's
   // recorded model matches the embedder that produced it (no drift).
   const model = opts.model ?? DEFAULT_MODEL_ID;
-  const code = opts.kind === "code";
-  if (code && (opts.forceReembed || opts.reembedOnSignatureChange)) {
-    throw new Error("embed backfill: a code run only fills missing vectors (no forceReembed or signature swap)");
-  }
-  // The run's own cap, reserved synchronously before each call (throttle
-  // retries included: each attempt may bill), so concurrent workers cannot
-  // pass the same headroom. A capped call is sent once by the wallet, so one
-  // reservation covers one request; embedWithRetry's throttle retries reserve
-  // again.
-  // A code run also stops before the vector index outgrows the database cache.
-  const budget = code ? await readVectorIndexBudget(engine) : null;
-  const headroom = budget?.headroomRows ?? null;
-  const cap = opts.maxUsd !== undefined || headroom !== null
-    ? new EmbedSpendCap(opts.maxUsd ?? Number.POSITIVE_INFINITY, headroom === null ? {} : {
-        maxCalls: headroom,
-        callsReason: vectorIndexFullReason(budget!, headroom + 1),
-      })
-    : null;
-  const rawEmbed = opts.embed ??
-    ((t: string) => embedText(t, { modelId: model, ...(cap ? { maxAttempts: 1 } : {}) }));
-  const embed = cap
-    ? (t: string): Promise<number[]> => {
-        if (!cap.tryReserve(model, t)) throw new EmbedCapReached(cap.stopReason ?? "embedding cap reached");
-        return rawEmbed(t);
-      }
-    : rawEmbed;
+  const embed = opts.embed ?? ((t: string) => embedText(t, { modelId: model }));
   const currentSig = embeddingSignature(model);
   const batch = opts.batch && opts.batch > 0 ? opts.batch : 50;
   const concurrency = resolveConcurrency(opts.concurrency);
   const pageSize = resolvePageSize(opts.pageSize);
-  // A code run never swaps signatures: the prose-wide selector would delete
-  // prose vectors the code run then never re-embeds.
-  const reembedOnSig = !code && (
+  const reembedOnSig =
     opts.reembedOnSignatureChange ??
-    process.env.MEMRAIN_REEMBED_ON_SIGNATURE_CHANGE === "1");
+    process.env.MEMRAIN_REEMBED_ON_SIGNATURE_CHANGE === "1";
   const scope: EmbedScope | undefined =
     opts.sourceId || (opts.slugs && opts.slugs.length > 0)
       ? {
@@ -825,9 +602,7 @@ async function runEmbedBackfillBody(
   // Candidates only: the forceReembed and signature selectors share EmbedScope
   // through scopeFragment, which never reads it.
   const candidateScope: EmbedScope | undefined =
-    opts.maxFailures !== undefined || code
-      ? { ...scope, ...(opts.maxFailures !== undefined ? { maxFailures: opts.maxFailures } : {}), ...(code ? { code: true } : {}) }
-      : scope;
+    opts.maxFailures !== undefined ? { ...scope, maxFailures: opts.maxFailures } : scope;
 
   // Provenance auto-invalidation (migration 066), opt-in. Count always (so a
   // dry run reports it); delete only on a real run so the freed rows become
@@ -864,25 +639,6 @@ async function runEmbedBackfillBody(
       forceCleared,
       dryRun: true,
       lastId: null,
-      ...(code ? await priceCodeCandidates(engine, model, opts.startAfterId, candidateScope!, opts.limit) : {}),
-      ...(budget ? { vectorIndex: indexProjection(budget, total) } : {}),
-    };
-  }
-
-  // A code run the cache cannot hold is refused whole, before any call: one
-  // that stopped at the cache's edge would leave the index filling it.
-  if (budget && headroom !== null && total > headroom) {
-    return {
-      candidates: 0,
-      embedded: 0,
-      failed: 0,
-      stale: 0,
-      signatureStale,
-      forceCleared,
-      dryRun: false,
-      lastId: null,
-      vectorIndex: indexProjection(budget, total),
-      indexFull: vectorIndexFullReason(budget, total),
     };
   }
 
@@ -907,7 +663,6 @@ async function runEmbedBackfillBody(
   // Keyset walk: one page at a time, advancing the cursor by the last id seen.
   // The cap (`opts.limit`) bounds the total rows processed across pages; the
   // `em.chunk_id IS NULL` predicate + forward-only cursor keep it re-entrant.
-  let capReached = false;
   for (;;) {
     opts.signal?.throwIfAborted();
     if (opts.limit !== undefined && opts.limit > 0 && processed >= opts.limit) break;
@@ -918,15 +673,7 @@ async function runEmbedBackfillBody(
     const page = await fetchCandidatePage(engine, cursor, pageLimit, candidateScope);
     if (page.length === 0) break;
 
-    try {
-      await embedPage(engine, page, model, embed, concurrency, onEmbedded, onFailed, onStale, code);
-    } catch (err) {
-      // The run's own cap is a clean stop: what landed stays, the cache is
-      // still cleared below, and a re-run continues from the remaining gaps.
-      if (!(err instanceof EmbedCapReached)) throw err;
-      capReached = true;
-      break;
-    }
+    await embedPage(engine, page, model, embed, concurrency, onEmbedded, onFailed, onStale);
 
     processed += page.length;
     cursor = page[page.length - 1]!.id;
@@ -936,20 +683,11 @@ async function runEmbedBackfillBody(
     if (page.length < pageLimit) break;
   }
 
-  // Repairing the vector arm changes what hybrid search returns, so the
-  // query cache must be invalidated — otherwise a ranking cached BEFORE the
-  // backfill keeps being served, bypassing the freshly-embedded chunks. Under
-  // the two-layer cache (migration 031) bumping the global clock is NOT
-  // sufficient: backfill adds embeddings WITHOUT bumping any document's
-  // `generation`, so a cached row whose referenced docs are unchanged would
-  // survive Layer 2 and serve a stale ranking. A full clear is the correct,
-  // unambiguous flush for this rare operator-triggered maintenance op (the
-  // cache refills organically). The clock bump is kept as the corpus-changed
-  // signal other observers read. Fire when vectors were inserted OR a stale
-  // signature swap deleted rows (both change what the vector arm returns).
+  // Repairing the vector arm changes what hybrid search returns: bump the
+  // clock, the corpus-changed signal other observers read. Fire when vectors
+  // were inserted OR a stale signature swap deleted rows.
   if (embedded > 0 || signatureStale > 0 || forceCleared > 0) {
     await bumpDocumentClock(engine);
-    await clearCache(engine);
   }
 
   return {
@@ -961,6 +699,5 @@ async function runEmbedBackfillBody(
     forceCleared,
     dryRun: false,
     lastId,
-    ...(cap ? { capReached, reservedUsd: cap.reservedUsd } : {}),
   };
 }

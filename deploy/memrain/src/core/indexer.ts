@@ -7,9 +7,8 @@
  * Only ingests in-process strings + filesystem paths. Driven on demand by
  * the `memrain reindex` CLI and the MCP `index` tool (no boot-time watcher).
  *
- * The atomic doc+chunks+entities writer lives in `core/indexer-tx.ts` so
- * the markdown indexer (this file, embeds via Titan) and the code
- * indexer (`core/indexer-code.ts`) share one txn shape.
+ * The atomic doc+chunks+entities writer lives in `core/indexer-tx.ts`.
+ * Each chunk is embedded as its raw text through Titan; no model situates it.
  */
 import { auditSecrets, guardSecrets, guardWrite } from "./secret-scan.ts";
 import { lstatSync, readFileSync, statSync } from "node:fs";
@@ -17,9 +16,6 @@ import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { chunkMarkdown } from "./chunkers/index.ts";
 import { MARKDOWN_CHUNKER_VERSION } from "./chunkers/recursive.ts";
-import { extractFencedCode } from "./chunkers/fenced-code.ts";
-import { chunkCode } from "./chunkers/code.ts";
-import { qualifiedSymbolName } from "./code-edges.ts";
 import { stripFactsFence, stripTakesFence } from "./fences.ts";
 import { embedText, EMBED_DIMENSIONS } from "./embedding.ts";
 import { embeddingInputHash } from "./embedding-input-hash.ts";
@@ -47,21 +43,8 @@ import {
   ContentSanityBlockError,
   type ContentSanityResult,
 } from "./content-sanity.ts";
-import {
-  contextualRetrievalEnabled,
-  buildContextualPrefix,
-  wrapChunkForEmbedding,
-  extractFirstTwoSentences,
-} from "./search/contextual-embed.ts";
-import {
-  contextualLlmEnabled,
-  generateChunkContext,
-  defaultContextualLlmBudget,
-  CONTEXTUAL_LLM_LABEL,
-} from "./search/contextual-llm.ts";
-import { BudgetTracker, isBudgetRefusal } from "./budget.ts";
+import { isBudgetRefusal } from "./budget.ts";
 import { isTransientBedrockError } from "./llm/bedrock-errors.ts";
-import type { LlmFn } from "./llm/haiku.ts";
 import { extractEntities } from "./entities.ts";
 import { bumpDocumentClock } from "./generation.ts";
 import { guardLocalIndex, type RereadGuard } from "./sources.ts";
@@ -70,7 +53,6 @@ import { acquireWriteEmbedSlot, writeEmbedWidth } from "./concurrency.ts";
 import { planWriteGate } from "./write-gate-index.ts";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
-import { isConnectorPageMirror } from "./connector-page-kind.ts";
 import type { TrustTier } from "./trust-tier.ts";
 import {
   checkLocalWriteOwner,
@@ -84,7 +66,7 @@ export type IndexResult = IndexTxResult & {
   quarantined?: QuarantineVerdict;
   /** Chunks written without a vector because embedding was deferred (a spent
    *  budget or a passing Bedrock failure). Keyword search finds them now; the
-   *  cycle's embed-gaps phase or `memrain embed` adds the vectors later. */
+   *  hourly housekeeping or `memrain embed` adds the vectors later. */
   embeddingDeferred?: number;
 };
 
@@ -107,13 +89,6 @@ export interface IndexFileOptions {
    * hybrid search's `embedQuery`).
    */
   embedFn?: EmbedFn;
-  /**
-   * Paid per-chunk LLM-context tier seam (`contextual-llm.ts`). Injected in
-   * tests to exercise the LLM path with a fake — bypasses the env gate and any
-   * Bedrock spend. Production leaves this unset; the `MEMRAIN_CONTEXTUAL_LLM` flag
-   * drives whether the live utility model runs.
-   */
-  contextualLlmFn?: LlmFn;
   /**
    * Infer a frontmatter header at ingest for content that lacks one
    * (import-time inference). Default ON. The inferred block is NOT
@@ -159,16 +134,11 @@ export interface IndexFileOptions {
   beforeCommit?: (tx: Engine) => Promise<void>;
 }
 
-type ContextualTier = NonNullable<ChunkWrite["contextualTier"]>;
-
 /** Per-index counts behind the `timingLabel` line. */
 interface IndexStats {
   chunks: number;
   reused: number;
-  llmOk: number;
-  llmFallback: number;
   embeds: number;
-  fenceEmbeds: number;
   txMs: number;
 }
 
@@ -252,7 +222,7 @@ export async function indexDocument(
   if (!opts.timingLabel) return indexDocumentBody(storage, input, opts, null);
   const started = performance.now();
   const stats: IndexStats = {
-    chunks: 0, reused: 0, llmOk: 0, llmFallback: 0, embeds: 0, fenceEmbeds: 0, txMs: 0,
+    chunks: 0, reused: 0, embeds: 0, txMs: 0,
   };
   const timing = newWriteTiming();
   let status = "error";
@@ -266,12 +236,11 @@ export async function indexDocument(
     // Logged for a failed write too — those are the ones worth decomposing.
     // The path is JSON-quoted: a source id is operator-set and not otherwise
     // screened for control characters, so it must not be able to split the line.
-    // stderr, because stdout is a command's result (`memrain call page_put --json`).
+    // stderr, because stdout is a command's result (`memrain transcripts ingest --json`).
     const ms = (n: number) => Math.round(n);
     console.error(
       `[memrain] index-timing op=${opts.timingLabel} status=${status} path=${JSON.stringify(opts.timingPath ?? input.sourcePath)}` +
-        ` chunks=${stats.chunks} reused=${stats.reused} llm_ok=${stats.llmOk}` +
-        ` llm_fallback=${stats.llmFallback} embeds=${stats.embeds} fence_embeds=${stats.fenceEmbeds}` +
+        ` chunks=${stats.chunks} reused=${stats.reused} embeds=${stats.embeds}` +
         ` ms_total=${ms(performance.now() - started)} ms_bedrock=${ms(timing.sendMs - timing.queueMs)}` +
         ` ms_slot=${ms(timing.slotMs)} ms_queue=${ms(timing.queueMs)} ms_ledger=${ms(timing.ledgerMs)}` +
         ` ms_tx=${ms(stats.txMs)}`,
@@ -428,195 +397,89 @@ async function indexDocumentBody(
   // a brain switched into it does not lose what it already embedded.
   const skipEmbed = isEmbedSkipped(frontmatter);
   const keywordOnly = keywordOnlyMode();
-  // Contextual-retrieval wrapper (opt-in, default-OFF): prepend a document-level
-  // <context>{title}\n{synopsis}</context> header to each chunk's EMBEDDING INPUT
-  // only — the canonical chunk text written below is untouched. Code docs bypass
-  // wrapping. The deterministic synopsis = the first two sentences of the page's
-  // opening chunk. The PAID per-chunk LLM tier (MEMRAIN_CONTEXTUAL_LLM) instead
-  // asks a utility model to situate EACH chunk within the whole document; a null
-  // result (budget/err) falls back to the deterministic prefix (fail-open).
-  const isCode = frontmatter["kind"] === "code";
-  const ctxTitle =
-    parsed.title ??
-    (typeof frontmatter["title"] === "string" ? (frontmatter["title"] as string) : null);
-  // Either flag (or an injected llmFn) turns wrapping on; the LLM tier is a
-  // superset that upgrades the synopsis, so it must build the deterministic
-  // prefix too (its fallback path).
-  // A connector page never takes the paid tier: its text is outside text the
-  // connector pipeline handles under its own caps.
-  const llmActive =
-    (contextualLlmEnabled() || opts.contextualLlmFn !== undefined) && !isCode && !skipEmbed && !keywordOnly &&
-    !(await isConnectorPageMirror(storage.engine(), input.sourcePath));
-  const wrapActive =
-    (contextualRetrievalEnabled() || llmActive) && !isCode;
-  const deterministicPrefix = wrapActive
-    ? buildContextualPrefix(ctxTitle, extractFirstTwoSentences(parsed.chunks[0] ?? ""), { isCode })
-    : null;
-  const docText = llmActive ? parsed.chunks.join("\n\n") : "";
-  // Fresh budget per document at index time (a new doc is a small, bounded run);
-  // the whole-corpus backfill is where a single shared budget matters.
-  const ctxBudget = llmActive
-    ? new BudgetTracker(defaultContextualLlmBudget(), CONTEXTUAL_LLM_LABEL)
-    : undefined;
   // Unchanged-chunk embedding reuse: re-indexing a doc rewrites all its chunks
-  // (indexer-tx deletes + reinserts), but a chunk whose RAW text is byte-identical
+  // (indexer-tx deletes + reinserts), but a chunk whose text is byte-identical
   // to one the document already had — under the same embedding model and width —
   // hasn't changed meaning, so its stored vector is reused instead of paying
-  // Bedrock (and the paid contextual-LLM tier) again. The key is the chunk TEXT,
-  // not its position: inserting a section mid-page shifts every later chunk's
-  // index, and positional reuse re-paid for all of them. Prose chunks and
-  // fenced-code symbols are keyed apart — a symbol body is embedded raw, a prose
-  // chunk through its contextual wrapper, so the same text can carry two
-  // different vectors. The lookup is scoped to THIS document, which is also what
-  // keeps it inside one tenant; a global contextual-mode flip still needs a full
-  // `reindex --contextual`. Width is checked alongside model: MEMRAIN_EMBED_DIM can
-  // change the dimension without changing the Titan model id, and mixing widths
-  // inside one document breaks the `<=>` scan. A vector stored with an input
-  // hash (migration 187) is reused only while the hash of the chunk's current
-  // embedding input matches, so a title or synopsis change re-embeds the chunks
-  // whose wrapped input it changed. A vector without one (written before the
-  // hash existed, or by a writer that does not stamp it) keeps the text rule.
-  const priorProse = new Map<string, { vec: number[]; tier: ContextualTier | undefined; hash: string | null }>();
-  const priorFence = new Map<string, { vec: number[]; hash: string | null }>();
+  // Bedrock again. The key is the chunk TEXT, not its position. The lookup is
+  // scoped to THIS document, which also keeps it inside one tenant. A vector
+  // stored with an input hash (migration 187) is reused only while it hashes the
+  // chunk's raw text; one embedded through a contextual wrapper by an earlier
+  // build is re-embedded raw. A vector without a hash keeps the text rule.
+  const prior = new Map<string, { vec: number[]; hash: string | null }>();
   if (!skipEmbed) {
     try {
       const priorRows = await storage.engine().query<{
         content: string;
         chunk_source: string | null;
-        contextual_embedded: boolean | null;
-        contextual_tier: ContextualTier | null;
         vec: string | null;
         model: string | null;
         input_hash: string | null;
       }>(
-        `SELECT c.content, c.chunk_source, c.contextual_embedded, c.contextual_tier,
-                e.vector::text AS vec, e.model, e.input_hash
+        `SELECT c.content, c.chunk_source, e.vector::text AS vec, e.model, e.input_hash
            FROM chunks c LEFT JOIN embeddings e ON e.chunk_id = c.id
           WHERE c.document_id = $1`,
         [id],
       );
       for (const r of priorRows.rows) {
-        if (r.vec === null || r.model !== model) continue;
-        const fenced = r.chunk_source === "fenced_code";
-        // A symbol is written RAW here, but `reindex --contextual` wraps fenced
-        // chunks too: its vector is from a different embedding regime and must
-        // be recomputed, not carried over.
-        if (fenced && r.contextual_embedded === true) continue;
+        if (r.vec === null || r.model !== model || r.chunk_source === "fenced_code") continue;
         const vec = JSON.parse(r.vec) as number[];
         if (vec.length !== EMBED_DIMENSIONS) continue;
-        const hash = r.input_hash ?? null;
-        if (fenced) priorFence.set(r.content, { vec, hash });
-        else priorProse.set(r.content, { vec, tier: r.contextual_tier ?? undefined, hash });
+        prior.set(r.content, { vec, hash: r.input_hash ?? null });
       }
     } catch {
       // A read failure just means no reuse this pass — re-embed everything.
-      priorProse.clear();
-      priorFence.clear();
+      prior.clear();
     }
   }
 
-  // Chunks are situated and embedded in parallel, bounded by the write-path
-  // ceiling every concurrent write shares (`MEMRAIN_EMBED_MAX_INFLIGHT`). Serially,
-  // a page paid ~1.3 s of Bedrock per chunk, one chunk after another.
-  // `vectors` is indexed, never pushed: completion order is not chunk order.
+  // Chunks are embedded in parallel, bounded by the write-path ceiling every
+  // concurrent write shares (`MEMRAIN_EMBED_MAX_INFLIGHT`). `vectors` is
+  // indexed, never pushed: completion order is not chunk order.
   const vectors: (number[] | null)[] = Array.from<number[] | null>({ length: parsed.chunks.length }).fill(null);
-  // The tier each vector was produced under, so a later re-embed can respect it.
-  const tiers: (ContextualTier | undefined)[] = Array.from<ContextualTier | undefined>({ length: parsed.chunks.length });
-  // What a chunk embedded without the LLM tier gets: the deterministic prefix
-  // when wrapping is on, raw text otherwise.
-  const baseTier: ContextualTier = wrapActive ? "deterministic" : "none";
   // The input hash of each chunk's vector, written next to it (migration 187).
   const hashes: (string | null)[] = Array.from<string | null>({ length: parsed.chunks.length }).fill(null);
-  const baseHashOf = (i: number): string => embeddingInputHash({
+  const hashOf = (i: number): string => embeddingInputHash({
     model,
     dimensions: EMBED_DIMENSIONS,
-    tier: baseTier,
-    input: wrapChunkForEmbedding(parsed.chunks[i]!, deterministicPrefix, { isCode }),
-  });
-  const llmHashOf = (i: number): string => embeddingInputHash({
-    model,
-    dimensions: EMBED_DIMENSIONS,
-    tier: "llm",
+    tier: "none",
     input: parsed.chunks[i]!,
-    title: ctxTitle,
   });
   let deferredChunks = 0;
   // The first deferral's reason. Once set, the remaining chunks skip their paid
   // calls: the next one would only wait out the same outage or refusal.
   let deferReason: string | null = null;
 
-  // A stored vector for byte-identical text is reused instead of paid for again,
-  // unless its input hash says it was embedded from a different input. With the
-  // paid tier on, only an LLM-tier vector is current: a deterministic fallback
-  // gets its LLM context retried. With it off, an LLM-tier vector whose title
-  // and text are unchanged stays (it never trades down to the deterministic
-  // prefix, as `reindex --contextual` does not either). Keyword-only mode cannot
-  // embed, so it keeps the stored vector of unchanged text even when its input
-  // moved: the stale hash makes the next embedding write replace it.
-  // Checked before a write slot is taken: a chunk with nothing to pay for must
-  // not queue behind the paid ones.
+  // Keyword-only mode cannot embed, so it keeps the stored vector of unchanged
+  // text even when its input hash moved: the stale hash makes the next
+  // embedding write replace it. Checked before a write slot is taken: a chunk
+  // with nothing to pay for must not queue behind the paid ones.
   const reusable = (i: number) => {
-    const prior = priorProse.get(parsed.chunks[i]!);
-    if (!prior) return null;
-    if (prior.hash === null || keywordOnly) return prior;
-    if (prior.hash === llmHashOf(i)) return wrapActive ? prior : null;
-    return !llmActive && prior.hash === baseHashOf(i) ? prior : null;
+    const found = prior.get(parsed.chunks[i]!);
+    if (!found) return null;
+    return found.hash === null || keywordOnly || found.hash === hashOf(i) ? found : null;
   };
 
   const vectorFor = async (i: number): Promise<void> => {
     if (deferReason !== null) {
       deferredChunks++;
-      tiers[i] = baseTier;
       return;
     }
-    const chunk = parsed.chunks[i]!;
-    let prefix = deterministicPrefix;
-    if (llmActive) {
-      // The budget is shared by the chunks in flight: each checks it before its
-      // own call, so a run can overshoot the cap by at most the ceiling's width.
-      const llmCtx = await generateChunkContext(docText, chunk, {
-        ...(opts.contextualLlmFn ? { llmFn: opts.contextualLlmFn } : {}),
-        ...(ctxBudget ? { budget: ctxBudget } : {}),
-      });
-      if (llmCtx) {
-        prefix = buildContextualPrefix(ctxTitle, llmCtx, { isCode });
-        tiers[i] = "llm";
-      }
-      if (stats) {
-        if (llmCtx) stats.llmOk++;
-        else stats.llmFallback++;
-      }
-      // The paid tier fell back again: a stored fallback vector for the same
-      // deterministic input is still current, so it is kept, not re-embedded.
-      const prior = llmCtx ? undefined : priorProse.get(chunk);
-      if (prior && prior.hash !== null && prior.hash === baseHashOf(i)) {
-        vectors[i] = prior.vec;
-        tiers[i] = prior.tier ?? baseTier;
-        hashes[i] = prior.hash;
-        if (stats) stats.reused++;
-        return;
-      }
-    }
-    const embedInput = wrapChunkForEmbedding(chunk, prefix, { isCode });
     try {
       if (stats) stats.embeds++;
-      tiers[i] ??= baseTier;
-      vectors[i] = await embed(embedInput, { modelId: model });
-      hashes[i] = tiers[i] === "llm" ? llmHashOf(i) : baseHashOf(i);
+      vectors[i] = await embed(parsed.chunks[i]!, { modelId: model });
+      hashes[i] = hashOf(i);
     } catch (e) {
       // A spent budget or a passing Bedrock failure (throttle, timeout, 5xx,
       // quota, a paused circuit) must not lose the caller's text: the vector can
       // be added later, the text cannot. The chunk lands with a null vector —
-      // written, keyword-searchable, and filled by the cycle's embed-gaps phase
-      // or `memrain embed`. A failure that would repeat (credentials, access, an
+      // written, keyword-searchable, and filled by the hourly housekeeping or
+      // `memrain embed`. A failure that would repeat (credentials, access, an
       // unknown model, an oversize input) still aborts before the DB is touched
       // (the half-write guard below).
       if (opts.requireCompleteEmbeddings || !(isBudgetRefusal(e) || isTransientBedrockError(e))) throw e;
       deferredChunks++;
       deferReason ??= e instanceof Error ? e.message.slice(0, 200) : String(e);
-      // No vector yet: the gap fill embeds with the deterministic prefix at
-      // most, so that is the tier this chunk will end up with.
-      tiers[i] = baseTier;
     }
   };
 
@@ -629,20 +492,15 @@ async function indexDocumentBody(
   const worker = async (): Promise<void> => {
     while (hardError === null && nextChunk < parsed.chunks.length) {
       const i = nextChunk++;
-      // With embedding off there is nothing to pay for (the LLM tier is off too).
       if (skipEmbed) continue;
       const reused = reusable(i);
       if (reused) {
         vectors[i] = reused.vec;
-        tiers[i] = reused.tier;
         hashes[i] = reused.hash;
         if (stats) stats.reused++;
         continue;
       }
-      if (keywordOnly) {
-        tiers[i] = baseTier;
-        continue;
-      }
+      if (keywordOnly) continue;
       const slotStart = performance.now();
       const release = await acquireWriteEmbedSlot();
       noteWriteTiming("slotMs", performance.now() - slotStart);
@@ -657,9 +515,9 @@ async function indexDocumentBody(
     }
   };
   // Only an interactive write (one that names itself for the timing line) fans
-  // out. Sweeps, reindex and the cycle keep their one-chunk-at-a-time pace: they
-  // are not waiting on anyone, and fanning them out would multiply their Bedrock
-  // rate and take slots from the writes an agent is blocked on.
+  // out. Sweeps and reindex keep their one-chunk-at-a-time pace: they are not
+  // waiting on anyone, and fanning them out would multiply their Bedrock rate
+  // and take slots from the writes an agent is blocked on.
   const width = opts.timingLabel ? writeEmbedWidth() : 1;
   const workers = Math.min(width, parsed.chunks.length);
   await Promise.all(Array.from({ length: workers }, () => worker()));
@@ -674,80 +532,16 @@ async function indexDocumentBody(
       text,
       embedding: vectors[i] ?? null,
       embeddingInputHash: vectors[i] ? hashes[i] ?? null : null,
-      ...(tiers[i] ? { contextualTier: tiers[i] } : {}),
+      contextualTier: "none",
       entities: extractEntities(text, fm),
     };
   });
-
-  // Fenced-code extraction (chunk_source='fenced_code'): lift each ```lang fence
-  // whose tag maps to a supported grammar, tree-sitter-chunk it, and append the
-  // symbols as extra searchable chunks so a code example ranks as code, not
-  // prose. Skipped when the whole doc is already code (symbol-chunked elsewhere)
-  // or embeddings are off. Bounded by MEMRAIN_MAX_FENCES_PER_PAGE; a parse failure
-  // on one fence is swallowed so it can never fail the page ingest. Embedding
-  // follows the prose rules: a passing failure writes the symbol without a
-  // vector for the embed-gaps phase to fill, a failure that would repeat fails
-  // the write.
-  if (!skipEmbed && !isCode) {
-    for (const fence of extractFencedCode(text)) {
-      let parsedCode: Awaited<ReturnType<typeof chunkCode>>;
-      try {
-        parsedCode = await chunkCode(fence.source, `fence.${fence.lang}`, fence.lang);
-      } catch {
-        // parse timeout / grammar error — skip this fence, keep the page.
-        continue;
-      }
-      for (const sym of parsedCode.symbols) {
-        if (sym.kind === "module") continue; // the prose chunk already embeds these top-level calls
-        const symHash = embeddingInputHash({ model, dimensions: EMBED_DIMENSIONS, tier: "none", input: sym.body });
-        const prior = priorFence.get(sym.body);
-        let vec: number[] | null = prior && (prior.hash === null || prior.hash === symHash || keywordOnly) ? prior.vec : null;
-        let vecHash: string | null = vec ? prior!.hash : null;
-        if (vec) {
-          if (stats) stats.reused++;
-        } else if (keywordOnly) {
-          // Stored without a vector: keyword search still finds the symbol.
-        } else if (deferReason !== null) {
-          deferredChunks++;
-        } else {
-          if (stats) stats.fenceEmbeds++;
-          const release = await acquireWriteEmbedSlot();
-          try {
-            vec = await embed(sym.body, { modelId: model });
-            vecHash = symHash;
-          } catch (e) {
-            if (opts.requireCompleteEmbeddings || !(isBudgetRefusal(e) || isTransientBedrockError(e))) throw e;
-            deferredChunks++;
-            deferReason ??= e instanceof Error ? e.message.slice(0, 200) : String(e);
-          } finally {
-            release();
-          }
-        }
-        chunkWrites.push({
-          text: sym.body,
-          startLine: sym.startLine,
-          endLine: sym.endLine,
-          embedding: vec,
-          embeddingInputHash: vec ? vecHash : null,
-          symbolName: sym.name,
-          symbolNameQualified: qualifiedSymbolName(sym.parentSymbolPath, sym.name),
-          symbolType: sym.kind,
-          parentSymbolPath: sym.parentSymbolPath,
-          docComment: sym.docComment,
-          language: fence.lang,
-          chunkSource: "fenced_code",
-          contextualTier: "none",
-          entities: [],
-        });
-      }
-    }
-  }
 
   if (deferredChunks > 0) {
     console.warn(
       `[memrain] embedding deferred mid-index: ${deferredChunks} chunk(s) of ` +
         `'${input.sourcePath}' stored WITHOUT embeddings (${deferReason}) — keyword-searchable now; ` +
-        `the cycle's embed-gaps phase or \`memrain embed\` vectorises them later`,
+        `the hourly housekeeping or \`memrain embed\` vectorises them later`,
     );
   }
 

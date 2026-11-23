@@ -152,7 +152,7 @@ export async function sweepVault(
   // Markdown-only: this walk sees `.md` files, so a stale CODE doc could never
   // be reached here and would land in `staleChunkerUnreached` as a phantom.
   const staleChunkerIds = opts.forceStaleChunker
-    ? await listStaleChunkerDocIds(storage.raw(), "markdown")
+    ? await listStaleChunkerDocIds(storage.raw())
     : null;
   const seenStaleIds = staleChunkerIds ? new Set<string>() : null;
 

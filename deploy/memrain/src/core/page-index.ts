@@ -502,9 +502,8 @@ export interface MirrorPageOptions {
   /** How logs and ingest rows name the page; default its slug. A caller whose
    *  slug may itself carry a credential passes a redacted form. */
   logLabel?: string;
-  /** Test seams — production omits both. */
+  /** Test seam — production omits it. */
   embedFn?: IndexFileOptions["embedFn"];
-  contextualLlmFn?: IndexFileOptions["contextualLlmFn"];
 }
 
 /**
@@ -565,7 +564,6 @@ export async function mirrorPageVerdict(
         // A slug can carry a credential; the timing line names the caller's redacted label.
         ...(opts.logLabel ? { timingPath: pageSourcePath(opts.logLabel, page.source_id) } : {}),
         ...(opts.embedFn ? { embedFn: opts.embedFn } : {}),
-        ...(opts.contextualLlmFn ? { contextualLlmFn: opts.contextualLlmFn } : {}),
       },
     );
     const deferred = indexed?.embeddingDeferred ?? 0;

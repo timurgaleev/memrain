@@ -128,7 +128,7 @@ export interface SecretAuditOptions {
   limit?: number;
   now?: () => Date;
   /** Test seam for the page re-mirror. */
-  mirror?: Pick<MirrorPageOptions, "embedFn" | "contextualLlmFn">;
+  mirror?: Pick<MirrorPageOptions, "embedFn">;
   /** Rescan live agent transcripts only, with the transcript rules (see the module comment). */
   lane?: "transcripts";
   /** Transcript lane: the slug prefixes to read, each ending in `/`. Default `transcripts/`. */
