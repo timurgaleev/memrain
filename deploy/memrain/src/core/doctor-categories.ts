@@ -1,31 +1,10 @@
 /**
- * Doctor check taxonomy — single source of truth for both axes a check is
- * described by: WHICH LAYER it speaks for (category) and HOW BAD the answer is
- * (status).
- *
- * Every `memrain doctor` check belongs to exactly one category so the report
- * answers the question the operator is actually asking:
- *
- *   - brain : data-integrity signals — "is the brain's actual data healthy?"
- *             (index counts, index-freshness spread)
- *   - ops   : infrastructure / setup — "can the brain even run here?"
- *             (config present + parses, DB engine opens, vault path readable)
- *   - meta  : the doctor / runtime itself; the fallthrough bucket.
- *
- *   - skills: integrity of the procedures served to clients.
- *
- * Drift contract: every check name that ships in `commands/doctor.ts` MUST
- * appear in exactly one set below. `tests/doctor_categories.test.ts` enforces
- * this. If you add a doctor check, add its name here too — `categorize()`
- * falls through to 'meta' for an unknown name and emits a once-per-process
- * stderr warning so a missing addition surfaces in dev runs before CI.
+ * Doctor check vocabulary: how bad an answer is (status), and the verdict
+ * shape every check reports.
  */
 
-export type CheckCategory = "brain" | "ops" | "meta" | "skills";
-
 /**
- * Three-state check outcome — the same vocabulary the maintenance cycle
- * already uses for its phases (`PhaseStatus`, core/cycle/index.ts):
+ * Three-state check outcome:
  *
  *   - ok   : the check ran and the brain looks right on that axis.
  *   - warn : a real signal that must not gate — a degraded-but-running brain,
@@ -48,11 +27,7 @@ export interface CheckVerdict {
   detail: string;
 }
 
-/**
- * Worst outcome of a set: fail beats warn beats ok. Identical rollup to
- * `CycleResult.status` over its phases, so a cycle result and a doctor report
- * answer "how bad is it?" the same way.
- */
+/** Worst outcome of a set: fail beats warn beats ok. */
 export function worstStatus(statuses: Iterable<CheckStatus>): CheckStatus {
   let worst: CheckStatus = "ok";
   for (const s of statuses) {
@@ -65,14 +40,12 @@ export function worstStatus(statuses: Iterable<CheckStatus>): CheckStatus {
 /**
  * The verdict for a probe that THREW.
  *
- * The cycle treats a throw as `fail`; the doctor deliberately treats it as
- * `warn`. The doctor is a one-shot probe over a live brain and most of its
- * probes read OPTIONAL substrate (a table a pre-migration brain lacks, a
- * projection an old deploy never wrote). Failing the exit code on those would
- * red every cron probe on a brain that is serving fine — the same cry-wolf
- * that keeps cycle-freshness warn-only. What must never happen again is the
- * old shape: a throw rendered byte-identical to a pass. `warn` keeps the exit
- * code honest AND the report honest.
+ * The doctor deliberately treats a throw as `warn`. It is a one-shot probe
+ * over a live brain and some of its probes read OPTIONAL substrate (a table a
+ * pre-migration brain lacks). Failing the exit code on those would red every
+ * cron probe on a brain that is serving fine. What must never happen is a
+ * throw rendered byte-identical to a pass. `warn` keeps the exit code honest
+ * AND the report honest.
  *
  * One phrasing for every such detail so an operator (and a grep) recognises
  * "I could not check" wherever it comes from.
@@ -89,122 +62,4 @@ export function couldNotCheck(
     status: "warn",
     detail: `could not check ${name}: ${msg}${hint ? ` (${hint})` : ""}`,
   };
-}
-
-/** Data-integrity signals — "is the brain's actual data healthy?" */
-export const BRAIN_CHECK_NAMES: ReadonlySet<string> = new Set([
-  "stats",
-  "index-spread",
-  "source-health",
-  "links-extraction-lag",
-  "chunker-version-lag",
-  "cycle-freshness",
-  "per-source-embed-coverage",
-  "eval-trend",
-  "contradiction-trend",
-  "federation-health",
-  "source-routing-health",
-  "document-id-drift",
-  "embedding-width",
-  "chronicle-projection-health",
-  "duplicate-pages",
-  "jsonb-integrity",
-  "page-version-storage",
-  "person-name-duplicates",
-  "quarantined-pages",
-  "junk-entity-hubs",
-  "facts-without-entity-pages",
-  "redaction-markers",
-  "purge-leftovers",
-  "facts-input-windows",
-  "fence-rows-without-markers",
-  "namespace-only-targets",
-  "mixed-script-targets",
-  "dangling-slug-redirects",
-  "link-interval-overlaps",
-  "outside-content-fences",
-  "embed-backlog",
-  "contextual-coverage",
-]);
-
-/** Infrastructure / setup — "can the brain run here at all?" */
-export const OPS_CHECK_NAMES: ReadonlySet<string> = new Set([
-  "config",
-  "pglite",
-  "vault",
-  "oauth-client-health",
-  "oauth-client-hygiene",
-  "pat-scopes-recorded",
-  "tenancy-isolation-config",
-  "owner-identity",
-  "unscoped-shared-reads",
-  "owner-only-sources",
-  "planner-stats",
-  "db-connection-budget",
-  "stale-locks",
-  "queue-health",
-  "cycle-phase-health",
-  "maintenance-held",
-  "db-backends",
-  "schema-version",
-  "invalid-indexes",
-  "code-grammars",
-  "code-graph",
-  "connector-health",
-  "connector-accounts",
-  "spend-wallet",
-  "notifications",
-  "legacy-env-names",
-  "legacy-config-dir",
-  "runtime-config-legacy-rows",
-  "runtime-config-overlay",
-  "runtime-config-values",
-  "config-yml",
-  "oauth-self-issued-config",
-  "secret-exposure",
-  "secret-store",
-  // Only ever pushed when teardown FAILED, so it is absent from a healthy run
-  // and the drift test cannot see it — it still has to be named here or it
-  // falls through to `meta` with an "uncategorized" warning.
-  "storage-teardown",
-]);
-
-/** The doctor / runtime itself. Empty today; the fallthrough bucket. */
-export const META_CHECK_NAMES: ReadonlySet<string> = new Set<string>([]);
-
-export const SKILLS_CHECK_NAMES: ReadonlySet<string> = new Set(["skillpack"]);
-
-/** Union of every categorized name — the drift-guard comparison set. */
-export const KNOWN_CHECK_NAMES: ReadonlySet<string> = new Set<string>([
-  ...BRAIN_CHECK_NAMES,
-  ...OPS_CHECK_NAMES,
-  ...META_CHECK_NAMES,
-  ...SKILLS_CHECK_NAMES,
-]);
-
-// Once-per-process guard so an uncategorized check warns once, not per call.
-const warned = new Set<string>();
-
-/**
- * Map a check name to its category. Unknown names fall through to 'meta'
- * and warn once per process (a missing drift-set addition).
- */
-export function categorize(name: string): CheckCategory {
-  if (BRAIN_CHECK_NAMES.has(name)) return "brain";
-  if (OPS_CHECK_NAMES.has(name)) return "ops";
-  if (SKILLS_CHECK_NAMES.has(name)) return "skills";
-  if (META_CHECK_NAMES.has(name)) return "meta";
-  if (!warned.has(name)) {
-    warned.add(name);
-    console.error(
-      `[memrain doctor] check '${name}' is uncategorized — add it to ` +
-        `core/doctor-categories.ts (defaulting to 'meta')`,
-    );
-  }
-  return "meta";
-}
-
-/** Test-only: reset the once-per-process warn guard. */
-export function _resetCategoryWarnings(): void {
-  warned.clear();
 }

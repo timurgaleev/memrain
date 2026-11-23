@@ -12,7 +12,7 @@
  */
 import { couldNotCheck } from "./doctor-categories.ts";
 import type { Engine } from "./engine/interface.ts";
-import type { TenancyCheck } from "./doctor-tenancy.ts";
+import type { CheckVerdict } from "./doctor-categories.ts";
 
 const FLAG = "MEMRAIN_PGLITE_AUTO_ANALYZE";
 export const HOT_TABLES = ["pages", "chunks", "embeddings", "entity_facts", "links"] as const;
@@ -100,7 +100,7 @@ export function plannerStatsVerdict(stats: readonly TableStat[]): { status: "ok"
 }
 
 /** Doctor `planner-stats`: warn when a hot table's statistics lag its contents. */
-export async function checkPlannerStats(engine: Engine): Promise<TenancyCheck> {
+export async function checkPlannerStats(engine: Engine): Promise<CheckVerdict> {
   const name = "planner-stats";
   try {
     const pglite = engine.kind === "pglite";

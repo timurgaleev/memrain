@@ -1,25 +1,16 @@
 /**
- * Ops-facing brain-health probes for `memrain doctor`: stale cycle locks, job
- * queue depth/wedge, applied-vs-available schema version, embedding-width
- * consistency, and content-hash duplicate pages. Each returns
- * {ok, status, detail}; the caller turns a probe error into a `warn` verdict.
- * All read-only, config-free, no LLM — the substrate already exists
- * (cycle_locks mig 050, jobs mig 006, migrations table, vector(N),
- * pages.content_hash).
+ * Ops-facing brain-health probes for `memrain doctor`: stale maintenance
+ * locks, applied-vs-available schema version, embedding-width consistency,
+ * invalid indexes, content-hash duplicate pages, dangling slug redirects and
+ * quarantined pages. Each returns {ok, status, detail}; the caller turns a
+ * probe error into a `warn` verdict. All read-only, config-free, no LLM.
  */
 import type { CheckStatus } from "./doctor-categories.ts";
 import type { Engine } from "./engine/interface.ts";
 import { diffMigrationIds, discoverMigrations } from "./migrate.ts";
 import { EMBED_DIMENSIONS } from "./embedding.ts";
 import { embeddingVectorType } from "./embedding-column.ts";
-import { grammarSelfCheck } from "./chunkers/parsers.ts";
-import { isJunkConceptName, isJunkConceptSlug, isJunkEntityName, isJunkEntitySlug } from "./entity-junk.ts";
-import { Queue } from "./jobs/queue.ts";
-import { bucketJobErrors } from "./jobs/error-classify.ts";
-import { hasFenceMarker } from "./fence-shared.ts";
 import { runtimeOverlayState } from "./runtime-config.ts";
-import { EXTRACT_WINDOW_CHARS } from "./facts-extract.ts";
-import { SINGLE_VALUE_LINK_TYPES } from "./links.ts";
 
 export interface OpsCheckResult {
   /** Exit-code driver — false only on `status:"fail"`. */
@@ -34,57 +25,9 @@ export async function checkRuntimeConfigOverlay(engine: Engine): Promise<OpsChec
   return { ok: true, status: state === "unavailable" ? "warn" : "ok", detail: `runtime config overlay: ${state}${state === "unavailable" ? "; DB overrides could not be loaded; inspect connection and SQLSTATE log, then restart" : ""}` };
 }
 
-export async function checkFactsInputWindows(engine: Engine): Promise<OpsCheckResult> {
-  const r = await engine.query<{ n: number; chars: number; largest: number }>(
-    `SELECT count(*)::int AS n, COALESCE(sum(length(markdown_body)), 0)::float8 AS chars,
-            COALESCE(max(length(markdown_body)), 0)::int AS largest
-       FROM pages WHERE deleted_at IS NULL AND length(markdown_body) > $1`, [EXTRACT_WINDOW_CHARS],
-  );
-  const row = r.rows[0]!;
-  return { ok: true, status: "ok", detail: `${row.n} live page(s) longer than the ${EXTRACT_WINDOW_CHARS}-character extraction window; ${row.chars} characters total, largest ${row.largest}; appends read the new tail; MEMRAIN_FACTS_MAX_WINDOWS bounds full-page extraction` };
-}
-
-export async function checkRedactionMarkers(engine: Engine): Promise<OpsCheckResult> {
-  const r = await engine.query<{ table_name: string; source_id: string; n: number }>(
-    `WITH marked AS (
-       SELECT 'entity_facts' AS table_name, source_id FROM entity_facts WHERE strpos(fact, '[redacted') > 0
-       UNION ALL
-       SELECT 'timeline_events', source_id FROM timeline_events
-        WHERE strpos(concat_ws(' ', event, detail), '[redacted') > 0
-       UNION ALL
-       SELECT 'synth_atoms', COALESCE(
-         (SELECT d.source_id FROM documents d WHERE d.id = a.source_ref AND a.source_kind = 'document'),
-         (SELECT p.source_id FROM pages p WHERE p.slug = a.source_ref AND a.source_kind = 'page'), 'unresolved')
-         FROM synth_atoms a WHERE strpos(concat_ws(' ', title, body), '[redacted') > 0
-       UNION ALL
-       SELECT 'synth_takes', COALESCE(
-         (SELECT d.source_id FROM documents d WHERE d.id = t.source_ref),
-         (SELECT p.source_id FROM pages p WHERE p.slug = t.source_ref), 'unresolved')
-         FROM synth_takes t WHERE strpos(claim_text, '[redacted') > 0
-     ) SELECT table_name, COALESCE(source_id, 'default') AS source_id, count(*)::int AS n
-         FROM marked GROUP BY table_name, COALESCE(source_id, 'default') ORDER BY table_name, source_id`,
-  );
-  const count = r.rows.reduce((n, row) => n + row.n, 0);
-  return { ok: true, status: count ? "warn" : "ok", detail: count
-    ? `${count} row(s) with prompt-sanitizer markers: ${r.rows.map(row => `${row.table_name}/${row.source_id}=${row.n}`).join(', ')}; review before re-extracting or superseding; never rewrite fact text in place`
-    : "no prompt-sanitizer markers in facts, timeline, atoms or takes" };
-}
-
-export async function checkFactsWithoutEntityPages(engine: Engine): Promise<OpsCheckResult> {
-  const r = await engine.query<{ n: number }>(
-    `SELECT count(*)::int AS n FROM entity_facts f
-      WHERE f.forgotten_at IS NULL AND NOT EXISTS (
-        SELECT 1 FROM pages p WHERE p.slug = f.entity_slug AND p.source_id = f.source_id AND p.deleted_at IS NULL
-      )`,
-  );
-  const n = r.rows[0]?.n ?? 0;
-  return { ok: true, status: n ? "warn" : "ok",
-    detail: `${n} live fact(s) without a live entity page in the same source; review entity names before creating pages or superseding facts` };
-}
-
 /**
- * Cycle locks whose TTL has elapsed but whose row is still present — an
- * orphaned holder (a crashed cycle). Reclaimed on the next acquire via the TTL
+ * Maintenance locks whose TTL has elapsed but whose row is still present — an
+ * orphaned holder (a crashed run). Reclaimed on the next acquire via the TTL
  * fallback, so this is informational (ok:true) unless one persists run to run.
  */
 export async function checkStaleLocks(engine: Engine): Promise<OpsCheckResult> {
@@ -99,101 +42,8 @@ export async function checkStaleLocks(engine: Engine): Promise<OpsCheckResult> {
     status: "ok",
     detail:
       n === 0
-        ? "no stale cycle locks"
-        : `${n} cycle lock(s) past TTL (oldest expired ${r.rows[0]?.oldest}) — reclaimed on next acquire`,
-  };
-}
-
-/**
- * Every vendored tree-sitter grammar must LOAD and PARSE. A grammar that does
- * neither indexes zero symbols for its file type and nothing fails loudly —
- * that is exactly how the shell corpus went missing.
- *
- * This used to compare the blobs against `wasm/manifest.json`, which is a
- * manifest generated FROM those blobs: it could only ever confirm the blobs are
- * the blobs. Through the whole live incident the bytes matched and every .sh
- * file still threw inside the external scanner, so the failure that mattered
- * was invisible to the check meant to catch it. Now each language gets a short
- * probe parsed through the real runtime (see GRAMMAR_PROBES) and the detail
- * names which language broke and at which stage. Engine-free; takes the handle
- * to match the probe shape.
- */
-export async function checkGrammars(_engine: Engine): Promise<OpsCheckResult> {
-  // Resolved across two branches: the real self-check (loads each grammar and
-  // parses a probe) from the code-index work, carrying the typed verdict from
-  // the warn-tier work. The manifest comparison it replaced could only ever
-  // confirm the blobs were the blobs.
-  const results = await grammarSelfCheck();
-  const broken = results.filter((r) => !r.ok);
-  if (broken.length === 0) {
-    return {
-      ok: true,
-      status: "ok",
-      detail: `${results.length} grammar(s) load and parse a probe: ${results
-        .map((r) => r.language)
-        .join(", ")}`,
-    };
-  }
-  return {
-    ok: false,
-    status: "fail",
-    detail:
-      `unusable grammar(s): ${broken
-        .map((b) => `${b.language} failed at ${b.stage} — ${b.error}`)
-        .join("; ")} — files of the affected language(s) index as plain text, ` +
-      `with no symbols and no call graph`,
-  };
-}
-
-function jobWedgeSeconds(): number {
-  const n = Number.parseInt(process.env.MEMRAIN_DOCTOR_JOB_WEDGE_SEC ?? "", 10);
-  return Number.isFinite(n) && n > 0 ? n : 3600;
-}
-
-/**
- * Job queue depth + wedged-job count (a `running` job older than the wedge
- * threshold, default 1h via MEMRAIN_DOCTOR_JOB_WEDGE_SEC). A deep pending queue is
- * normal mid-backfill (informational); a wedged job is the signal to look. Only
- * a wedged job flips ok:false. The detail also counts jobs waiting out an LLM
- * outage and groups the last 24 h of failures by cause.
- */
-export async function checkQueueHealth(engine: Engine): Promise<OpsCheckResult> {
-  const wedgeSec = jobWedgeSeconds();
-  const r = await engine.query<{
-    pending: number;
-    running: number;
-    wedged: number;
-    deferred: number;
-  }>(
-    `SELECT
-        count(*) FILTER (WHERE status = 'pending')::int AS pending,
-        count(*) FILTER (WHERE status = 'running')::int AS running,
-        count(*) FILTER (WHERE status = 'running'
-                         AND started_at IS NOT NULL
-                         AND started_at < NOW() - $1 * INTERVAL '1 second')::int AS wedged,
-        count(*) FILTER (WHERE status = 'pending'
-                         AND last_error LIKE 'deferred:%')::int AS deferred
-       FROM jobs`,
-    [wedgeSec],
-  );
-  const pending = r.rows[0]?.pending ?? 0;
-  const running = r.rows[0]?.running ?? 0;
-  const wedged = r.rows[0]?.wedged ?? 0;
-  const deferred = r.rows[0]?.deferred ?? 0;
-  // What the last day's failures were, so the detail names the fix.
-  const failures = await new Queue(engine).recentFailures(new Date(Date.now() - 86_400_000));
-  const buckets = bucketJobErrors(failures.map((f) => f.lastError));
-  const failedNote =
-    failures.length === 0
-      ? ""
-      : ` failed_24h=${failures.length} (${buckets.map((b) => `${b.bucket}:${b.count}`).join(", ")})`;
-  return {
-    ok: wedged === 0,
-    status: wedged === 0 ? "ok" : "fail",
-    detail:
-      `pending=${pending} running=${running} deferred=${deferred}` +
-      failedNote +
-      (wedged > 0 ? ` — ${wedged} wedged (running > ${wedgeSec}s)` : ""),
+        ? "no stale maintenance locks"
+        : `${n} maintenance lock(s) past TTL (oldest expired ${r.rows[0]?.oldest}) — reclaimed on next acquire`,
   };
 }
 
@@ -322,97 +172,6 @@ export async function checkDuplicatePages(
   };
 }
 
-/** Bound on the pages whose bodies the fence test loads. */
-const FENCE_ROWS_SCAN_LIMIT = 5_000;
-
-/**
- * Pages that still own live fence-projected facts although their body has no
- * facts fence markers. An absent fence keeps its facts (a prose rewrite or a
- * bad merge must not delete them), so these rows are now edited only through
- * `forget_fact` — the operator decides whether to restore the fence or forget
- * them. Read-only; warn, never fail.
- */
-export async function checkFenceRowsWithoutMarkers(
-  engine: Engine,
-): Promise<OpsCheckResult> {
-  // ponytail: scans the first FENCE_ROWS_SCAN_LIMIT pages with fence facts;
-  // push the marker test into SQL if a brain ever outgrows that.
-  const r = await engine.query<{ slug: string; markdown_body: string; n: number }>(
-    `SELECT p.slug, p.markdown_body, f.n
-       FROM (SELECT source_markdown_slug AS slug, count(*)::int AS n
-               FROM entity_facts
-              WHERE source_markdown_slug IS NOT NULL AND forgotten_at IS NULL
-              GROUP BY source_markdown_slug) f
-       JOIN pages p ON p.slug = f.slug AND p.deleted_at IS NULL
-      ORDER BY p.slug
-      LIMIT ${FENCE_ROWS_SCAN_LIMIT}`,
-  );
-  const bare = r.rows.filter((p) => !hasFenceMarker(p.markdown_body, "facts"));
-  const capped = r.rows.length === FENCE_ROWS_SCAN_LIMIT ? ` (first ${FENCE_ROWS_SCAN_LIMIT} scanned)` : "";
-  if (bare.length === 0) {
-    return { ok: true, status: "ok", detail: `every page with fence facts still has its fence${capped}` };
-  }
-  const sample = bare.slice(0, 3).map((p) => `${p.slug} (${p.n} facts)`).join(", ");
-  return {
-    ok: true,
-    status: "warn",
-    detail:
-      `${bare.length} page(s) keep fence facts but no facts fence${capped}, e.g. ${sample}` +
-      " — restore the fence or `forget_fact` the rows",
-  };
-}
-
-/**
- * Links and live facts whose target is a bare namespace (`people`) that live
- * slugs use as a prefix (`people/x`) — the shape a link or fact entity takes
- * when the old whole-string slugify dropped a non-Latin last segment. A bare
- * slug that is itself a live page (a real `projects` hub) is no collapse.
- * Stored rows are never rewritten automatically; the samples tell the
- * operator which pages to re-link and which facts to re-file.
- * Read-only; warn, never fail.
- */
-export async function checkNamespaceOnlyTargets(
-  engine: Engine,
-): Promise<OpsCheckResult> {
-  const collapsed = (col: string) => `position('/' in ${col}) = 0
-        AND ${col} IN (SELECT DISTINCT split_part(slug, '/', 1) FROM pages
-                        WHERE slug LIKE '%/%' AND deleted_at IS NULL)
-        AND NOT EXISTS (SELECT 1 FROM pages p WHERE p.slug = ${col} AND p.deleted_at IS NULL)`;
-  const links = await engine.query<{ source_slug: string; target_slug: string; total: number }>(
-    `SELECT l.source_slug, l.target_slug, count(*) OVER ()::int AS total
-       FROM links l
-      WHERE ${collapsed("l.target_slug")}
-      ORDER BY l.target_slug, l.source_slug
-      LIMIT 3`,
-  );
-  const facts = await engine.query<{ id: number; entity_slug: string; total: number }>(
-    `SELECT f.id::int AS id, f.entity_slug, count(*) OVER ()::int AS total
-       FROM entity_facts f
-      WHERE f.forgotten_at IS NULL AND ${collapsed("f.entity_slug")}
-      ORDER BY f.entity_slug, f.id
-      LIMIT 3`,
-  );
-  const linkTotal = links.rows[0]?.total ?? 0;
-  const factTotal = facts.rows[0]?.total ?? 0;
-  if (linkTotal === 0 && factTotal === 0) {
-    return { ok: true, status: "ok", detail: "no links or facts target a bare namespace" };
-  }
-  const samples: string[] = [];
-  if (linkTotal > 0) {
-    samples.push(`links e.g. ${links.rows.map((x) => `${x.source_slug} -> ${x.target_slug}`).join(", ")}`);
-  }
-  if (factTotal > 0) {
-    samples.push(`facts e.g. ${facts.rows.map((x) => `${x.entity_slug} (fact #${x.id})`).join(", ")}`);
-  }
-  return {
-    ok: true,
-    status: "warn",
-    detail:
-      `${linkTotal} link(s) and ${factTotal} fact(s) target a bare namespace; ${samples.join("; ")}` +
-      " — re-link or re-file them under the full page slug",
-  };
-}
-
 /**
  * Slug redirects whose target is not a live page. slug_aliases has no foreign
  * key to pages, and the resolver now forwards only to live pages, so such a
@@ -440,97 +199,6 @@ export async function checkDanglingSlugRedirects(
     ok: true,
     status: "warn",
     detail: `${total} slug redirect(s) point at no live page, e.g. ${sample} — delete them or restore the target`,
-  };
-}
-
-/**
- * Live pages whose body carries a fence marker (`<!--- memrain:` or the legacy
- * `<!--- memex:`). Before 1.11.0 an imported transcript, GitHub item or any
- * pasted text could plant one and have its lines projected as facts or takes;
- * a brain-added fence looks the same, so this lists and never rewrites.
- * Synthesis pages are skipped: the brain writes those itself. So are pages a
- * 1.11 outside-text writer marked `outside_neutralized`: their outside text is
- * neutralized, so a live fence on one is the brain's, carried on purpose.
- * Read-only; warn, never fail.
- */
-export async function checkOutsideContentFences(
-  engine: Engine,
-): Promise<OpsCheckResult> {
-  const r = await engine.query<{ slug: string; type: string; total: number }>(
-    `SELECT slug, type, count(*) OVER ()::int AS total
-       FROM pages
-      WHERE deleted_at IS NULL
-        AND type <> 'synthesis'
-        AND compiled_truth->'outside_neutralized' IS DISTINCT FROM '1'::jsonb
-        AND (markdown_body LIKE '%<!--- memrain:%' OR markdown_body LIKE '%<!--- memex:%')
-      ORDER BY slug
-      LIMIT 3`,
-  );
-  const total = r.rows[0]?.total ?? 0;
-  if (total === 0) {
-    return { ok: true, status: "ok", detail: "no page carries a fence marker (synthesis and 1.11 outside-text pages skipped)" };
-  }
-  const sample = r.rows.map((x) => `${x.slug} (${x.type})`).join(", ");
-  return {
-    ok: true,
-    status: "warn",
-    detail:
-      `${total} page(s) carry a fence marker (synthesis and 1.11 outside-text pages skipped), e.g. ${sample}` +
-      " — planted by outside text before 1.11.0 or added by the brain on purpose; review each," +
-      " remove a planted fence with page_edit (its projected facts stay; withdraw them with forget_fact)",
-  };
-}
-
-/** Entity page types a junk name can accrete edges on. */
-const JUNK_HUB_TYPES = ["person", "company", "concept"] as const;
-/** Bound on the entity pages loaded for the name test — a doctor probe must
- *  stay cheap on a large brain. */
-const JUNK_HUB_SCAN_LIMIT = 50_000;
-
-/**
- * Junk entity hubs: entity pages whose name is a placeholder ("team",
- * "unknown", "user", a bare number) ranked by edge count. The shared
- * junk-entity gate stops new ones at every creation point, but pages minted
- * before it keep their edges and keep pulling unrelated pages together in
- * traversal. Read-only; warn, never fail — merging or deleting a hub is the
- * operator's call.
- */
-export async function checkJunkEntityHubs(
-  engine: Engine,
-): Promise<OpsCheckResult> {
-  const typeList = JUNK_HUB_TYPES.map((t) => `'${t}'`).join(", ");
-  const pages = await engine.query<{ slug: string; type: string; title: string | null }>(
-    `SELECT slug, type, title FROM pages
-      WHERE deleted_at IS NULL AND type IN (${typeList})
-      ORDER BY slug
-      LIMIT ${JUNK_HUB_SCAN_LIMIT}`,
-  );
-  // A concept is judged as a topic: "meetings" names no entity but is a concept.
-  const junk = pages.rows
-    .filter((p) => {
-      const [slugJunk, nameJunk] = p.type === "concept" ? [isJunkConceptSlug, isJunkConceptName] : [isJunkEntitySlug, isJunkEntityName];
-      return slugJunk(p.slug) || (p.title !== null && p.title.trim() !== "" && nameJunk(p.title));
-    })
-    .map((p) => p.slug);
-  if (junk.length === 0) {
-    return { ok: true, status: "ok", detail: "no junk-named entity pages" };
-  }
-  const top = await engine.query<{ slug: string; n: number }>(
-    `SELECT j.slug,
-            (SELECT count(*) FROM links l
-              WHERE l.source_slug = j.slug OR l.target_slug = j.slug)::int AS n
-       FROM unnest($1::text[]) AS j(slug)
-      ORDER BY n DESC, j.slug
-      LIMIT 5`,
-    [junk],
-  );
-  const sample = top.rows.map((r) => `${r.slug} (${r.n} links)`).join(", ");
-  return {
-    ok: true,
-    status: "warn",
-    detail:
-      `${junk.length} junk-named entity page(s); most linked: ${sample}` +
-      " — merge or delete them so they stop joining unrelated pages",
   };
 }
 
@@ -613,107 +281,3 @@ export async function checkEmbeddingWidth(
   };
 }
 
-export interface CodeGraphThresholds {
-  /** Warn when more than this share of live code documents has no code-def. */
-  noDefRatio: number;
-  /** The ratio is only judged over at least this many code documents. */
-  minDocsForRatio: number;
-  /** Warn when an edge has waited longer than this for the resolve phase. */
-  resolveBacklogHours: number;
-}
-
-const CODE_GRAPH_DEFAULTS: CodeGraphThresholds = {
-  noDefRatio: 0.5,
-  minDocsForRatio: 20,
-  resolveBacklogHours: 24,
-};
-
-/**
- * Code graph health. Readiness says `ready` as soon as one symbol exists, so a
- * hollow index passes it: most code documents without a definition (the
- * parser fell back to text windows), code chunks with no language (every
- * language-filtered walk skips them), or edges the resolve-symbol-edges phase
- * never reached. Warn, never fail — the graph still answers, just worse.
- */
-export async function checkCodeGraph(
-  engine: Engine,
-  thresholds: Partial<CodeGraphThresholds> = {},
-): Promise<OpsCheckResult> {
-  const t = { ...CODE_GRAPH_DEFAULTS, ...thresholds };
-  const r = await engine.query<{
-    docs: number;
-    no_def: number;
-    no_lang: number;
-    backlog_hours: number | string | null;
-  }>(
-    `WITH code_docs AS (
-       SELECT d.id FROM documents d
-        WHERE d.frontmatter->>'kind' = 'code' AND d.deleted_at IS NULL
-     )
-     SELECT
-       (SELECT count(*)::int FROM code_docs) AS docs,
-       (SELECT count(*)::int FROM code_docs cd
-         WHERE NOT EXISTS (
-           SELECT 1 FROM chunks c
-             JOIN entity_mentions em ON em.chunk_id = c.id
-             JOIN entities e ON e.id = em.entity_id
-            WHERE c.document_id = cd.id AND e.type = 'code-def')) AS no_def,
-       (SELECT count(*)::int FROM chunks c JOIN code_docs cd ON cd.id = c.document_id
-         WHERE c.language IS NULL) AS no_lang,
-       (SELECT EXTRACT(EPOCH FROM (NOW() - MIN(e.created_at)))::float8 / 3600
-          FROM code_edges_symbol e
-          JOIN chunks c ON c.id = e.from_chunk_id
-          JOIN code_docs cd ON cd.id = c.document_id
-         WHERE c.edges_backfilled_at IS NULL) AS backlog_hours`,
-  );
-  const row = r.rows[0];
-  const docs = row?.docs ?? 0;
-  if (docs === 0) return { ok: true, status: "ok", detail: "no code indexed" };
-  const noDef = row?.no_def ?? 0;
-  const noLang = row?.no_lang ?? 0;
-  const backlog = row?.backlog_hours == null ? null : Number(row.backlog_hours);
-  const problems: string[] = [];
-  if (docs >= t.minDocsForRatio && noDef / docs > t.noDefRatio) {
-    problems.push(`${noDef}/${docs} code document(s) without a definition — check \`code-grammars\``);
-  }
-  if (noLang > 0) {
-    problems.push(`${noLang} code chunk(s) with no language — reindex the code sources`);
-  }
-  if (backlog !== null && backlog > t.resolveBacklogHours) {
-    problems.push(
-      `call edges awaiting resolution for ${Math.floor(backlog)}h — is the resolve-symbol-edges cycle phase running?`,
-    );
-  }
-  if (problems.length === 0) {
-    return { ok: true, status: "ok", detail: `${docs} code document(s); graph labelled and resolved` };
-  }
-  return { ok: true, status: "warn", detail: problems.join("; ") };
-}
-
-/**
- * Manual single-value links (one employer, one location at a time) whose
- * intervals for different targets overlap. New writes refuse that; rows from
- * before the rule are reported for review, never rewritten.
- */
-export async function checkSingleValueLinkOverlaps(engine: Engine): Promise<OpsCheckResult> {
-  const { rows } = await engine.query<{ source_slug: string; type: string; total: number }>(
-    `SELECT a.source_slug, a.type, count(*) OVER ()::int AS total
-       FROM links a JOIN links b
-         ON b.source_slug = a.source_slug AND b.type = a.type AND b.source_id = a.source_id
-        AND b.link_source = 'manual' AND b.target_slug > a.target_slug
-      WHERE a.link_source = 'manual' AND a.type = ANY($1::text[])
-        AND (a.valid_from IS NULL OR b.valid_until IS NULL OR a.valid_from < b.valid_until)
-        AND (b.valid_from IS NULL OR a.valid_until IS NULL OR b.valid_from < a.valid_until)
-      GROUP BY a.source_slug, a.type
-      ORDER BY a.source_slug, a.type
-      LIMIT 3`,
-    [[...SINGLE_VALUE_LINK_TYPES]],
-  );
-  const total = rows[0]?.total ?? 0;
-  if (total === 0) return { ok: true, status: "ok", detail: "no overlapping single-value links" };
-  return {
-    ok: true,
-    status: "warn",
-    detail: `${total} entity/type pair(s) hold overlapping values, e.g. ${rows.map((r) => `${r.source_slug} ${r.type}`).join(", ")}; review and correct with link/unlink`,
-  };
-}

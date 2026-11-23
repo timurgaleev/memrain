@@ -16,7 +16,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { Semaphore } from "./concurrency.ts";
 import { couldNotCheck } from "./doctor-categories.ts";
 import type { Engine } from "./engine/interface.ts";
-import type { TenancyCheck } from "./doctor-tenancy.ts";
+import type { CheckVerdict } from "./doctor-categories.ts";
 
 const DEFAULT_POOL_MAX = 10;
 
@@ -111,7 +111,7 @@ export function connectionBudgetVerdict(i: ConnectionBudgetInput): { status: "ok
 }
 
 /** Doctor `db-connection-budget`: planned and open connections against the server's limit. */
-export async function checkConnectionBudget(engine: Engine): Promise<TenancyCheck> {
+export async function checkConnectionBudget(engine: Engine): Promise<CheckVerdict> {
   const name = "db-connection-budget";
   if (engine.kind !== "postgres") return { name, ok: true, status: "ok", detail: "not applicable to PGLite" };
   try {
