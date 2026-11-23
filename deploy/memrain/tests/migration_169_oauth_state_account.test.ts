@@ -25,7 +25,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       // A connector account as an earlier build stored it.
       const account = (await e.query<{ id: string }>(
         `INSERT INTO connector_accounts (id, source_id, provider, services, principal_ref, account_label)
-         VALUES ('00000000-0000-4000-8000-000000000169', 'inbox', 'microsoft', ARRAY['outlook_mail'], 'admin:operator', 'me@example.test') RETURNING id::text AS id`,
+         VALUES ('00000000-0000-4000-8000-00000a000169', 'inbox', 'microsoft', ARRAY['outlook_mail'], 'admin:operator', 'me@example.test') RETURNING id::text AS id`,
       )).rows[0]!;
       await e.query(STATE, ["first-connect", null]);
       await e.query(STATE, ["reconnect", account.id]);
