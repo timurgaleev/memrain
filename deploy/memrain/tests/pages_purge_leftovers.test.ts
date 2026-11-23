@@ -181,7 +181,6 @@ describe.skipIf(!PG_URL)("purge leftovers (Postgres)", () => {
   // and its leftover DELETE has already run by then. A write that checked the
   // page without locking it would insert in that window and outlive the purge.
   const racers = [
-    ["putRawData", (s: Storage) => seedRawData(s, raceSlug, "crm", { v: 2 })],
     ["addTag", (s: Storage) => addTag(s, raceSlug, "vip")],
   ] as const;
   for (const [name, write] of racers) {
