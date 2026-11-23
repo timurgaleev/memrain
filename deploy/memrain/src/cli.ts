@@ -100,7 +100,8 @@ import { runWriteGate } from "./commands/write-gate.ts";
 import { runTrust } from "./commands/trust.ts";
 import { runGroup, runMember } from "./commands/members.ts";
 import { runIdentity } from "./commands/identity.ts";
-import { assertExtensionPresent, extension } from "./core/extension.ts";
+import { extension } from "./core/extension.ts";
+import { assertNotWrapped } from "./core/startup-guard.ts";
 import { runSecretsAudit, runSecretStore } from "./commands/secrets.ts";
 import {
   runEvalRunAll,
@@ -454,10 +455,9 @@ async function printCommandHelp(
 }
 
 async function main(argv: readonly string[]): Promise<number> {
-  // A registered extension's commands parse their own argv, before ours.
+  assertNotWrapped();
   const extended = await extension().command(argv);
   if (extended !== null) return extended;
-  assertExtensionPresent();
   const parsed = parseArgs(argv, { strict: false });
   const { cmd, flags, positional } = parsed;
 

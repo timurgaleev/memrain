@@ -4,7 +4,7 @@
  * Loads config (created by `init`), opens PGLite, starts the server,
  * registers SIGINT/SIGTERM for graceful shutdown.
  */
-import { assertExtensionPresent } from "../core/extension.ts";
+import { assertNotWrapped } from "../core/startup-guard.ts";
 import { randomBytes } from "node:crypto";
 import { Storage } from "../core/storage.ts";
 import { startServer } from "../http/server.ts";
@@ -132,7 +132,7 @@ export async function bootTokenSweep(
 }
 
 export async function runServe(opts: ServeOptions): Promise<void> {
-  assertExtensionPresent();
+  assertNotWrapped();
   const watchdogMs = eventLoopWatchdogMs();
   if (!opts.http) {
     throw new Error(

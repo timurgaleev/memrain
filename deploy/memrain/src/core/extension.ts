@@ -115,49 +115,16 @@ const NONE: Extension = {
   usage: [],
 };
 
-let current: Extension = NONE;
-let registered = false;
-let provided: ReadonlySet<string> = new Set();
-
-/** Called once, by a wrapper's entrypoint, before it loads the CLI. */
-export function registerExtension(ext: Partial<Extension> & { name: string }): void {
-  if (registered) throw new Error(`extension '${current.name}' is already registered; refusing '${ext.name}'`);
-  // An explicit `undefined` keeps the default rather than replacing it.
-  const defined = Object.fromEntries(Object.entries(ext).filter(([, v]) => v !== undefined));
-  current = { ...NONE, ...defined } as Extension;
-  provided = new Set(Object.keys(defined));
-  registered = true;
+/**
+ * This build accepts no extension: the gates a wrapped deployment relies on
+ * (the page-add limit, the outside spend hold) are gone from its write and
+ * spend paths, so a registered extension would run with them silently open.
+ * Every hook reads as the defaults above.
+ */
+export function registerExtension(ext: Partial<Extension> & { name: string }): never {
+  throw new Error(`extension '${ext.name}' refused: this build runs no extensions`);
 }
 
 export function extension(): Extension {
-  return current;
-}
-
-/**
- * Environment that only a wrapped build understands. Seeing it with no
- * extension registered means the plain entrypoint was started where the
- * wrapper's should run: every gate above would be open, so startup refuses.
- */
-const WRAPPED_ONLY_ENV = ["MEMRAIN_TENANT_ID", "MEMRAIN_CONTROL_URL"] as const;
-
-/** The gates a build that sets WRAPPED_ONLY_ENV must supply itself; their defaults let everything through. */
-const REQUIRED_WHEN_WRAPPED = ["startupCheck", "admitRequest", "admitOperation", "paused", "holdSpend", "settleSpend"] as const;
-
-export function assertExtensionPresent(env: Readonly<Record<string, string | undefined>> = process.env): void {
-  const set = WRAPPED_ONLY_ENV.filter((k) => (env[k] ?? "").trim() !== "");
-  if (set.length === 0) return;
-  if (!registered) {
-    throw new Error(`${set.join(" and ")} set, but this build registers no extension that understands it; refusing to start`);
-  }
-  const missing = REQUIRED_WHEN_WRAPPED.filter((k) => !provided.has(k));
-  if (missing.length > 0) {
-    throw new Error(`${set.join(" and ")} set, but extension '${current.name}' does not supply ${missing.join(", ")}; refusing to start`);
-  }
-}
-
-/** Test seam: forget the registered extension. */
-export function _resetExtensionForTests(): void {
-  current = NONE;
-  registered = false;
-  provided = new Set();
+  return NONE;
 }
