@@ -10,7 +10,7 @@ import {
   tryAcquireLease,
   withProviderLease,
 } from "../src/core/jobs/rate-leases.ts";
-import { setSpendLedgerEngine, trackedInvoke } from "../src/core/budget.ts";
+import { setSpendLedgerEngine } from "../src/core/budget.ts";
 import { Queue } from "../src/core/jobs/queue.ts";
 import { Worker } from "../src/core/jobs/worker.ts";
 import { _resetHandlersForTesting, registerHandler } from "../src/core/jobs/handlers.ts";
@@ -99,32 +99,6 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       expect(await leaseRows(e)).toBe(0);
     } finally { await db.close(); }
   }, 20_000);
-
-  it("trackedInvoke holds a lease for the call and refuses when none is free", async () => {
-    const db = await open();
-    const e = db.storage.engine();
-    setSpendLedgerEngine(e);
-    const prev = { leases: process.env.MEMRAIN_PROVIDER_LEASES, wait: process.env.MEMRAIN_PROVIDER_LEASE_WAIT_MS };
-    process.env.MEMRAIN_PROVIDER_LEASES = "bedrock:haiku=1";
-    process.env.MEMRAIN_PROVIDER_LEASE_WAIT_MS = "50";
-    const call = { operation: "test", model: HAIKU, worstCase: { input: "x", maxOutputTokens: 1 } };
-    try {
-      let during = -1;
-      await trackedInvoke(call, async () => { during = await leaseRows(e); return null; });
-      expect(during).toBe(1);
-      expect(await leaseRows(e)).toBe(0);
-
-      await tryAcquireLease(e, "bedrock:haiku", 1, OWNER);
-      let sent = false;
-      await expect(trackedInvoke(call, async () => { sent = true; return null; })).rejects.toBeInstanceOf(ProviderLeaseBusy);
-      expect(sent).toBe(false);
-    } finally {
-      for (const [k, v] of [["MEMRAIN_PROVIDER_LEASES", prev.leases], ["MEMRAIN_PROVIDER_LEASE_WAIT_MS", prev.wait]] as const) {
-        if (v === undefined) delete process.env[k]; else process.env[k] = v;
-      }
-      await db.close();
-    }
-  });
 
   it("the worker defers a job refused for want of a lease without spending a retry", async () => {
     const db = await open();

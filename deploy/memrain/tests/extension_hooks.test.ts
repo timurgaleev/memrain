@@ -13,14 +13,12 @@ import {
   _resetExtensionForTests,
   assertExtensionPresent,
   registerExtension,
-  type HoldOutcome,
 } from "../src/core/extension.ts";
 import { dispatchTool } from "../src/mcp/dispatch.ts";
 import { OperationError } from "../src/core/operation-error.ts";
 import { Queue } from "../src/core/jobs/queue.ts";
 import { Worker } from "../src/core/jobs/worker.ts";
 import { registerHandler, _resetHandlersForTesting } from "../src/core/jobs/handlers.ts";
-import { trackedInvoke } from "../src/core/budget.ts";
 
 let dir: string;
 let storage: Storage;
@@ -38,8 +36,6 @@ afterAll(async () => {
 });
 
 afterEach(() => _resetExtensionForTests());
-
-const HAIKU = { operation: "probe", model: "eu.anthropic.claude-haiku-5-5", worstCase: { input: "x", maxOutputTokens: 10 } };
 
 describe("registration", () => {
   it("refuses a second registration", () => {
@@ -121,27 +117,5 @@ describe("hooks at their call sites", () => {
     expect(await new Worker(queue).drainOnce()).toBe(1);
     expect(ran).toBe(1);
     _resetHandlersForTesting();
-  });
-
-  it("a held paid call settles done with its cost, and unknown when it may have billed unreported", async () => {
-    const settled: HoldOutcome[] = [];
-    registerExtension({
-      name: "t",
-      holdSpend: async (_call, worstUsd) => ({ id: "h1", usd: worstUsd ?? 0 }),
-      settleSpend: async (_call, _hold, result) => void settled.push(result),
-    });
-    await trackedInvoke(HAIKU, async (meter) => { meter.report({ inputTokens: 1, outputTokens: 1 }); return "ok"; });
-    const timeout = Object.assign(new Error("socket hang up"), { name: "TimeoutError" });
-    await expect(trackedInvoke(HAIKU, async () => { throw timeout; })).rejects.toThrow();
-    expect(settled[0]?.outcome).toBe("done");
-    expect(settled[0]?.outcome === "done" && settled[0].actualUsd).toBeGreaterThan(0);
-    expect(settled[1]?.outcome).toBe("unknown");
-  });
-
-  it("a refusal from the spend hook is a daily-cap refusal and nothing is sent", async () => {
-    registerExtension({ name: "t", holdSpend: async (_c, _w, r) => r.refuse("over the cap", "Wait.") });
-    let sent = 0;
-    await expect(trackedInvoke(HAIKU, async () => { sent++; return "x"; })).rejects.toThrow(/daily_cap: 'probe' was not sent: over the cap/);
-    expect(sent).toBe(0);
   });
 });

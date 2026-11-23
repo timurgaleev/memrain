@@ -29,7 +29,6 @@ import {
   JOBS_WORKER_ENV,
   MAINTENANCE_ENV,
 } from "./quiescence.ts";
-import { extension } from "./extension.ts";
 
 export const RUNTIME_CONFIG_KEY_RE = /^(?:MEMRAIN|MEMEX)_[A-Z0-9_]{1,64}$/;
 
@@ -80,9 +79,9 @@ export const ENV_ONLY_KEYS: ReadonlySet<string> = new Set([
   "MEMRAIN_CONTROL_URL",
 ]);
 
-/** ENV_ONLY_KEYS plus any a registered extension adds; read at call time, so registration order does not matter. */
+/** Whether `key` may only come from the environment, never from a stored row. */
 export function isEnvOnlyKey(key: string): boolean {
-  return ENV_ONLY_KEYS.has(key) || extension().envOnlyKeys.includes(key);
+  return ENV_ONLY_KEYS.has(key);
 }
 
 /**
@@ -104,9 +103,9 @@ export const NEVER_STORED_KEYS: ReadonlySet<string> = new Set([
   "MEMRAIN_CONTROL_URL",
 ]);
 
-/** NEVER_STORED_KEYS plus any a registered extension adds. */
+/** Whether `key` is never written to the runtime_config table. */
 export function isNeverStoredKey(key: string): boolean {
-  return NEVER_STORED_KEYS.has(key) || extension().neverStoredKeys.includes(key);
+  return NEVER_STORED_KEYS.has(key);
 }
 
 /**

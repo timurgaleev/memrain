@@ -22,10 +22,8 @@ import { beginRequestCost } from "./request-cost.ts";
 import { BedrockHalted, assertBedrockOpen, classifyBedrockError, noteBedrockFailure, noteBedrockSuccess } from "./llm/bedrock-errors.ts";
 import { keywordOnlyMode } from "./llm/gateway.ts";
 import { appendAudit, auditDir } from "./audit-week-file.ts";
-import { withProviderLease } from "./jobs/rate-leases.ts";
 import type { Engine } from "./engine/interface.ts";
 import type { SonnetUsage } from "./llm/sonnet.ts";
-import { extension, type ExternalHold, type HoldOutcome } from "./extension.ts";
 
 /**
  * Ledger key of the brain's own held calls (cycle, jobs, CLI) when a
@@ -756,7 +754,7 @@ export async function expireStaleReservations(
 // go" answerable with a GROUP BY.
 //
 // For a capped client it also holds the call's worst case against the day
-// before sending, and refuses the call when that would not fit (holdForCall).
+// before sending, and refuses the call when that would not fit (holdLocally).
 // ---------------------------------------------------------------------------
 
 /** memrain's only paid provider. */
@@ -1354,17 +1352,12 @@ const _unpricedWarned = new Set<string>();
  * the caller got an answer out of them. A call that threw before any usage was
  * reported still writes a $0 row: the attempt is attributable even when it
  * bought nothing.
- *
- * Under a provider lease limit (MEMRAIN_PROVIDER_LEASES, off by default) the
- * call first takes a slot of its model family; a call refused a slot is never
- * held, sent or booked.
  */
 export async function trackedInvoke<T>(
   call: TrackedCall,
   send: (meter: SpendMeter) => Promise<T>,
 ): Promise<T> {
-  return withProviderLease(_ledgerEngine, call.provider ?? DEFAULT_SPEND_PROVIDER, call.model,
-    () => invokeTracked(call, send), { ownerJob: currentSpendTags().jobId ?? null });
+  return invokeTracked(call, send);
 }
 
 /**
@@ -1447,7 +1440,7 @@ async function attemptTracked<T>(
   const refuseStart = performance.now();
   let hold: CallHold | null;
   try {
-    hold = await holdForCall(call);
+    hold = await holdLocally(call);
   } finally {
     noteWriteTiming("ledgerMs", performance.now() - refuseStart);
   }
@@ -1479,9 +1472,6 @@ async function attemptTracked<T>(
       const usd = hold?.usd ?? worstCaseUsd(call) ?? 0;
       for (const t of new Set(_trackerScope.getStore())) t.noteUnreportedAttempt(call.model, usd);
     }
-    // A call that may have billed unreported keeps its external hold counted
-    // (`unknown`); the extension decides what that hold becomes.
-    if (hold?.external) await settleExternal(call, hold.external, keepHold ? { outcome: "unknown" } : usage ? { outcome: "done", actualUsd: actualUsd ?? hold.external.usd } : { outcome: "failed" });
     await bookSpend(call, usage, hold, keepHold, { outcome, latencyMs: bookStart - sendStart });
     noteWriteTiming("ledgerMs", performance.now() - bookStart);
   }
@@ -1496,48 +1486,6 @@ interface CallHold {
   id: string | null;
   usd: number;
   runs: RunLedger[];
-  /** The extension's hold, when one applies. */
-  external?: ExternalHold;
-}
-
-/**
- * The brain's own holds first, then the extension's (if any). A refusal or
- * failure of the extension's hold releases the brain's holds before it is thrown.
- */
-async function holdForCall(call: TrackedCall): Promise<CallHold | null> {
-  const local = await holdLocally(call);
-  let external: ExternalHold | null;
-  try {
-    external = await extension().holdSpend(call, worstCaseUsd(call), {
-      refuse: async (message, suggestion, rollover = true) => {
-        await bookRefusal(call);
-        throw new DailyCapRefusal("external", `'${call.operation}' was not sent: ${message}`, suggestion, rollover);
-      },
-      // An outage, not a spending decision: a transient error, so search falls
-      // back to its keyword arm instead of failing, while nothing paid is sent.
-      unavailable: async (message) => {
-        await bookRefusal(call);
-        throw new OperationError("storage_error", `'${call.operation}' was not sent: ${message}`, "Retry shortly.");
-      },
-    });
-  } catch (err) {
-    if (local) {
-      settleRuns(local.runs, local.usd, 0);
-      if (local.id && _ledgerEngine) await releaseReservation(_ledgerEngine, local.id).catch(() => undefined);
-    }
-    throw err;
-  }
-  if (external === null) return local;
-  return { ...(local ?? { id: null, usd: external.usd, runs: [] }), external };
-}
-
-/** Settle the extension's hold; a failure is logged, never thrown over the call's own result. */
-async function settleExternal(call: TrackedCall, hold: ExternalHold, result: HoldOutcome): Promise<void> {
-  try {
-    await extension().settleSpend(call, hold, result);
-  } catch (err) {
-    console.warn(`[memrain] spend settle failed for '${call.operation}': ${err instanceof Error ? err.message : String(err)}`);
-  }
 }
 
 async function holdLocally(call: TrackedCall): Promise<CallHold | null> {
