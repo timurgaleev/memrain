@@ -9,7 +9,6 @@
 
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { noteWriteTiming } from "../write-timing.ts";
-import { extension, type AwsCredentialIdentity } from "../extension.ts";
 
 const DEFAULT_MAX_INFLIGHT = 4;
 
@@ -186,14 +185,11 @@ export function bedrockClientConfig(timeoutMs: number): {
   maxAttempts: number;
   retryMode: "adaptive";
   requestHandler: NodeHttpHandler;
-  credentials?: () => Promise<AwsCredentialIdentity>;
 } {
   return {
     maxAttempts: 1,
     retryMode: "adaptive",
     requestHandler: new NodeHttpHandler({ requestTimeout: timeoutMs, throwOnRequestTimeout: true }),
-    // An extension may supply its own credentials provider.
-    ...extension().bedrockClientConfig(),
   };
 }
 
