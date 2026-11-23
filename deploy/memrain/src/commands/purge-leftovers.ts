@@ -7,7 +7,7 @@ import { withStorage } from "./with-storage.ts";
 
 /** What to run when some page could not be mirrored back into search right away. */
 function mirrorNext(failed: readonly string[]): { next?: string } {
-  return failed.length > 0 ? { next: "memrain cycle --phases mirror-pages" } : {};
+  return failed.length > 0 ? { next: "the hourly housekeeping of memrain serve re-mirrors them" } : {};
 }
 
 export interface PurgeLeftoversOptions {

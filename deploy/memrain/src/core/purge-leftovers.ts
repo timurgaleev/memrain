@@ -93,7 +93,7 @@ async function afterState(tx: Engine, rows: Record<string, unknown[]>): Promise<
 
 export interface MirrorRebuild {
   mirrored: string[];
-  /** Pages whose mirror could not be rebuilt now: `memrain cycle --phases mirror-pages` retries them. */
+  /** Pages whose mirror could not be rebuilt now: the hourly housekeeping retries them. */
   failed: string[];
 }
 

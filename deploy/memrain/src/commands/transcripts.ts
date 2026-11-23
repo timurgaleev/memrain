@@ -2,9 +2,8 @@ import { resolveDateBoundary } from "../core/search/filters.ts";
 /**
  * `memrain transcripts ingest <path> [--format auto|chatgpt|claude-ai|codex|claude-code]
  *                           [--source ID] [--since ISO|7d|auto] [--no-embed]
- *                           [--facts --max-cost-usd N] [--dry-run] [--json]`
+ *                           [--dry-run] [--json]`
  * `memrain transcripts status [--source ID] [--json]`
- * `memrain transcripts push <path> --url URL --token-file F [--hook-stdin] [--dry-run] [--json]`
  *
  * Imports a ChatGPT or Claude.ai data export, a Codex CLI rollout
  * (`~/.codex/sessions/**\/rollout-*.jsonl`) or a Claude Code session log
@@ -24,28 +23,22 @@ import { resolveDateBoundary } from "../core/search/filters.ts";
  * `--since` keeps only sessions whose last message is newer than an ISO time;
  * `auto` uses the watermark a clean earlier run over the same path and source
  * left (reading it opens the brain, even on a dry run). `--no-embed` writes
- * the pages and leaves search indexing to the cycle's mirror-pages phase.
- * `--facts` runs the paid fact extractor over the parts this run wrote,
- * capped at `--max-cost-usd` (needs MEMRAIN_FACTS_EXTRACTION=1).
+ * the pages and leaves search indexing to the hourly housekeeping.
  *
  * `status` reports what the brain holds per source and format, and the
- * watermarks. `push` sends one session log to a hosted brain's POST /ingest
- * (see docs/TRANSCRIPTS.md).
+ * watermarks.
  */
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 import { looksBinary } from "../core/binary-guard.ts";
 import { loadConfig } from "../core/config.ts";
-import { extractFactsForPage, factsExtractionEnabled } from "../core/facts-extract.ts";
 import type { EmbedFn } from "../core/indexer.ts";
-import type { SonnetFn } from "../core/llm/sonnet.ts";
 import { getRecipeState, setRecipeState } from "../core/recipe-state.ts";
 import { SecretRejectedError } from "../core/secret-scan.ts";
 import { Storage } from "../core/storage.ts";
 import {
   checkTranscriptFileSize,
-  countUserTurns,
   parseTranscriptExport,
   parseTranscriptJsonl,
   type ParsedExport,
@@ -57,14 +50,6 @@ import {
   type IngestTranscriptsResult,
 } from "../core/transcripts/ingest.ts";
 import {
-  hookTranscriptPath,
-  pushEndpoint,
-  readPushFile,
-  resolvePushPath,
-  TRANSCRIPT_PUSH_CONTENT_TYPE,
-  transcriptPushMaxBytes,
-} from "../core/transcripts/push.ts";
-import {
   isTranscriptFormat,
   JSONL_TRANSCRIPT_FORMATS,
   TRANSCRIPT_FORMATS,
@@ -72,7 +57,6 @@ import {
   type TranscriptFormat,
   type TranscriptSession,
 } from "../core/transcripts/types.ts";
-import { repairTranscriptOrigin, type AgentSessionOrigin } from "../core/transcripts/origin-repair.ts";
 import { withStorage } from "./with-storage.ts";
 
 export interface TranscriptsCmdOptions {
@@ -82,8 +66,6 @@ export interface TranscriptsCmdOptions {
   format?: string;
   sourceId?: string;
   dryRun?: boolean;
-  apply?: boolean;
-  planHash?: string;
   json?: boolean;
   configPath?: string;
   /** Test seam — deterministic embedder for the search mirror (no Bedrock). */
@@ -91,18 +73,6 @@ export interface TranscriptsCmdOptions {
   /** ISO time, or `auto` for the watermark of this path and source. */
   since?: string;
   noEmbed?: boolean;
-  facts?: boolean;
-  maxCostUsd?: string;
-  /** push: the brain's base URL (or its /ingest URL). */
-  url?: string;
-  tokenFile?: string;
-  /** push: take the path from a hook's stdin JSON and never fail the hook. */
-  hookStdin?: boolean;
-  /** Test seams — fact extractor, HTTP client, allowed roots, stdin. */
-  sonnetFn?: SonnetFn;
-  fetchFn?: (url: string, init: RequestInit) => Promise<Response>;
-  pushRoots?: string[];
-  readStdin?: () => Promise<string>;
 }
 
 interface DryRunPreview {
@@ -266,109 +236,17 @@ function sessionsSince(sessions: readonly TranscriptSession[], sinceMs: number):
   });
 }
 
-interface FactsRun {
-  parts: number;
-  facts_written: number;
-  spent_usd: number;
-  budget_exhausted: boolean;
-}
-
-interface WrittenPart {
-  slug: string;
-  body: string;
-  sourceId: string;
-}
-
-/** The paid extractor over the parts this run wrote, under one dollar cap. */
-async function extractFactsForParts(
-  storage: Storage,
-  parts: readonly WrittenPart[],
-  capUsd: number,
-  sonnetFn: SonnetFn | undefined,
-): Promise<FactsRun> {
-  const run: FactsRun = { parts: 0, facts_written: 0, spent_usd: 0, budget_exhausted: false };
-  for (const part of parts) {
-    const left = capUsd - run.spent_usd;
-    if (left <= 0) {
-      run.budget_exhausted = true;
-      break;
-    }
-    const r = await extractFactsForPage(storage, {
-      slug: part.slug,
-      type: TRANSCRIPT_PAGE_TYPE,
-      body: part.body,
-      sourceId: part.sourceId,
-      maxBudgetUsd: left,
-      ...(sonnetFn ? { sonnetFn } : {}),
-    });
-    run.parts++;
-    run.facts_written += r.factsWritten;
-    run.spent_usd += r.spentUsd;
-    if (r.absorbed === "budget_exhausted") {
-      run.budget_exhausted = true;
-      break;
-    }
-  }
-  return run;
-}
-
-async function runOriginRepair(opts: TranscriptsCmdOptions): Promise<number> {
-  if (!opts.file) return fail("repair-origin: <path> is required", opts.json);
-  if (opts.apply && opts.dryRun) return fail("--apply and --dry-run cannot be combined", opts.json);
-  const format = opts.format ?? "auto";
-  if (format !== "auto" && !isTranscriptFormat(format)) return fail("unknown transcript format", opts.json);
-  const override = format === "auto" ? undefined : format as TranscriptFormat;
-  const sessions: AgentSessionOrigin[] = [];
-  try {
-    const files = statSync(opts.file).isDirectory() ? sessionLogFiles(opts.file, override) : [opts.file];
-    for (const file of files) {
-      const digest = () => {
-        const tooBig = checkTranscriptFileSize(statSync(file).size);
-        if (tooBig) throw new Error(`${basename(file)}: ${tooBig}`);
-        return createHash("sha256").update(readFileSync(file)).digest("hex");
-      };
-      const evidenceHash = digest();
-      const parsed = readTranscriptFile(file, override);
-      if (typeof parsed === "string") return fail(parsed, opts.json);
-      if (parsed.diagnostics.format_drift || parsed.diagnostics.malformed_lines) {
-        return fail(`${basename(file)}: incomplete or unrecognized log; origin repair refused`, opts.json);
-      }
-      if (digest() !== evidenceHash) return fail(`${basename(file)}: log changed during read; origin repair refused`, opts.json);
-      sessions.push(...parsed.sessions.filter(s => s.origin === "agent").map(s => ({ format: s.format, id: s.id, evidence_hash: evidenceHash })));
-      if (parsed.diagnostics.format === "codex") {
-        sessions.push(...parsed.diagnostics.skipped.filter(s => s.reason === "exec rollout" && s.id)
-          .map(s => ({ format: "codex", id: s.id!, evidence_hash: evidenceHash })));
-      }
-    }
-    const storage = new Storage(loadConfig(opts.configPath));
-    const result = await withStorage(storage, () => repairTranscriptOrigin(storage, sessions, opts.sourceId ?? "default", opts.apply === true, opts.planHash), { migrate: false });
-    if (opts.json) console.log(JSON.stringify({ ok: true, ...result }, null, 2));
-    else {
-      for (const page of result.pages) console.log(`${page.slug}: ${page.facts} fact(s)`);
-      console.log(`${result.applied ? "Applied" : "Preview"}: ${result.facts} fact(s); ${result.changed} changed.`);
-      console.log(`Plan hash: ${result.plan_hash}`);
-    }
-    return 0;
-  } catch (e) {
-    return fail(`origin repair failed: ${e instanceof Error ? e.message : String(e)}`, opts.json);
-  }
-}
-
 interface IngestContext {
   file: string;
   formatLabel: string;
   diagnostics: TranscriptDiagnostics;
   sinceInfo: { since: string | null; sessions_before: number } | undefined;
-  factsCap: number | null;
 }
 
 export async function runTranscripts(opts: TranscriptsCmdOptions): Promise<number> {
-  if (opts.apply && opts.sub !== "repair-origin") return fail("--apply is only valid for repair-origin", opts.json);
-  if (opts.sub === "repair-origin") return runOriginRepair(opts);
   if (opts.sub === "status") return runStatus(opts);
-  if (opts.sub === "push") return runPush(opts);
   if (opts.sub !== "ingest") {
-    console.error("memrain transcripts: subcommand required (ingest <path> | status | push <path> | repair-origin <path>)");
+    console.error("memrain transcripts: subcommand required (ingest <path> | status)");
     return 1;
   }
   if (!opts.file) return fail("ingest: <path> is required", opts.json);
@@ -384,17 +262,6 @@ export async function runTranscripts(opts: TranscriptsCmdOptions): Promise<numbe
       sinceMs = Date.parse(resolveDateBoundary(since, "since"));
     } catch {
       return fail(`--since must be an ISO time, duration (7d/2w/6m/1y), or auto (got ${JSON.stringify(opts.since)})`, opts.json);
-    }
-  }
-  if (opts.maxCostUsd !== undefined && !opts.facts) return fail("--max-cost-usd applies only with --facts", opts.json);
-  let factsCap: number | null = null;
-  if (opts.facts) {
-    factsCap = Number(opts.maxCostUsd);
-    if (opts.maxCostUsd === undefined || !Number.isFinite(factsCap) || factsCap <= 0) {
-      return fail("--facts needs --max-cost-usd N, a positive dollar cap for the paid extractor", opts.json);
-    }
-    if (!opts.dryRun && !opts.sonnetFn && !factsExtractionEnabled()) {
-      return fail("--facts runs the paid extractor and needs MEMRAIN_FACTS_EXTRACTION=1; nothing was imported", opts.json);
     }
   }
 
@@ -427,7 +294,7 @@ export async function runTranscripts(opts: TranscriptsCmdOptions): Promise<numbe
   const recipeId = watermarkRecipeId(sourceId, opts.file);
   const storage = !opts.dryRun || since === "auto" ? new Storage(loadConfig(opts.configPath)) : null;
   if (storage === null) {
-    return dryRun(sessions, { file, formatLabel, diagnostics, sinceInfo: sinceInfoFor(since, sinceMs, sessions.length), factsCap }, opts, sinceMs);
+    return dryRun(sessions, { file, formatLabel, diagnostics, sinceInfo: sinceInfoFor(since, sinceMs, sessions.length) }, opts, sinceMs);
   }
   return withStorage(storage, async () => {
     if (since === "auto") {
@@ -435,7 +302,7 @@ export async function runTranscripts(opts: TranscriptsCmdOptions): Promise<numbe
       const at = wm ? Date.parse(wm.watermark) : NaN;
       sinceMs = Number.isFinite(at) ? at : null;
     }
-    const ctx: IngestContext = { file, formatLabel, diagnostics, sinceInfo: sinceInfoFor(since, sinceMs, sessions.length), factsCap };
+    const ctx: IngestContext = { file, formatLabel, diagnostics, sinceInfo: sinceInfoFor(since, sinceMs, sessions.length) };
     if (opts.dryRun) return dryRun(sessions, ctx, opts, sinceMs);
     if (sinceMs !== null) sessions = sessionsSince(sessions, sinceMs);
     return realRun(storage, sessions, ctx, opts, { recipeId, sinceAttests: since === undefined || since === "auto" });
@@ -479,15 +346,12 @@ async function realRun(
   wm: { recipeId: string; sinceAttests: boolean },
 ): Promise<number> {
   const { file, formatLabel, diagnostics } = ctx;
-  const written: WrittenPart[] = [];
   const result: IngestTranscriptsResult = await ingestSessions(storage, sessions, {
     ref: `${diagnostics.format ?? "unknown"}:${file}`,
     ...(opts.sourceId ? { sourceId: opts.sourceId } : {}),
     ...(opts.embedFn ? { embedFn: opts.embedFn } : {}),
     ...(opts.noEmbed ? { deferMirror: true } : {}),
-    ...(ctx.factsCap !== null ? { onPartWritten: (p: WrittenPart) => written.push(p) } : {}),
   });
-  const facts = ctx.factsCap !== null ? await extractFactsForParts(storage, written, ctx.factsCap, opts.sonnetFn) : undefined;
   const failedRun = result.sessions_rejected + result.sessions_failed > 0 || diagnostics.user_turns_missing > 0;
   // Only a clean run that read everything above the old watermark may move
   // it: a partial run, or an explicit --since that never looked below its
@@ -515,7 +379,6 @@ async function realRun(
           diagnostics,
           ...(ctx.sinceInfo ? { since: ctx.sinceInfo } : {}),
           result,
-          ...(facts ? { facts } : {}),
           watermark,
         },
         null,
@@ -528,15 +391,9 @@ async function realRun(
         `${result.parts_written} parts written, ${result.parts_unchanged} unchanged, ` +
         `${result.parts_deleted} stale deleted, ${result.redactions} credentials redacted` +
         (result.mirror_failures > 0 ? `, ${result.mirror_failures} not yet searchable` : "") +
-        (result.mirror_deferred > 0 ? `, ${result.mirror_deferred} left for the cycle to index` : ""),
+        (result.mirror_deferred > 0 ? `, ${result.mirror_deferred} left for housekeeping to index` : ""),
     );
     if (ctx.sinceInfo) console.log(`  since ${ctx.sinceInfo.since ?? "the start"}: ${sessions.length} of ${ctx.sinceInfo.sessions_before} sessions`);
-    if (facts) {
-      console.log(
-        `  facts: ${facts.facts_written} written from ${facts.parts} parts, $${facts.spent_usd.toFixed(4)} spent` +
-          (facts.budget_exhausted ? " — cap reached" : ""),
-      );
-    }
     for (const r of result.rejected) console.log(`  refused ${r.id}: ${r.reason}`);
     for (const f of result.failed) console.log(`  failed ${f.id} (${f.code}): ${f.reason}`);
     if (diagnostics.user_turns_missing > 0) {
@@ -601,118 +458,4 @@ async function runStatus(opts: TranscriptsCmdOptions): Promise<number> {
   }
   for (const w of report.watermarks) console.log(`watermark ${w.source_id} ${w.path}: ${w.watermark}`);
   return 0;
-}
-
-const MAX_TOKEN_FILE_BYTES = 4096;
-
-/** The token from a file only its owner can read. Never echoes it. */
-function readPushToken(path: string | undefined): { token: string } | { error: string } {
-  if (!path) return { error: "--token-file is required" };
-  let st;
-  try {
-    st = statSync(path);
-  } catch {
-    return { error: `cannot read --token-file ${path}` };
-  }
-  if (!st.isFile()) return { error: `--token-file ${path} is not a regular file` };
-  if (process.platform !== "win32" && (st.mode & 0o077) !== 0) {
-    return { error: `--token-file ${path} is readable by other users; chmod 600 it` };
-  }
-  if (st.size > MAX_TOKEN_FILE_BYTES) return { error: `--token-file ${path} is larger than ${MAX_TOKEN_FILE_BYTES} bytes` };
-  const token = readFileSync(path, "utf-8").trim();
-  if (token === "") return { error: `--token-file ${path} is empty` };
-  if (!/^[\x21-\x7E]+$/.test(token)) return { error: "the token contains whitespace or non-ASCII characters" };
-  return { token };
-}
-
-async function readAllStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const c of process.stdin) chunks.push(Buffer.from(c as Uint8Array));
-  return Buffer.concat(chunks).toString("utf-8");
-}
-
-/**
- * `transcripts push`: one session log to a hosted brain. Under --hook-stdin
- * it runs inside an agent's session hook, so a failure is reported on stderr
- * and the exit stays 0: a brain that is down must not break the agent.
- */
-async function runPush(opts: TranscriptsCmdOptions): Promise<number> {
-  const done = (code: number, payload: Record<string, unknown>, line: string): number => {
-    if (opts.json) console.log(JSON.stringify({ ok: code === 0, ...payload }, null, 2));
-    else if (code !== 0) console.error(`memrain transcripts push: ${line}`);
-    else console.log(line);
-    return code !== 0 && opts.hookStdin ? 0 : code;
-  };
-  const refuse = (msg: string, extra: Record<string, unknown> = {}) => done(1, { error: msg, ...extra }, msg);
-
-  let target = opts.file;
-  if (opts.hookStdin) {
-    const raw = await (opts.readStdin ?? readAllStdin)().catch(() => "");
-    target = hookTranscriptPath(raw) ?? undefined;
-    if (!target) return refuse("the hook input carries no transcript_path");
-  }
-  if (!target) return refuse("push: <path> is required");
-  const resolved = resolvePushPath(target, opts.pushRoots);
-  if ("error" in resolved) return refuse(resolved.error);
-  const read = readPushFile(resolved.path, transcriptPushMaxBytes(), resolved);
-  if ("error" in read) return refuse(read.error);
-  if (looksBinary(read.buf)) return refuse(`${resolved.path} is a binary file, not a session log`);
-  const parsed = parseTranscriptJsonl(read.buf.toString("utf-8"), read.buf.length);
-  const d = parsed.diagnostics;
-  if (d.user_turns_missing > 0) {
-    return refuse(`${resolved.path}: assistant turns but no user turn (user_turns_missing); nothing was sent`, { diagnostics: d });
-  }
-  if (parsed.sessions.length === 0 && d.empty_sessions > 0 && !d.format_drift) {
-    return done(0, { empty_session: true, path: resolved.path, format: d.format }, `${resolved.path}: empty session, nothing sent`);
-  }
-  if (parsed.sessions.length === 0) {
-    return refuse(`${resolved.path}: ${d.skipped[0]?.reason ?? "no session"}; nothing was sent`, { diagnostics: d });
-  }
-  if (opts.dryRun) {
-    const p = preview(parsed.sessions);
-    return done(
-      0,
-      { dry_run: true, path: resolved.path, format: d.format, sessions: p.sessions, parts: p.parts, user_turns: countUserTurns(parsed.sessions) },
-      `${resolved.path} (${d.format}): ${p.sessions} sessions → ${p.parts} parts — dry-run, nothing sent`,
-    );
-  }
-  if (!opts.url) return refuse("--url is required");
-  const endpoint = pushEndpoint(opts.url);
-  if ("error" in endpoint) return refuse(endpoint.error);
-  const tok = readPushToken(opts.tokenFile);
-  if ("error" in tok) return refuse(tok.error);
-
-  let res: Response;
-  try {
-    res = await (opts.fetchFn ?? fetch)(endpoint.url, {
-      method: "POST",
-      headers: {
-        "authorization": `Bearer ${tok.token}`,
-        "content-type": TRANSCRIPT_PUSH_CONTENT_TYPE,
-        "x-memrain-source-uri": `transcript:${basename(resolved.path)}`,
-      },
-      body: read.buf,
-      // A redirect would carry the bearer to wherever it points.
-      redirect: "error",
-      signal: AbortSignal.timeout(60_000),
-    });
-  } catch (e) {
-    return refuse(`cannot reach ${endpoint.url}: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  let body: Record<string, unknown> = {};
-  try {
-    body = (await res.json()) as Record<string, unknown>;
-  } catch {
-    // A proxy's HTML error page: the status says enough.
-  }
-  if (res.status !== 202) {
-    const code = typeof body.error === "string" ? body.error : `http_${res.status}`;
-    const msg = typeof body.message === "string" ? body.message : `HTTP ${res.status}`;
-    return done(1, { status: res.status, error: code, message: msg }, `${code}: ${msg}`);
-  }
-  return done(
-    0,
-    { status: res.status, path: resolved.path, job_id: body.job_id, sessions: body.sessions, parts: body.parts },
-    `${basename(resolved.path)}: queued as ${String(body.job_id)} (${String(body.sessions)} sessions, ${String(body.parts)} parts)`,
-  );
 }

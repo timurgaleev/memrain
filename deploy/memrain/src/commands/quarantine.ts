@@ -40,7 +40,6 @@ import {
   type QuarantineOverride,
 } from "../core/quarantine.ts";
 import { bumpDocumentClock } from "../core/generation.ts";
-import { clearCache } from "../core/search/query-cache.ts";
 import { INSTRUCTION_LIKE_REASON } from "../core/write-gate.ts";
 
 export type QuarantineSub = "list" | "clear" | "scan";
@@ -247,9 +246,8 @@ async function runClear(engine: Engine, opts: QuarantineCmdOptions): Promise<num
       WHERE id = $1`,
     [doc.id, JSON.stringify(override), keepFlag],
   );
-  // Visibility flipped — cached rankings that excluded the doc are stale.
+  // Visibility flipped — readers keyed on the document clock re-read.
   await bumpDocumentClock(engine);
-  await clearCache(engine);
 
   const out = {
     ok: true,
@@ -313,7 +311,6 @@ async function runScan(engine: Engine, opts: QuarantineCmdOptions): Promise<numb
 
   if (opts.apply && touched.length > 0) {
     await bumpDocumentClock(engine);
-    await clearCache(engine);
   }
 
   if (opts.json) {

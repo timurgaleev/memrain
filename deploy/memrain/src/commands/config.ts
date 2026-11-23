@@ -2,7 +2,7 @@
  * `memrain config <show|get|set|unset>` — DB-plane runtime config (migration
  * 088). Mutates MEMRAIN_* knobs without a redeploy: rows overlay onto
  * process.env at every Storage.init for vars the container did not set (env
- * always wins). The write substrate behind `memrain search tune --apply`.
+ * always wins).
  *
  *   show                       list all stored keys (values redacted)
  *   get <key>                  print the effective value (exit 1 when missing);

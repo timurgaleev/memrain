@@ -3,51 +3,18 @@
  * memrain CLI entrypoint.
  */
 import "./core/env-compat.ts";
-import { resolveSinceHours } from "./core/search/filters.ts";
-import { runAliasesSuggest } from "./commands/aliases.ts";
 import { VERSION } from "./version.ts";
 import { normalizeSourceFilterParam } from "./core/source-scope.ts";
 import { runInit } from "./commands/init.ts";
 import { runServe } from "./commands/serve.ts";
-import { runIndex } from "./commands/index.ts";
-import { runSearch } from "./commands/search.ts";
 import { runReindex } from "./commands/reindex.ts";
-import { runHnsw } from "./commands/hnsw.ts";
 import { runEngineStatus } from "./commands/engine-status.ts";
-import { runModels } from "./commands/models.ts";
 import { runDoctor } from "./commands/doctor.ts";
-import { runIntegrity } from "./commands/integrity.ts";
-import { runEval } from "./commands/eval.ts";
-import { runEvalChronicle } from "./commands/eval-chronicle.ts";
-import { runEvalCode } from "./commands/eval-code.ts";
-import { runEvalLongMemEval } from "./commands/eval-longmemeval.ts";
-import { runEvalBench } from "./commands/eval-bench.ts";
-import { runEvalPromote } from "./commands/eval-promote.ts";
-import { runEvalProbe } from "./commands/eval-probe.ts";
-import { runBenchCli, isBenchFamilySelector } from "./commands/bench.ts";
-import { runBacklinks } from "./commands/backlinks.ts";
-import { runMerge } from "./commands/merge.ts";
-import { runDedupe } from "./commands/dedupe.ts";
-import { runExtract } from "./commands/extract.ts";
-import { runExtractConversationFactsCli } from "./commands/extract-conversation-facts.ts";
-import { runThinkCli } from "./commands/think.ts";
-import { runReconcileLinks } from "./commands/reconcile-links.ts";
-import { runCheckResolvable } from "./commands/check-resolvable.ts";
-import { runSkillify, runSkillifyCheck } from "./commands/skillify.ts";
-import { runJobs } from "./commands/jobs.ts";
-import type { JobStatus } from "./core/jobs/types.ts";
-import { runEvalReplay } from "./commands/eval-replay.ts";
-import type { EvalTag } from "./core/eval-replay.ts";
-import { runFriction } from "./commands/friction.ts";
-import { runEvalExport } from "./commands/eval-export.ts";
 import { runExport } from "./commands/export.ts";
 import { runImport } from "./commands/import.ts";
-import { runMirrorAdopt } from "./commands/mirror-adopt.ts";
 import { runErase } from "./commands/erase.ts";
-import { runAtomsRetire } from "./commands/atoms-retire.ts";
 import { runPurgeLeftovers, runUnpurge } from "./commands/purge-leftovers.ts";
 import { runBackupStatus } from "./commands/backup.ts";
-import { runEvalPrune } from "./commands/eval-prune.ts";
 import { runApplyMigrations } from "./commands/apply-migrations.ts";
 import {
   runSources,
@@ -58,210 +25,51 @@ import {
   isSyncPolicy,
   isIndexedPolicy,
 } from "./commands/sources.ts";
-import { runCode, type CodeSub } from "./commands/code.ts";
-import { runCodePrune, runCodeRestore } from "./commands/code-prune.ts";
 import { runAuth } from "./commands/auth.ts";
 import { runAdminSetupLink } from "./commands/admin.ts";
-
-const VALID_JOB_STATUSES: ReadonlySet<JobStatus> = new Set([
-  "pending",
-  "running",
-  "succeeded",
-  "failed",
-  "cancelled",
-]);
-import { runOrphans } from "./commands/orphans.ts";
-import { runPageRetype } from "./commands/page-retype.ts";
 import { runRename } from "./commands/rename.ts";
-import { runPages } from "./commands/pages.ts";
-import { runLint } from "./commands/lint.ts";
-import { runReports } from "./commands/reports.ts";
-import { runSpend, runSpendResume } from "./commands/spend.ts";
-import { runAgentCli } from "./commands/agent.ts";
-import { runSkilloptCli } from "./commands/skillopt.ts";
-import { runSkillpack, runSkillpackCheck, runSkillpackLint } from "./commands/skillpack.ts";
-import { runMigrateEngine } from "./commands/migrate-engine.ts";
-import { runCache } from "./commands/cache.ts";
-import { runCall } from "./commands/call.ts";
 import { runStatus } from "./commands/status.ts";
 import { runEmbed } from "./commands/embed.ts";
-import { runSearchModes } from "./commands/search-modes.ts";
-import { runSearchStats, runSearchTune } from "./commands/search-stats.ts";
-import { runSearchDiagnose } from "./commands/search-diagnose.ts";
-import { runSearchInvisible } from "./commands/search-invisible.ts";
 import { runConfig, type ConfigSub } from "./commands/config.ts";
-import { runCapture } from "./commands/capture.ts";
 import { runTranscripts } from "./commands/transcripts.ts";
-import { runConnectors } from "./commands/connectors.ts";
-import { runDaemons } from "./commands/daemons.ts";
-import { runWaiting } from "./commands/waiting.ts";
 import { runQuarantine, type QuarantineSub } from "./commands/quarantine.ts";
 import { runWriteGate } from "./commands/write-gate.ts";
-import { runTrust } from "./commands/trust.ts";
-import { runGroup, runMember } from "./commands/members.ts";
-import { runIdentity } from "./commands/identity.ts";
-import { extension } from "./core/extension.ts";
 import { assertNotWrapped } from "./core/startup-guard.ts";
 import { runSecretsAudit, runSecretStore } from "./commands/secrets.ts";
-import {
-  runEvalRunAll,
-  runEvalCompareCmd,
-  runEvalGate,
-} from "./commands/eval-compare.ts";
-import { parseEvalConfig, type EvalKnobConfig } from "./commands/eval.ts";
-import { runEvalQrelsBuild } from "./commands/eval-qrels.ts";
-import { runSalience } from "./commands/salience.ts";
-import { runWatch } from "./commands/watch.ts";
-import { runCycle, parsePhasesArg } from "./commands/cycle.ts";
 import { exitCodeForError, resolveExitCode } from "./cli-exit.ts";
 import { JSON_GUARDED_COMMANDS, parseArgs, validateFlags, type ParsedArgs } from "./cli-args.ts";
 import { runJsonGuarded } from "./cli-json.ts";
 import { aliasDeprecationLine } from "./cli-alias.ts";
-import type { EntityType } from "./core/entities.ts";
 
 function printUsage(): void {
   console.log("Usage: memrain <command> [options]");
   console.log("");
   console.log("Commands:");
   console.log("  backup status [--rds-instance ID] [--efs-id ID] [--copy-report FILE]  inspect backup evidence");
-  console.log("  export [--dir DIR] [--source ID] [--owner KEY]  export live pages as markdown and chat threads as JSON");
+  console.log("  export [--dir DIR] [--source ID]  export live pages as markdown");
   console.log("  import --dir DIR --source ID [--apply --plan-hash HASH]  preview create-only page import; indexing deferred");
-  console.log("  import --calls --dir DIR --source ID [--apply --plan-hash HASH]  call transcripts (.txt/.md) as calls/<date>-<title> pages, redacted, once each");
-  console.log("  mirror-adopt --source ID [--limit N] [--apply --plan-hash HASH]  preview proven mirror ownership repair");
-  console.log("  atoms-retire --source-ref DOC --completed-hash HASH16 [--apply --plan-hash HASH64]  preview proven stale atom pages");
   console.log("  purge-leftovers [--apply --plan-hash HASH64 --export FILE]  preview what purged sources left in synthesis and facts");
   console.log("  purge-leftovers restore --from FILE  undo an apply from its export");
   console.log("  unpurge <slug> [--source ID]  clear a purged page's tombstones so its text can be written again");
   console.log("  erase forgotten --source ID [--fact-ids CSV] [--deleted-pages CSV] [--apply --plan-hash HASH]");
-  console.log("  erase chat --owner KEY [--apply]  preview, then delete one owner's chat threads");
   console.log("                               preview explicit database erasure of forgotten facts/deleted pages");
-  console.log("  aliases suggest [--source ID] [--limit N] [--json]  preview undeclared name aliases");
-  console.log("  dedupe [--preview] [--json] [--source ID] [--kind person|company] [--id-field F,G]");
-  console.log("                               read-only: person/company pages sharing an email, phone, handle, LinkedIn, GitHub, domain or id");
-  console.log("  dedupe reject <a> <b> [--source ID]   record two pages as different; never proposed again");
-  console.log("  dedupe confirm <a> <b> --group ID [--source ID] [--id-field F,G]");
-  console.log("                               fold a into b (memrain merge) when the preview group lists both and they are not a conflict");
-  console.log("  models [--probe] [--max-cost-usd N] [--json]  resolved chat models and registered prices");
+  console.log("  erase chat --owner KEY [--apply]  preview, then delete one owner's chat threads");
   console.log("  engine status [--probe] [--json]  inspect engine config; optionally test one connection");
   console.log("  init --pglite                initialize ~/.memrain/ + PGLite db");
   console.log("  serve --http --host H --port N");
   console.log("                               start HTTP server (loopback only)");
-  console.log("  index <path>                 read a markdown file and index it");
-  console.log("  search <query> [--k N] [--explain]");
-  console.log("                               hybrid retrieve over the corpus (--explain = per-signal attribution)");
-  console.log("  search modes                 read-only view of the active ranking knobs");
-  console.log("  search stats [--days N] [--json]");
-  console.log("                               telemetry rollup: volume, cache hit rate, intent/mode mix, rank-1 drift");
-  console.log("  search tune [--apply] [--json]");
-  console.log("                               ranking recommendations from the stats; --apply writes via `config`");
-  console.log("  search diagnose <query> --target <slug> [--source ID] [--json]");
-  console.log("                               arm-by-arm probe: where does the target surface (keyword/vector/alias/hybrid)?");
-  console.log("  search invisible [--source ID] [--limit N] [--json]");
-  console.log("                               read-only list of pages vector search cannot return, with state and reason");
-  console.log("  reindex [--all] [--vault P] [--source vault|code|all] [--paths CSV] [--rechunk-stale] [--reconcile-deletes] [--allow-mass-delete]");
-  console.log("  reindex --contextual [--force] [--dry-run] [--limit N]");
-  console.log("  reindex --rechunk-stale [--dry-run] [--limit N] [--plan-hash HASH --max-cost-usd N]");
-  console.log("                               whole-corpus from-DB re-embed under the contextual-retrieval wrapper");
-  console.log("                               walk the vault and/or code roots, index changed (or all) files");
+  console.log("  reindex [--all] [--vault P] [--reconcile-deletes] [--allow-mass-delete]");
+  console.log("                               walk the vault, index changed (or all) files");
   console.log("                               (--reconcile-deletes soft-deletes vault docs whose file is gone)");
   console.log("                               (--allow-mass-delete lets it retire more than 50, or 25%, of them)");
-  console.log("  code-def <name> [--json]     definition sites for <name>");
-  console.log("  code-refs <name> [--json]    non-defining identifier references for <name>");
-  console.log("  code-callers <name> [--json] symbols whose body calls <name>");
-  console.log("  code-callees <path>:<line> [--json]");
-  console.log("                               symbols called from inside the symbol covering <path>:<line>");
-  console.log("  code prune [--paths CSV] [--apply] [--allow-mass-delete]");
-  console.log("                               code documents whose file is gone; dry run unless --apply (soft delete)");
-  console.log("  code restore <doc-id> | --sweep ID | [--limit N]");
-  console.log("                               undo a prune, or list the recent prune passes");
   console.log("  doctor                       self-diagnostics — exits 0 on healthy");
-  console.log("  doctor --remediation-plan    read-only plan: what would be enqueued for each red check");
-  console.log("  doctor --remediate [--execute|--yes] [--max-jobs N] [--max-usd X]");
-  console.log("                               enqueue the safe subset; dry-run unless --execute/--yes");
-  console.log("  integrity [--vault P]        vault-vs-index drift report");
-  console.log("  eval [--via search|query] [--k N] [--qrels P] [--rrf-k N] [--expand|--no-expand] [--rerank] [--max-pool]");
-  console.log("       [--graph-signals] [--cosine-rescore] [--relational-arm] [--dedup-type-ratio X]");
-  console.log("       [--config-a <json|path>] [--config-b <json|path>] [--split dev|sealed|all]");
-  console.log("       [--prereg P] [--record]");
-  console.log("                               retrieval quality harness; --config-b = paired A/B compare");
-  console.log("  eval qrels build --out P.local.json [--sealed-fraction X] [--seed N] [--expected-top1 ids]");
-  console.log("                               qrels from the captured eval set, split into dev and sealed");
-  console.log("  eval run-all [--modes a,b,c] [--qrels P] [--k N] [--out P]");
-  console.log("                               run the suite once per search mode, append JSONL results");
-  console.log("  eval compare [--input P] [--json]");
-  console.log("                               per-mode comparison table from the results log");
-  console.log("  eval gate [--baseline P] [--max-drop X] [--min-recall X] [--write-baseline]");
-  console.log("            [--split dev|all] [--allow-errors] [--max-latency-x X] [--bench]");
-  console.log("                               regression gate vs a stored baseline (exit 1 on drop);");
-  console.log("                               --bench scores the synthetic bench on its own brain, no model spend");
-  console.log("  eval chronicle [--json]      deterministic Life Chronicle feature eval (own DB, no LLM)");
-  console.log("  eval code [--json]           fixed code-retrieval eval: hit@5 and top-1 stability over this repo's own code");
-  console.log("  eval bench [--json] [--k12] [--write-snapshot]");
-  console.log("                               synthetic search bench (own DB, no model spend): metrics per tag, decoys,");
-  console.log("                               snapshot match; --k12 also checks that mail noise displaces no page");
-  console.log("  eval longmemeval --dry-run [--max-usd N] [--limit N]");
-  console.log("  eval longmemeval --out DIR --max-usd N [--limit N] [--answer-model ID] [--judge-model ID] [--dir CACHE]");
-  console.log("  eval longmemeval --out DIR --settle RESERVATION --usd N");
-  console.log("  eval longmemeval --retrieval-only (--dry-run | --out DIR --max-usd N) [--limit N] [--dir CACHE]");
-  console.log("                               lme-r: evidence-session recall@5/@10 and nDCG@10, no answer or judge model;");
-  console.log("                               only embeddings are paid, cached in CACHE so a repeat run costs nothing");
-  console.log("  eval promote <FLAG> [--lme-r-base SUMMARY --lme-r SUMMARY] [--live] [--out DIR] [--json]");
-  console.log("                               may a ranking flag become a default: bench baseline x2 (noise) vs flag,");
-  console.log("                               paired stats, per-tag drops, decoys, top-1 and lme-r; exit 0 PASS 1 FAIL 3 not yet");
-  console.log("                               LongMemEval-S answered from retrieval, Bedrock-Claude-judged; budgeted, resumable;");
-  console.log("                               --limit N runs the first N questions in dataset order");
-  console.log("  eval-probe [--limit N]       replay eval set, append a row to eval_snapshots (nightly probe)");
-  console.log("  bench [--family push|continuity|fidelity|all] [--corpus DIR] [--json]");
-  console.log("                               agent-facing behaviour bench (push / continuity / write-back");
-  console.log("                               fidelity); own throwaway DB, zero model spend, always exits 0");
-  console.log("  bench --live --family fidelity  paid lane: the fidelity corpus against the real extraction model, capped at $0.50");
-  console.log("  backlinks <name> [--type T] [--limit N]");
-  console.log("                               documents that mention this entity (default type=wikilink)");
-  console.log("  extract [--all] [--vault P]  re-run regex entity extraction over existing chunks (cheap)");
-  console.log("  extract --stale [--source-id S] [--catch-up] [--dry-run] [--json]  re-extract links for stale pages");
-  console.log("  reconcile-links [--limit N]  list wikilinks that don't resolve to a document");
-  console.log("  check-resolvable [--limit N] [--threshold P] [--strict]");
-  console.log("                               wikilink coverage report; --strict elevates warnings into the exit-1 path");
-  console.log("  skillify <prompt> [--out PATH] [--slug S] [--dry-run]");
-  console.log("                               draft a skill *.md from a one-line prompt (Claude Haiku + linter)");
-  console.log("  skillify check <slug> [--strict]");
-  console.log("                               validate an existing skill against the contract; --strict elevates warnings");
-  console.log("  jobs list [--status S] [--kind K] [--limit N]");
-  console.log("  jobs stats [--by-kind]       counts grouped by status; --by-kind adds per-kind deferred/wedged");
-  console.log("  jobs show|retry|cancel <id>  inspect/reset/cancel a single job");
-  console.log("  jobs submit <kind> [--id X] [--priority N] [--max-retries N] [--payload '<json>']");
-  console.log("  jobs progress <id>           status + handler-reported progress");
-  console.log("  jobs remove <id>             delete one terminal job row");
-  console.log("  jobs prune [--older-than-days N] [--status s1,s2] [--dry-run]");
-  console.log("                               delete old terminal jobs (default 30d)");
-  console.log("  jobs smoke                   end-to-end queue self-test");
-  console.log("  cache stats                  query-cache rows: total/fresh/stale vs the clock");
-  console.log("  cache prune|clear            drop only stale rows / drop every row");
-  console.log("  call <tool> [--args '<json>']");
-  console.log("                               invoke an MCP tool locally (internal ingress)");
-  console.log("  status                       one-shot snapshot: counts + health + cache");
+  console.log("  status                       one-shot snapshot: counts + health");
   console.log("  status --quiescent           exit 3 unless no background work can write");
   console.log("                               (switches are read from this env: run it with");
   console.log("                               docker exec inside the serving container)");
-  console.log("  salience [--type T] [--days N] [--limit N]");
-  console.log("                               pages ranked by deterministic salience score");
-  console.log("  cycle [--phases a,b,c] [--stale-days N]");
-  console.log("                               run one maintenance cycle on demand (backfills)");
   console.log("  embed [<slug>] [--slugs a,b] [--all] [--stale] [--source ID] [--limit N] [--dry-run]");
   console.log("                               backfill missing vectors; <slug>/--slugs/--all re-embed targets,");
   console.log("                               --stale also refreshes signature-stale rows");
-  console.log("  embed --code [--source ID] [--limit N] [--apply --max-usd X]");
-  console.log("                               vectors for code chunks that have none; a priced dry run");
-  console.log("                               unless --apply, which stops cleanly at the --max-usd cap");
-  console.log("  eval-replay capture <id> --query Q --tag good|bad [--expected-doc D] [--k N] [--search-mode hybrid|keyword]");
-  console.log("  eval-replay list [--tag T] [--limit N]");
-  console.log("  eval-replay run [--tag T] [--limit N] [--promote]");
-  console.log("                               capture / replay real queries; --promote sets new baseline");
-  console.log("  eval-replay delete <id>      remove a captured query");
-  console.log("  eval-export [--source firehose|curated] [--since H|ISO|7d] [--limit N] [--out PATH]");
-  console.log("                               JSONL dump of eval_candidates (default) or eval_queries");
-  console.log("  eval-prune [--keep-days N] [--apply] [--tool-name T]");
-  console.log("                               trim old rows from eval_candidates; --apply to actually delete");
   console.log("  apply-migrations [--dry-run] [--down <id> --yes]");
   console.log("                               manual migration runner (init runs them automatically)");
   console.log("  sources list [--kind K]      JSON list of registered sources");
@@ -274,43 +82,12 @@ function printUsage(): void {
   console.log("  sources update <id> [...same flags as register, all optional...]");
   console.log("                               [--no-respect-quiet-hours] to clear the flag");
   console.log("  sources delete <id>          refuses if any document still references it");
-  console.log("  sources owner-only <id> [on|off]   a personal mailbox/calendar only the owner reads");
-  console.log("  sources federate <id>        unscoped reads (search, query, recall, ...) reach the source");
-  console.log("  sources unfederate <id>      only grants, source_ids and the code tools reach it (code sources start so)");
+  console.log("  sources owner-only <id> [on|off]   a personal source only the owner reads");
+  console.log("  sources federate <id>        unscoped reads (search, page_list, ...) reach the source");
+  console.log("  sources unfederate <id>      only grants and source_ids reach it");
   console.log("  sources provenance [--apply]       record where older derived rows came from (dry run first)");
-  console.log("  friction analyze [--since H|ISO|7d] [--limit N]");
-  console.log("                               counts + recent + top-repeats from friction_events");
-  console.log("  friction list [--kind K] [--skill S] [--since H|ISO|7d] [--limit N]");
-  console.log("                               flat JSON list of recent events");
-  console.log("  friction render [--kind K] [--skill S] [--since H|ISO|7d] [--limit N] [--no-redact]");
-  console.log("                               markdown table; redacts query/reason by default");
-  console.log("  friction log --kind K [--query Q] [--reason R] [--source-path P] [--skill S] [--severity confused|error|blocker|nit]");
-  console.log("                               record a friction event; kinds: search-miss|wrong-answer|tool-error|low-confidence|other|delight|phase-marker|interrupted");
-  console.log("  friction propose-fix [--skill S | --top-skills N] [--since H|ISO|7d] [--example-limit N]");
-  console.log("                               Claude Haiku suggests skill-text edits to reduce friction");
-  console.log("  orphans                      DB hygiene report + safe deletions");
   console.log("  rename <from> <to> --expected-version N [--source ID]");
   console.log("                               move a page and its history; refuses importer-managed pages");
-  console.log("  pages [--limit N] [--filter S] catalogue of known wikilink targets");
-  console.log("  lint [<dir|file.md>] [--fix] [--dry-run]");
-  console.log("                               DB frontmatter conformance (no target) or file lint with auto-repair");
-  console.log("  reports [--since H|ISO|7d]          trend report from cycle_snapshots");
-  console.log("  spend [--days N]             LLM spend by model, feature and spender");
-  console.log("  spend resume <path>          let a paid path paused after an overrun spend again");
-  console.log("  agent run <task> [--max-usd X] [--wait]");
-  console.log("                               queue a read-only agent job (needs MEMRAIN_AGENT_ENABLED=1); prints its id");
-  console.log("  agent logs <job-id>          render an agent job's transcript and tool calls");
-  console.log("  skillopt eval [--skill S] [--split heldout|train|all] [--repeats N] [--candidate SKILL.md] [--epsilon X] [--max-usd X]");
-  console.log("                               score skill routing on the pack benchmark (needs MEMRAIN_SKILLOPT_ENABLED=1); exit 3 = candidate rejected");
-  console.log("  skillpack [--out PATH]       bundle deploy/skills/ as a tar.gz with manifest");
-  console.log("  skillpack lint [--json] [--dir PATH]");
-  console.log("                               every tool, command, flag and size a skill names is real");
-  console.log("  skillpack check [--json] [--dir PATH] [--strict] [--fix]");
-  console.log("                               skill tree: resolver coverage, reachability, trigger overlaps and gaps,");
-  console.log("                               routing-eval cases, copied shared rules (--fix rewrites the safe copies)");
-  console.log("                               check every tool and memrain command the skill pack names exists");
-  console.log("  migrate-engine --from X --to Y [--dry-run|--verify-only] [--allow-dropped-columns] [--tables a,b] [--pglite-path P] [--to-pglite-path P2] [--postgres-url U]");
-  console.log("                               copy data between Engine adapters");
   console.log("  admin setup-link [--ttl <hours>] [--json]");
   console.log("                               one-time link for the panel owner to create a passkey (default 24h, max 72h)");
   console.log("  auth who-can-read <slug>     check issued credentials through page_get, without recording reads");
@@ -346,78 +123,33 @@ function printUsage(): void {
   console.log("                               delete a client's tokens and codes; the client stays");
   console.log("  auth set-budget <id> <usd|none>");
   console.log("                               daily USD ceiling across every paid op ('none' = uncapped)");
-  console.log("  auth min-trust <id|name> <owner|member|agent|external|none>");
-  console.log("                               read floor: read only rows at or above that tier ('none' = no floor)");
   console.log("  auth grant-token <id> <secret> [--scopes S]");
   console.log("                               mint an access token locally (= POST /token)");
-  console.log("  auth create <name> [--member M] [--takes-holders a,b] [--source SRC] [--federated-read a,b]");
-  console.log("                    [--scopes read,write] [--min-trust TIER]");
+  console.log("  auth create <name> [--member M] [--source SRC] [--federated-read a,b]");
+  console.log("                    [--scopes read,write]");
   console.log("                               mint a long-lived personal access token (prints once)");
   console.log("  auth list                    JSON list of personal access tokens (no hashes)");
   console.log("  auth revoke <name>           soft-revoke a personal access token");
-  console.log("  auth permissions <name> set-takes-holders a,b");
-  console.log("                               replace the token's takes-visibility allow-list");
   console.log("  auth test <url> --token <token>");
   console.log("                               live MCP smoke: initialize + tools/list + a real stats call");
   console.log("  auth doctor <base-url> [--client-file F | --token-file F] [--expect-source ID | --expect-operator]");
   console.log("              [--expect-version STAMP] [--json]");
   console.log("                               remote doctor: /health stamp, OAuth discovery, mint, MCP, scope probe");
-  console.log("  think <question> [--k N] [--budget USD] [--json] [--save] [--take '<claim>']");
-  console.log("        [--since D] [--until D] [--anchor a,b] [--rounds N] [--model ID] [--with-calibration]");
-  console.log("                               paid Sonnet synthesis across the brain (opt-in, MEMRAIN_THINK=1);");
-  console.log("                               --save persists a synthesis/ page, --take queues a take");
   console.log("  config show|get|set|unset    DB-plane MEMRAIN_* knob overrides (no redeploy; env still wins)");
   console.log("  config unset --pattern <pfx> bulk-delete keys by prefix");
-  console.log("  capture [<text>] [--stdin] [--file P] [--slug S] [--type T] [--source ID] [--title T]");
-  console.log("                               one-command note capture → page + search mirror");
-  console.log("  transcripts ingest <path> [--format auto|chatgpt|claude-ai|codex|claude-code] [--source ID] [--since ISO|7d|auto] [--no-embed] [--facts --max-cost-usd N] [--dry-run] [--json]");
-  console.log("  transcripts repair-origin <path> [--source ID] [--format auto|codex|claude-code] [--apply --plan-hash HASH] [--json]");
+  console.log("  transcripts ingest <path> [--format auto|chatgpt|claude-ai|codex|claude-code] [--source ID] [--since ISO|7d|auto] [--no-embed] [--dry-run] [--json]");
   console.log("  transcripts status [--source ID] [--json]");
-  console.log("  transcripts push <path> --url URL --token-file F [--hook-stdin] [--dry-run] [--json]");
   console.log("                               import a ChatGPT / Claude.ai export or Codex / Claude Code session logs");
   console.log("                               (one file or a directory) as split, redacted conversation pages");
-  console.log("  connectors github sync <owner/repo> --source ID [--token-file F] [--full] [--dry-run] [--json]");
-  console.log("                               mirror a repository's issues and pull requests into a github source");
-  console.log("                               (token: MEMRAIN_GITHUB_TOKEN or --token-file; exit 1 partial, 2 re-auth)");
-  console.log("  connectors status [--json]   every connector account and recipe connector: state, last run");
-  console.log("  connectors redact-meetings [--source ID] [--apply --yes] [--json]");
-  console.log("  connectors facts <account-id> [--enable --cap USD | --disable | --forget [--export F]] [--apply] [--json]");
-  console.log("                               paid facts from one account's mail, chat and meetings; dry run prices it");
-  console.log("                               remove meeting ids, passcodes, PINs and join links from stored connector");
-  console.log("                               mail and calendar pages (dry run with counts per source unless --apply)");
-  console.log("  connectors rotate-kek --old-file F --new-file F [--json]   re-seal connector secrets under a new key");
-  console.log("  connectors gmail-widen <account-id> --days N [--apply --plan-hash HASH] [--json]");
-  console.log("                               widen a Gmail account's history window; the dry run counts the threads the");
-  console.log("                               backfill would add or re-render and prints the plan hash --apply needs");
-  console.log("  daemons status [--json]      background daemons: schedule, pauses, last run, scheduler leader");
-  console.log("  daemons pause|resume <name|all> [--source ID] [--reason TEXT] [--json]");
-  console.log("  daemons enable|disable <name> [--source ID] [--json]");
-  console.log("  waiting [--source ID] [--type T] [--limit N] [--stale] [--json]");
-  console.log("                               who waits on a reply, whom you wait on, promises, RSVPs (refuses if syncs are >24h old)");
-  console.log("  waiting sweep [--source ID] | done|drop <id> [--dry-run] | mute|unmute sender|thread <id> [--dry-run]");
   console.log("  quarantine list [--include-flagged] [--json]");
   console.log("  quarantine clear <slug|path> [--force]");
   console.log("  quarantine scan [--limit N] [--apply]");
-  console.log("  member list [--all] | show <id>        the people of a team brain");
-  console.log("  member add <id> [--name N] [--email E] [--personal-source SRC]");
-  console.log("  member disable|enable|remove <id>   disable stops every key bound to the member");
-  console.log("  member owner [<id> | --clear]   name the brain owner: its keys read private facts");
-  console.log("  identity [--member <id>] [--json]   who the brain takes its owner to be, and why");
-  console.log("  member remove <id> --erase-personal-source [--apply --out DIR]   export, then erase the member's own source");
-  console.log("  member bind <id> --token NAME|--client ID|--enrollment ID");
-  console.log("  member unbind --token NAME|--client ID|--enrollment ID");
-  console.log("  group list | show <id> | add <id> [--name N] | remove <id>");
-  console.log("  group grant-source|revoke-source <id> <source> [--allow-owner-source]");
-  console.log("  group add-member|remove-member <id> <member>   members read the group's sources");
   console.log("  write-gate list [--all] [--json]");
   console.log("  write-gate approve|reject <id> [--json]");
   console.log("  write-gate rows [--all] [--json]");
   console.log("  write-gate release|drop <id> [--json]");
   console.log("  write-gate scan [--dry-run] [--json]");
   console.log("  write-gate scan --documents [--json]");
-  console.log("  trust proposals [--all] [--json]   lower-tier writes that would replace a more trusted fact");
-  console.log("  trust accept|reject <id> [--json]  apply the replacement, or keep the more trusted fact");
-  console.log("                               operator surface for the content-sanity gate");
   console.log("  secrets audit [--source ID] [--kinds K,K] [--limit N] [--json] [--apply --yes]");
   console.log("                               rescan stored text with the current secret rules; dry run");
   console.log("                               by default, never prints a value");
@@ -430,36 +162,12 @@ function printUsage(): void {
   console.log("  secrets backup [--dir D] | restore-backup <file>      encrypted export of the store / import it");
   console.log("  version | --version          print build version (git tag+sha, or 'dev')");
   console.log("  --help                       show this help");
-  for (const line of extension().usage) console.log(line);
-}
-
-/**
- * Print the command's own manual, if it has one. Commands that ship a longer
- * help text than the one-liner in printUsage() own it themselves — this is the
- * only route to it, so it must stay the only copy.
- */
-async function printCommandHelp(
-  cmd: string,
-  positional: readonly string[],
-): Promise<boolean> {
-  if (cmd === "watch") {
-    const { WATCH_HELP } = await import("./commands/watch.ts");
-    process.stdout.write(WATCH_HELP);
-    return true;
-  }
-  if (cmd === "eval" && positional[0] === "chronicle") {
-    await runEvalChronicle(["--help"]);
-    return true;
-  }
-  return false;
 }
 
 async function main(argv: readonly string[]): Promise<number> {
   assertNotWrapped();
-  const extended = await extension().command(argv);
-  if (extended !== null) return extended;
   const parsed = parseArgs(argv, { strict: false });
-  const { cmd, flags, positional } = parsed;
+  const { cmd, flags } = parsed;
 
   // `memrain <cmd> --help` used to fall into the command case and die on a
   // missing required argument — asking for help is not a malformed invocation.
@@ -468,7 +176,7 @@ async function main(argv: readonly string[]): Promise<number> {
   // command's own help was unreachable while validation went first.
   const run = async (): Promise<number> => {
     if (cmd !== undefined && flags.has("--help")) {
-      if (!(await printCommandHelp(cmd, positional))) printUsage();
+      printUsage();
       return 0;
     }
     validateFlags(parsed);
@@ -502,112 +210,14 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       await runServe({ http, host, port });
       return 0;
     }
-    case "index": {
-      const path = positional[0];
-      if (!path) {
-        console.error("memrain index: <path> is required");
-        return 1;
-      }
-      await runIndex({ path });
-      return 0;
-    }
     case "reindex": {
-      const all = flags.has("--all");
+      const opts: Parameters<typeof runReindex>[0] = { all: flags.has("--all") };
       const vault = values.get("--vault");
-      const sourceStr = values.get("--source");
-      if (
-        sourceStr !== undefined &&
-        sourceStr !== "vault" &&
-        sourceStr !== "code" &&
-        sourceStr !== "all"
-      ) {
-        throw new Error(
-          `memrain reindex: invalid --source '${sourceStr}' (expected vault|code|all)`,
-        );
-      }
-      const paths = values.get("--paths");
-      const opts: Parameters<typeof runReindex>[0] = { all };
       if (vault) opts.vault = vault;
-      if (sourceStr) opts.source = sourceStr as "vault" | "code" | "all";
-      if (paths) opts.codePaths = paths;
-      if (flags.has("--rechunk-stale")) opts.rechunkStale = true;
       if (flags.has("--reconcile-deletes")) opts.reconcileDeletes = true;
       if (flags.has("--allow-mass-delete")) opts.allowMassDelete = true;
-      if (flags.has("--contextual")) opts.contextual = true;
-      if (flags.has("--force")) opts.force = true;
-      if (flags.has("--dry-run")) opts.dryRun = true;
-      const planHash = values.get("--plan-hash");
-      if (planHash !== undefined) {
-        if (!/^[a-f0-9]{64}$/.test(planHash)) {
-          throw new Error("memrain reindex: --plan-hash must be the 64-character hash from a preview");
-        }
-        opts.planHash = planHash;
-      }
-      const maxCostStr = values.get("--max-cost-usd");
-      if (maxCostStr !== undefined) {
-        const n = Number(maxCostStr);
-        if (maxCostStr.trim() === "" || !Number.isFinite(n) || n < 0) {
-          throw new Error("memrain reindex: --max-cost-usd must be a finite non-negative number");
-        }
-        opts.maxCostUsd = n;
-      }
-      const ctxLimitStr = values.get("--limit");
-      if (ctxLimitStr !== undefined) {
-        const n = Number(ctxLimitStr);
-        if (!Number.isInteger(n) || n <= 0) {
-          throw new Error(`memrain reindex: invalid --limit ${ctxLimitStr}`);
-        }
-        opts.limit = n;
-      }
       await runReindex(opts);
       return 0;
-    }
-    case "code-def":
-    case "code-refs":
-    case "code-callers":
-    case "code-callees": {
-      const sub = cmd as CodeSub;
-      const opts: Parameters<typeof runCode>[0] = { sub };
-      if (flags.has("--json")) opts.json = true;
-      if (sub === "code-callees") {
-        opts.target = positional[0];
-        if (!opts.target) {
-          console.error(`memrain ${sub}: <path>:<line> is required`);
-          return 1;
-        }
-      } else {
-        opts.name = positional.join(" ").trim();
-        if (!opts.name) {
-          console.error(`memrain ${sub}: <name> is required`);
-          return 1;
-        }
-      }
-      await runCode(opts);
-      return 0;
-    }
-    case "code": {
-      const sub = positional[0];
-      if (sub === "prune" && positional.length === 1) {
-        return runCodePrune({ paths: values.get("--paths"), apply: flags.has("--apply"),
-          allowMassDelete: flags.has("--allow-mass-delete") });
-      }
-      if (sub === "restore" && positional.length <= 2) {
-        const limit = values.has("--limit") ? Number(values.get("--limit")) : undefined;
-        if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
-          throw new Error(`code restore: invalid --limit ${values.get("--limit")}`);
-        }
-        return runCodeRestore({ documentId: positional[1], sweepId: values.get("--sweep"), limit });
-      }
-      throw new Error("code: use code prune [--paths CSV] [--apply] [--allow-mass-delete] or code restore <doc-id> | --sweep ID");
-    }
-    case "aliases": {
-      if (positional.length !== 1 || positional[0] !== "suggest") { console.error("Usage: memrain aliases suggest [--source ID] [--limit N] [--json]"); return 2; }
-      return await runAliasesSuggest({ source: values.get("--source"), json: flags.has("--json"),
-        ...(values.has("--limit") ? { limit: Number(values.get("--limit")) } : {}) });
-    }
-    case "models": {
-      return await runModels({ probe: flags.has("--probe"), json: flags.has("--json"),
-        ...(values.has("--max-cost-usd") ? { maxCostUsd: Number(values.get("--max-cost-usd")) } : {}) });
     }
     case "engine": {
       if (positional.length !== 1 || positional[0] !== "status") { console.error("Usage: memrain engine status [--probe] [--json]"); return 2; }
@@ -617,626 +227,11 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       await runDoctor();
       return 0;
     }
-    case "hnsw": {
-      const sub = positional[0] ?? "status";
-      await runHnsw(sub, flags.has("--force") ? { force: true } : {});
-      return 0;
-    }
     case "status": {
       return await runStatus({
         ...(flags.has("--per-source") ? { perSource: true } : {}),
         ...(flags.has("--quiescent") ? { quiescent: true } : {}),
       });
-    }
-    case "integrity": {
-      const vault = values.get("--vault");
-      await runIntegrity(vault ? { vault } : {});
-      return 0;
-    }
-    case "eval": {
-      if (flags.has("--dry-run") && positional[0] !== "longmemeval") {
-        // Only the LongMemEval run has a free preview; any other eval would
-        // ignore the flag and spend.
-        throw new Error("memrain eval: --dry-run is supported only by 'eval longmemeval'");
-      }
-      // `eval chronicle` brings its own in-memory DB — run it BEFORE any engine
-      // connect (it needs no config and no gateway).
-      if (positional[0] === "chronicle") {
-        // The parser lifts --json out of the positionals; chronicle reads its own argv.
-        return await runEvalChronicle([...positional.slice(1), ...(flags.has("--json") ? ["--json"] : [])]);
-      }
-      if (positional.length === 1 && positional[0] === "code") {
-        return await runEvalCode(flags.has("--json") ? { json: true } : {});
-      }
-      if (positional[0] === "promote") {
-        if (positional.length !== 2) throw new Error("memrain eval promote: name one ranking flag, e.g. EXACT_LOOKUP");
-        const lmeBase = values.get("--lme-r-base");
-        const lmeCandidate = values.get("--lme-r");
-        const out = values.get("--out");
-        return await runEvalPromote({
-          flag: positional[1]!,
-          ...(lmeBase ? { lmeBase } : {}),
-          ...(lmeCandidate ? { lmeCandidate } : {}),
-          ...(out ? { outDir: out } : {}),
-          ...(flags.has("--live") ? { live: true } : {}),
-          ...(flags.has("--json") ? { json: true } : {}),
-        });
-      }
-      // `eval bench` builds its own throwaway brain from the shipped corpus.
-      if (positional.length === 1 && positional[0] === "bench") {
-        return await runEvalBench({
-          ...(flags.has("--json") ? { json: true } : {}),
-          ...(flags.has("--k12") ? { k12: true } : {}),
-          ...(flags.has("--write-snapshot") ? { writeSnapshot: true } : {}),
-        });
-      }
-      if (positional.length === 1 && positional[0] === "longmemeval") {
-        const lmeOpts: Parameters<typeof runEvalLongMemEval>[0] = {};
-        const lmeOut = values.get("--out");
-        if (lmeOut) lmeOpts.out = lmeOut;
-        const lmeMaxUsd = values.get("--max-usd");
-        if (lmeMaxUsd !== undefined) lmeOpts.maxUsd = Number(lmeMaxUsd);
-        if (flags.has("--dry-run")) lmeOpts.dryRun = true;
-        const lmeLimit = values.get("--limit");
-        if (lmeLimit !== undefined) lmeOpts.limit = Number(lmeLimit);
-        const settle = values.get("--settle");
-        if (settle) lmeOpts.settle = settle;
-        const usd = values.get("--usd");
-        if (usd !== undefined) lmeOpts.usd = Number(usd);
-        const cacheDir = values.get("--dir");
-        if (cacheDir) lmeOpts.cacheDir = cacheDir;
-        const answerModel = values.get("--answer-model");
-        if (answerModel) lmeOpts.answerModel = answerModel;
-        const judgeModel = values.get("--judge-model");
-        if (judgeModel) lmeOpts.judgeModel = judgeModel;
-        if (flags.has("--retrieval-only")) lmeOpts.retrievalOnly = true;
-        return await runEvalLongMemEval(lmeOpts);
-      }
-      // Sub-subcommands: run-all / compare / gate (aggregate instruments).
-      if (positional[0] === "run-all") {
-        const runAllOpts: Parameters<typeof runEvalRunAll>[0] = {};
-        const modesStr = values.get("--modes");
-        if (modesStr) {
-          runAllOpts.modes = modesStr.split(",").map((s) => s.trim()).filter(Boolean);
-        }
-        const qp = values.get("--qrels");
-        if (qp) runAllOpts.qrelsPath = qp;
-        const out = values.get("--out");
-        if (out) runAllOpts.out = out;
-        const kAll = values.get("--k");
-        if (kAll !== undefined) {
-          const n = Number(kAll);
-          if (!Number.isInteger(n) || n < 1 || n > 100) {
-            throw new Error(`memrain eval run-all: invalid --k ${kAll}`);
-          }
-          runAllOpts.k = n;
-        }
-        return await runEvalRunAll(runAllOpts);
-      }
-      if (positional[0] === "compare") {
-        const cmpOpts: Parameters<typeof runEvalCompareCmd>[0] = {};
-        const input = values.get("--input");
-        if (input) cmpOpts.input = input;
-        if (flags.has("--json")) cmpOpts.json = true;
-        return await runEvalCompareCmd(cmpOpts);
-      }
-      if (positional[0] === "gate") {
-        const gateOpts: Parameters<typeof runEvalGate>[0] = {};
-        const baseline = values.get("--baseline");
-        if (baseline) gateOpts.baseline = baseline;
-        const maxDrop = values.get("--max-drop");
-        if (maxDrop !== undefined) {
-          const n = Number(maxDrop);
-          if (!Number.isFinite(n) || n < 0 || n > 1) {
-            throw new Error(`memrain eval gate: invalid --max-drop ${maxDrop}`);
-          }
-          gateOpts.maxDrop = n;
-        }
-        const minRecall = values.get("--min-recall");
-        if (minRecall !== undefined) {
-          const n = Number(minRecall);
-          if (!Number.isFinite(n) || n < 0 || n > 1) {
-            throw new Error(`memrain eval gate: invalid --min-recall ${minRecall}`);
-          }
-          gateOpts.minRecall = n;
-        }
-        if (flags.has("--write-baseline")) gateOpts.writeBaseline = true;
-        const qg = values.get("--qrels");
-        if (qg) gateOpts.qrelsPath = qg;
-        const kg = values.get("--k");
-        if (kg !== undefined) {
-          const n = Number(kg);
-          if (!Number.isInteger(n) || n < 1 || n > 100) {
-            throw new Error(`memrain eval gate: invalid --k ${kg}`);
-          }
-          gateOpts.k = n;
-        }
-        const gateSplit = values.get("--split");
-        if (gateSplit !== undefined) {
-          if (gateSplit !== "dev" && gateSplit !== "all") {
-            throw new Error(`memrain eval gate: invalid --split ${gateSplit} (dev|all)`);
-          }
-          gateOpts.split = gateSplit;
-        }
-        if (flags.has("--allow-errors")) gateOpts.allowErrors = true;
-        if (flags.has("--bench")) gateOpts.bench = true;
-        const maxLatencyX = values.get("--max-latency-x");
-        if (maxLatencyX !== undefined) {
-          const n = Number(maxLatencyX);
-          if (!Number.isFinite(n) || n < 1) {
-            throw new Error(`memrain eval gate: invalid --max-latency-x ${maxLatencyX}`);
-          }
-          gateOpts.maxLatencyX = n;
-        }
-        return await runEvalGate(gateOpts);
-      }
-      if (positional[0] === "qrels") {
-        if (positional[1] !== "build") {
-          throw new Error("memrain eval qrels: subcommand required (build)");
-        }
-        const out = values.get("--out");
-        if (!out) throw new Error("memrain eval qrels build: --out is required");
-        const buildOpts: Parameters<typeof runEvalQrelsBuild>[0] = { out };
-        const fraction = values.get("--sealed-fraction");
-        if (fraction !== undefined) {
-          const n = Number(fraction);
-          if (!Number.isFinite(n) || n <= 0 || n >= 1) {
-            throw new Error(`memrain eval qrels build: invalid --sealed-fraction ${fraction}`);
-          }
-          buildOpts.sealedFraction = n;
-        }
-        const seed = values.get("--seed");
-        if (seed !== undefined) {
-          const n = Number(seed);
-          if (!Number.isInteger(n) || n < 0 || n > 2 ** 32) {
-            throw new Error(`memrain eval qrels build: invalid --seed ${seed}`);
-          }
-          buildOpts.seed = n;
-        }
-        const top1 = values.get("--expected-top1");
-        if (top1 !== undefined) {
-          buildOpts.expectedTop1 = top1.split(",").map((s) => s.trim()).filter(Boolean);
-        }
-        return await runEvalQrelsBuild(buildOpts);
-      }
-
-      const kStr = values.get("--k");
-      const k = kStr ? Number(kStr) : undefined;
-      if (k !== undefined && (!Number.isInteger(k) || k < 1 || k > 100)) {
-        throw new Error(`memrain eval: invalid --k ${kStr}`);
-      }
-      // Knob flags → the A-side config (CLI overrides file).
-      const cfg: EvalKnobConfig = values.has("--config-a")
-        ? parseEvalConfig(values.get("--config-a")!)
-        : {};
-      const rrfKStr = values.get("--rrf-k");
-      if (rrfKStr !== undefined) {
-        const n = Number(rrfKStr);
-        if (!Number.isInteger(n) || n < 1 || n > 1000) {
-          throw new Error(`memrain eval: invalid --rrf-k ${rrfKStr}`);
-        }
-        cfg.rrfK = n;
-      }
-      if (flags.has("--expand")) cfg.expansion = true;
-      if (flags.has("--no-expand")) cfg.expansion = false;
-      if (flags.has("--rerank")) cfg.rerank = true;
-      if (flags.has("--max-pool")) cfg.maxPool = true;
-      if (flags.has("--graph-signals")) cfg.graphSignals = true;
-      if (flags.has("--cosine-rescore")) cfg.cosineRescore = true;
-      if (flags.has("--relational-arm")) cfg.relationalArm = true;
-      const ratioStr = values.get("--dedup-type-ratio");
-      if (ratioStr !== undefined) {
-        const n = Number(ratioStr);
-        if (!Number.isFinite(n) || n <= 0) {
-          throw new Error(`memrain eval: invalid --dedup-type-ratio ${ratioStr}`);
-        }
-        cfg.dedupTypeRatio = n;
-      }
-      const evalOpts: Parameters<typeof runEval>[0] = {};
-      const via = values.get("--via");
-      if (via !== undefined) {
-        if (via !== "search" && via !== "query") throw new Error("memrain eval: --via must be search or query");
-        evalOpts.via = via;
-      }
-      if (k !== undefined) evalOpts.k = k;
-      const qrels = values.get("--qrels");
-      if (qrels) evalOpts.qrelsPath = qrels;
-      if (Object.keys(cfg).length > 0) evalOpts.config = cfg;
-      if (values.has("--config-b")) {
-        evalOpts.configB = parseEvalConfig(values.get("--config-b")!);
-      }
-      const split = values.get("--split");
-      if (split !== undefined) {
-        if (split !== "dev" && split !== "sealed" && split !== "all") {
-          throw new Error(`memrain eval: invalid --split ${split} (dev|sealed|all)`);
-        }
-        evalOpts.split = split;
-      }
-      const prereg = values.get("--prereg");
-      if (prereg) evalOpts.preregPath = prereg;
-      if (flags.has("--record")) evalOpts.record = true;
-      await runEval(evalOpts);
-      return 0;
-    }
-    case "eval-probe": {
-      const limitStr = values.get("--limit");
-      const limit = limitStr ? Number(limitStr) : undefined;
-      if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 1000)) {
-        throw new Error(`memrain eval-probe: invalid --limit ${limitStr}`);
-      }
-      const maxUsdStr = values.get("--max-usd");
-      const maxUsd = maxUsdStr ? Number(maxUsdStr) : undefined;
-      if (maxUsd !== undefined && (!Number.isFinite(maxUsd) || maxUsd <= 0)) {
-        throw new Error(`memrain eval-probe: invalid --max-usd ${maxUsdStr}`);
-      }
-      const probeOpts: Parameters<typeof runEvalProbe>[0] = {};
-      if (limit !== undefined) probeOpts.limit = limit;
-      if (maxUsd !== undefined) probeOpts.maxUsd = maxUsd;
-      await runEvalProbe(probeOpts);
-      return 0;
-    }
-    case "bench": {
-      const benchOpts: Parameters<typeof runBenchCli>[0] = {};
-      const family = values.get("--family");
-      if (family !== undefined) {
-        if (!isBenchFamilySelector(family)) {
-          throw new Error(
-            `memrain bench: invalid --family ${family} ` +
-              `(push|continuity|fidelity|all)`,
-          );
-        }
-        benchOpts.family = family;
-      }
-      const corpus = values.get("--corpus");
-      if (corpus !== undefined) benchOpts.corpus = corpus;
-      if (flags.has("--json")) benchOpts.json = true;
-      // The command runs it for --family fidelity and refuses it otherwise (see
-      // LIVE_REFUSAL). Dropping it here would silently run the stub arm instead.
-      if (flags.has("--live")) benchOpts.live = true;
-      return await runBenchCli(benchOpts);
-    }
-    case "backlinks": {
-      const name = positional.join(" ");
-      if (!name) {
-        console.error("memrain backlinks: <name> is required");
-        return 1;
-      }
-      const typeStr = values.get("--type");
-      const limitStr = values.get("--limit");
-      const opts: Parameters<typeof runBacklinks>[0] = { name };
-      if (typeStr) {
-        if (typeStr !== "wikilink" && typeStr !== "tag" && typeStr !== "date") {
-          throw new Error(`memrain backlinks: invalid --type ${typeStr}`);
-        }
-        opts.type = typeStr as EntityType;
-      }
-      if (limitStr !== undefined) {
-        const n = Number(limitStr);
-        if (!Number.isInteger(n) || n < 1 || n > 1000) {
-          throw new Error(`memrain backlinks: invalid --limit ${limitStr}`);
-        }
-        opts.limit = n;
-      }
-      await runBacklinks(opts);
-      return 0;
-    }
-    case "merge": {
-      const from = positional[0];
-      const to = positional[1];
-      if (!from || !to) {
-        console.error("memrain merge: <from-slug> and <to-slug> are required");
-        return 1;
-      }
-      const opts: Parameters<typeof runMerge>[0] = { from, to };
-      const src = values.get("--source");
-      if (src) opts.sourceId = src;
-      const writtenBy = values.get("--written-by");
-      if (writtenBy) opts.writtenBy = writtenBy;
-      await runMerge(opts);
-      return 0;
-    }
-    case "dedupe": {
-      const opts: Parameters<typeof runDedupe>[0] = {
-        sub: positional[0] ?? "", args: positional.slice(1), json: flags.has("--json"), preview: flags.has("--preview"),
-      };
-      const src = values.get("--source");
-      if (src) opts.sourceId = src;
-      const kind = values.get("--kind");
-      if (kind) opts.kind = kind;
-      const idFields = values.get("--id-field");
-      if (idFields) opts.idFields = idFields;
-      const group = values.get("--group");
-      if (group) opts.group = group;
-      return await runDedupe(opts);
-    }
-    case "salience": {
-      const typeStr = values.get("--type");
-      const daysStr = values.get("--days");
-      const limitStr = values.get("--limit");
-      const opts: Parameters<typeof runSalience>[0] = {};
-      if (typeStr) opts.type = typeStr;
-      if (daysStr !== undefined) {
-        const n = Number(daysStr);
-        if (!Number.isInteger(n) || n < 0 || n > 36500) {
-          throw new Error(`memrain salience: invalid --days ${daysStr}`);
-        }
-        opts.days = n;
-      }
-      if (limitStr !== undefined) {
-        const n = Number(limitStr);
-        if (!Number.isInteger(n) || n < 1 || n > 200) {
-          throw new Error(`memrain salience: invalid --limit ${limitStr}`);
-        }
-        opts.limit = n;
-      }
-      await runSalience(opts);
-      return 0;
-    }
-    case "watch": {
-      // `--help` never gets this far: printCommandHelp answers it before the
-      // arguments are validated.
-      const opts: Parameters<typeof runWatch>[0] = { json: flags.has("--json") };
-      const wt = values.get("--window-turns");
-      const mp = values.get("--max-pages");
-      const mc = values.get("--min-confidence");
-      if (wt !== undefined) {
-        const n = Number(wt);
-        if (!Number.isInteger(n) || n < 1) throw new Error(`memrain watch: invalid --window-turns ${wt}`);
-        opts.windowTurns = n;
-      }
-      if (mp !== undefined) {
-        const n = Number(mp);
-        if (!Number.isInteger(n) || n < 1) throw new Error(`memrain watch: invalid --max-pages ${mp}`);
-        opts.maxPages = n;
-      }
-      if (mc !== undefined) {
-        const n = Number(mc);
-        if (!Number.isFinite(n) || n < 0 || n > 1) throw new Error(`memrain watch: invalid --min-confidence ${mc}`);
-        opts.minConfidence = n;
-      }
-      await runWatch(opts);
-      return 0;
-    }
-    case "cycle": {
-      const phasesStr = values.get("--phases");
-      const staleStr = values.get("--stale-days");
-      const opts: Parameters<typeof runCycle>[0] = {};
-      // Call parsePhasesArg whenever --phases was given (even ""), so an empty
-      // value fails loud rather than silently defaulting to ALL phases.
-      if (phasesStr !== undefined) opts.phases = parsePhasesArg(phasesStr);
-      if (staleStr !== undefined) {
-        const n = Number(staleStr);
-        if (!Number.isInteger(n) || n < 0) {
-          throw new Error(`memrain cycle: invalid --stale-days ${staleStr}`);
-        }
-        opts.staleDays = n;
-      }
-      await runCycle(opts);
-      return 0;
-    }
-    case "extract": {
-      if (flags.has("--stale")) {
-        const sourceId = values.get("--source-id");
-        await runExtract({
-          stale: true,
-          dryRun: flags.has("--dry-run"),
-          json: flags.has("--json"),
-          catchUp: flags.has("--catch-up"),
-          sourceIds: sourceId ? [sourceId] : undefined,
-        });
-        return 0;
-      }
-      const all = flags.has("--all");
-      const vault = values.get("--vault");
-      await runExtract(vault ? { all, vault } : { all });
-      return 0;
-    }
-    case "extract-conversation-facts": {
-      const file = positional[0] ?? values.get("--file");
-      if (!file) {
-        console.error(
-          "memrain extract-conversation-facts: <transcript-file> is required",
-        );
-        return 1;
-      }
-      const budgetStr = values.get("--budget");
-      const args: Parameters<typeof runExtractConversationFactsCli>[0] = {
-        file,
-        json: flags.has("--json"),
-      };
-      const sourceSlug = values.get("--source-slug");
-      if (sourceSlug) args.sourceSlug = sourceSlug;
-      const dateContext = values.get("--date-context");
-      if (dateContext) args.dateContext = dateContext;
-      if (budgetStr !== undefined) {
-        const n = Number(budgetStr);
-        if (!Number.isFinite(n) || n <= 0) {
-          throw new Error(
-            `memrain extract-conversation-facts: invalid --budget ${budgetStr}`,
-          );
-        }
-        args.maxBudgetUsd = n;
-      }
-      await runExtractConversationFactsCli(args);
-      return 0;
-    }
-    case "think": {
-      const question = positional.join(" ").trim() || values.get("--question");
-      if (!question) {
-        console.error("memrain think: a <question> is required");
-        return 1;
-      }
-      const args: Parameters<typeof runThinkCli>[0] = {
-        question,
-        json: flags.has("--json"),
-      };
-      const kStr = values.get("--k");
-      if (kStr !== undefined) {
-        const n = Number(kStr);
-        if (!Number.isInteger(n) || n < 1 || n > 100) {
-          throw new Error(`memrain think: invalid --k ${kStr}`);
-        }
-        args.k = n;
-      }
-      const budgetStr = values.get("--budget");
-      if (budgetStr !== undefined) {
-        const n = Number(budgetStr);
-        if (!Number.isFinite(n) || n <= 0) {
-          throw new Error(`memrain think: invalid --budget ${budgetStr}`);
-        }
-        args.maxBudgetUsd = n;
-      }
-      // Persistence + gather knobs (map 1:1 onto ThinkOptions).
-      if (flags.has("--save")) args.save = true;
-      const takeClaim = values.get("--take");
-      if (takeClaim !== undefined) args.take = takeClaim;
-      const sinceStr = values.get("--since");
-      if (sinceStr) args.since = sinceStr;
-      const untilStr = values.get("--until");
-      if (untilStr) args.until = untilStr;
-      const anchorStr = values.get("--anchor");
-      if (anchorStr) {
-        args.anchors = anchorStr.split(",").map((s) => s.trim()).filter(Boolean);
-      }
-      const roundsStr = values.get("--rounds");
-      if (roundsStr !== undefined) {
-        const n = Number(roundsStr);
-        if (!Number.isInteger(n) || n < 1 || n > 3) {
-          throw new Error(`memrain think: invalid --rounds ${roundsStr} (1..3)`);
-        }
-        args.rounds = n;
-      }
-      const modelStr = values.get("--model");
-      if (modelStr) args.modelId = modelStr;
-      if (flags.has("--with-calibration")) args.withCalibration = true;
-      await runThinkCli(args);
-      return 0;
-    }
-    case "reconcile-links": {
-      const limitStr = values.get("--limit");
-      const opts: Parameters<typeof runReconcileLinks>[0] = {};
-      if (limitStr !== undefined) {
-        const n = Number(limitStr);
-        if (!Number.isInteger(n) || n < 1 || n > 1000) {
-          throw new Error(`memrain reconcile-links: invalid --limit ${limitStr}`);
-        }
-        opts.reportLimit = n;
-      }
-      await runReconcileLinks(opts);
-      return 0;
-    }
-    case "friction": {
-      const sub = positional[0];
-      if (
-        sub !== "analyze" &&
-        sub !== "propose-fix" &&
-        sub !== "list" &&
-        sub !== "render" &&
-        sub !== "log"
-      ) {
-        console.error(
-          "memrain friction: subcommand required (analyze|propose-fix|list|render|log)",
-        );
-        return 1;
-      }
-      const opts: Parameters<typeof runFriction>[0] = { sub };
-      const sinceStr = values.get("--since");
-      if (sinceStr !== undefined) {
-        opts.sinceHours = resolveSinceHours(sinceStr, 24 * 365);
-      }
-      const limitStr = values.get("--limit");
-      if (limitStr !== undefined) {
-        const n = Number(limitStr);
-        if (!Number.isInteger(n) || n < 1 || n > 1000) {
-          throw new Error(`memrain friction: invalid --limit ${limitStr}`);
-        }
-        opts.limit = n;
-      }
-      if (sub === "propose-fix") {
-        const skill = values.get("--skill");
-        if (skill) opts.skill = skill;
-        const topStr = values.get("--top-skills");
-        if (topStr !== undefined) {
-          const n = Number(topStr);
-          if (!Number.isInteger(n) || n < 1 || n > 50) {
-            throw new Error(`memrain friction: invalid --top-skills ${topStr}`);
-          }
-          opts.topSkills = n;
-        }
-        const exStr = values.get("--example-limit");
-        if (exStr !== undefined) {
-          const n = Number(exStr);
-          if (!Number.isInteger(n) || n < 1 || n > 50) {
-            throw new Error(`memrain friction: invalid --example-limit ${exStr}`);
-          }
-          opts.exampleLimit = n;
-        }
-      }
-      if (sub === "list" || sub === "render" || sub === "log") {
-        const k = values.get("--kind");
-        if (
-          k === "search-miss" ||
-          k === "wrong-answer" ||
-          k === "tool-error" ||
-          k === "low-confidence" ||
-          k === "other" ||
-          k === "delight" ||
-          k === "phase-marker" ||
-          k === "interrupted"
-        ) {
-          opts.kind = k;
-        } else if (k !== undefined) {
-          throw new Error(`memrain friction: invalid --kind ${k}`);
-        }
-        const skill = values.get("--skill");
-        if (skill) opts.skill = skill;
-      }
-      if (sub === "render" && flags.has("--no-redact")) opts.noRedact = true;
-      if (sub === "log") {
-        const q = values.get("--query");
-        if (q) opts.query = q;
-        const r = values.get("--reason");
-        if (r) opts.reason = r;
-        const sp = values.get("--source-path");
-        if (sp) opts.sourcePath = sp;
-        const sev = values.get("--severity");
-        if (
-          sev === "confused" ||
-          sev === "error" ||
-          sev === "blocker" ||
-          sev === "nit"
-        ) {
-          opts.severity = sev;
-        } else if (sev !== undefined) {
-          throw new Error(`memrain friction log: invalid --severity ${sev}`);
-        }
-      }
-      await runFriction(opts);
-      return 0;
-    }
-    case "eval-export": {
-      const opts: Parameters<typeof runEvalExport>[0] = {};
-      const src = values.get("--source");
-      if (src === "firehose" || src === "curated") opts.source = src;
-      else if (src !== undefined) {
-        throw new Error(`memrain eval-export: invalid --source ${src}`);
-      }
-      const since = values.get("--since");
-      if (since !== undefined) {
-        opts.sinceHours = resolveSinceHours(since, 24 * 365);
-      }
-      const limit = values.get("--limit");
-      if (limit !== undefined) {
-        const n = Number(limit);
-        if (!Number.isInteger(n) || n < 1 || n > 1_000_000) {
-          throw new Error(`memrain eval-export: invalid --limit ${limit}`);
-        }
-        opts.limit = n;
-      }
-      const out = values.get("--out");
-      if (out) opts.out = out;
-      await runEvalExport(opts);
-      return 0;
     }
     case "backup": {
       if (positional.length !== 1 || positional[0] !== "status") throw new Error("backup: use status");
@@ -1245,16 +240,7 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
     case "import": {
       if (positional.length) throw new Error("import: use --dir and --source");
       if (flags.has("--apply") && flags.has("--dry-run")) throw new Error("import: choose --apply or --dry-run");
-      if (flags.has("--calls")) {
-        const { runCallImport } = await import("./commands/import-calls.ts");
-        return runCallImport({ dir: values.get("--dir") ?? "", source: values.get("--source") ?? "", apply: flags.has("--apply"), planHash: values.get("--plan-hash") });
-      }
       return runImport({ dir: values.get("--dir") ?? "", source: values.get("--source") ?? "", apply: flags.has("--apply"), planHash: values.get("--plan-hash") });
-    }
-    case "atoms-retire": {
-      if (positional.length) throw new Error("atoms-retire: use --source-ref and --completed-hash");
-      return runAtomsRetire({ sourceRef: values.get("--source-ref") ?? "", completedHash: values.get("--completed-hash") ?? "",
-        apply: flags.has("--apply"), planHash: values.get("--plan-hash") });
     }
     case "purge-leftovers": {
       if (positional.length > 1 || (positional.length === 1 && positional[0] !== "restore")) {
@@ -1280,15 +266,6 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       return runErase({ sub: "forgotten", source: values.get("--source") ?? "", factIds,
         deletedPages: values.get("--deleted-pages")?.split(","), apply: flags.has("--apply"), planHash: values.get("--plan-hash") });
     }
-    case "mirror-adopt": {
-      if (positional.length) throw new Error("mirror-adopt: use --source and --limit");
-      const limit = values.get("--limit");
-      if (limit !== undefined && (!/^\d+$/.test(limit) || Number(limit) < 1 || Number(limit) > 200)) {
-        throw new Error("mirror-adopt: --limit must be an integer from 1 to 200");
-      }
-      return runMirrorAdopt({ source: values.get("--source") ?? "", limit: limit === undefined ? undefined : Number(limit),
-        apply: flags.has("--apply"), planHash: values.get("--plan-hash") });
-    }
     case "export": {
       const opts: Parameters<typeof runExport>[0] = {};
       const dir = values.get("--dir");
@@ -1296,25 +273,7 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       const src = values.get("--source");
       const sourceIds = normalizeSourceFilterParam(src?.split(","));
       if (sourceIds !== undefined) opts.sourceIds = sourceIds;
-      const chatOwner = values.get("--owner");
-      if (chatOwner) opts.chatOwner = chatOwner;
       await runExport(opts);
-      return 0;
-    }
-    case "eval-prune": {
-      const opts: Parameters<typeof runEvalPrune>[0] = {};
-      const keep = values.get("--keep-days");
-      if (keep !== undefined) {
-        const n = Number(keep);
-        if (!Number.isFinite(n) || n < 1 || n > 365 * 10) {
-          throw new Error(`memrain eval-prune: invalid --keep-days ${keep}`);
-        }
-        opts.keepDays = n;
-      }
-      if (flags.has("--apply")) opts.apply = true;
-      const tool = values.get("--tool-name");
-      if (tool) opts.toolName = tool;
-      await runEvalPrune(opts);
       return 0;
     }
     case "apply-migrations": {
@@ -1330,15 +289,6 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       }
       if (flags.has("--yes")) opts.yes = true;
       await runApplyMigrations(opts);
-      return 0;
-    }
-    case "cache": {
-      const sub = positional[0];
-      if (sub !== "stats" && sub !== "prune" && sub !== "clear") {
-        console.error("memrain cache: subcommand required (stats|prune|clear)");
-        return 1;
-      }
-      await runCache({ sub });
       return 0;
     }
     case "embed": {
@@ -1367,25 +317,7 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (flags.has("--stale")) opts.stale = true;
       const embedSource = values.get("--source");
       if (embedSource) opts.sourceId = embedSource;
-      // Code vectors: a dry run unless --apply, which needs --max-usd.
-      if (flags.has("--code")) opts.code = true;
-      if (flags.has("--apply")) opts.apply = true;
-      const maxUsdStr = values.get("--max-usd");
-      if (maxUsdStr !== undefined) opts.maxUsd = Number(maxUsdStr);
       return await runEmbed(opts);
-    }
-    case "call": {
-      const tool = positional[0];
-      if (!tool) {
-        console.error(
-          `memrain call: <tool> is required (e.g. memrain call search --args '{"q":"..."}')`,
-        );
-        return 1;
-      }
-      const opts: Parameters<typeof runCall>[0] = { tool };
-      const argsJson = values.get("--args");
-      if (argsJson !== undefined) opts.argsJson = argsJson;
-      return await runCall(opts);
     }
     case "sources": {
       const sub = positional[0];
@@ -1454,400 +386,12 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       await runSources(opts);
       return 0;
     }
-    case "eval-replay": {
-      const sub = positional[0];
-      if (sub !== "capture" && sub !== "list" && sub !== "delete" && sub !== "run") {
-        console.error("memrain eval-replay: subcommand required (capture|list|delete|run)");
-        return 1;
-      }
-      const opts: Parameters<typeof runEvalReplay>[0] = { sub };
-      if (sub === "capture") {
-        opts.id = positional[1];
-        const q = values.get("--query");
-        if (q) opts.query = q;
-        const tag = values.get("--tag");
-        if (tag === "good" || tag === "bad") opts.tag = tag as EvalTag;
-        const expected = values.get("--expected-doc");
-        if (expected) opts.expectedDocId = expected;
-        const kStr = values.get("--k");
-        if (kStr !== undefined) {
-          const n = Number(kStr);
-          if (!Number.isInteger(n) || n < 1 || n > 100) {
-            throw new Error(`memrain eval-replay capture: invalid --k ${kStr}`);
-          }
-          opts.k = n;
-        }
-        const src = values.get("--source");
-        if (src) opts.source = src;
-        const notes = values.get("--notes");
-        if (notes) opts.notes = notes;
-        const mode = values.get("--search-mode");
-        if (mode === "hybrid" || mode === "keyword") opts.searchMode = mode;
-        else if (mode !== undefined) {
-          throw new Error(`memrain eval-replay capture: invalid --search-mode ${mode}`);
-        }
-      } else if (sub === "delete") {
-        opts.id = positional[1];
-      } else if (sub === "list" || sub === "run") {
-        const tag = values.get("--tag");
-        if (tag === "good" || tag === "bad") opts.filterTag = tag as EvalTag;
-        const lStr = values.get("--limit");
-        if (lStr !== undefined) {
-          const n = Number(lStr);
-          if (!Number.isInteger(n) || n < 1 || n > 1000) {
-            throw new Error(`memrain eval-replay: invalid --limit ${lStr}`);
-          }
-          opts.limit = n;
-        }
-        if (sub === "run" && flags.has("--promote")) opts.promote = true;
-      }
-      await runEvalReplay(opts);
-      return 0;
-    }
-    case "jobs": {
-      const sub = positional[0];
-      if (
-        sub !== "list" &&
-        sub !== "stats" &&
-        sub !== "retry" &&
-        sub !== "cancel" &&
-        sub !== "show" &&
-        sub !== "submit" &&
-        sub !== "progress" &&
-        sub !== "remove" &&
-        sub !== "prune" &&
-        sub !== "smoke"
-      ) {
-        console.error(
-          `memrain jobs: subcommand required (list|stats|show|retry|cancel|submit|progress|remove|prune|smoke)`,
-        );
-        return 1;
-      }
-      const opts: Parameters<typeof runJobs>[0] = { sub };
-      if (sub === "list") {
-        const statusStr = values.get("--status");
-        if (statusStr) {
-          const parts = statusStr.split(",").map((s) => s.trim());
-          for (const p of parts) {
-            if (!VALID_JOB_STATUSES.has(p as JobStatus)) {
-              throw new Error(`memrain jobs: invalid --status '${p}'`);
-            }
-          }
-          opts.status = parts as JobStatus[];
-        }
-        const kindStr = values.get("--kind");
-        if (kindStr) opts.kind = kindStr;
-        const limitStr = values.get("--limit");
-        if (limitStr !== undefined) {
-          const n = Number(limitStr);
-          if (!Number.isInteger(n) || n < 1 || n > 500) {
-            throw new Error(`memrain jobs: invalid --limit ${limitStr}`);
-          }
-          opts.limit = n;
-        }
-      } else if (
-        sub === "show" ||
-        sub === "retry" ||
-        sub === "cancel" ||
-        sub === "progress" ||
-        sub === "remove"
-      ) {
-        const id = positional[1];
-        if (!id) {
-          console.error(`memrain jobs ${sub}: <id> is required`);
-          return 1;
-        }
-        opts.id = id;
-      } else if (sub === "submit") {
-        const kind = positional[1];
-        if (!kind) {
-          console.error("memrain jobs submit: <kind> is required");
-          return 1;
-        }
-        opts.kind = kind;
-        const id = values.get("--id");
-        if (id) opts.id = id;
-        const prio = values.get("--priority");
-        if (prio !== undefined) {
-          const n = Number(prio);
-          if (!Number.isInteger(n) || n < 1 || n > 10) {
-            throw new Error(`memrain jobs submit: invalid --priority ${prio}`);
-          }
-          opts.priority = n;
-        }
-        const retries = values.get("--max-retries");
-        if (retries !== undefined) {
-          const n = Number(retries);
-          if (!Number.isInteger(n) || n < 0 || n > 100) {
-            throw new Error(`memrain jobs submit: invalid --max-retries ${retries}`);
-          }
-          opts.maxRetries = n;
-        }
-        const payloadJson = values.get("--payload");
-        if (payloadJson !== undefined) {
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(payloadJson);
-          } catch {
-            throw new Error("memrain jobs submit: --payload must be valid JSON");
-          }
-          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            throw new Error("memrain jobs submit: --payload must be a JSON object");
-          }
-          opts.payload = parsed as Record<string, unknown>;
-        }
-      } else if (sub === "prune") {
-        const days = values.get("--older-than-days");
-        if (days !== undefined) {
-          const n = Number(days);
-          if (!Number.isFinite(n) || n < 0 || n > 3650) {
-            throw new Error(`memrain jobs prune: invalid --older-than-days ${days}`);
-          }
-          opts.olderThanDays = n;
-        }
-        const statusStr = values.get("--status");
-        if (statusStr) {
-          const parts = statusStr.split(",").map((s) => s.trim());
-          for (const p of parts) {
-            if (!VALID_JOB_STATUSES.has(p as JobStatus)) {
-              throw new Error(`memrain jobs prune: invalid --status '${p}'`);
-            }
-          }
-          opts.status = parts as JobStatus[];
-        }
-        if (flags.has("--dry-run")) opts.dryRun = true;
-      } else if (sub === "stats") {
-        if (flags.has("--by-kind")) opts.byKind = true;
-      }
-      await runJobs(opts);
-      return 0;
-    }
-    case "skillify": {
-      // Subcommand routing: `skillify check <slug>` is a separate path.
-      // Bare-prompt invocation (`skillify "<prompt>"`) is the legacy + scaffold path.
-      if (positional[0] === "check") {
-        const slug = positional[1];
-        if (!slug) {
-          console.error("memrain skillify check: <slug> is required");
-          return 1;
-        }
-        const opts: Parameters<typeof runSkillifyCheck>[0] = { slug };
-        if (flags.has("--strict")) opts.strict = true;
-        await runSkillifyCheck(opts);
-        return 0;
-      }
-      // Allow `skillify scaffold <prompt>` as an explicit alias of bare-prompt.
-      const promptParts =
-        positional[0] === "scaffold" ? positional.slice(1) : positional;
-      const prompt = promptParts.join(" ").trim();
-      if (!prompt) {
-        console.error("memrain skillify: <prompt> is required");
-        return 1;
-      }
-      const opts: Parameters<typeof runSkillify>[0] = { prompt };
-      const out = values.get("--out");
-      if (out) opts.out = out;
-      const slug = values.get("--slug");
-      if (slug) opts.slug = slug;
-      if (flags.has("--dry-run")) opts.dryRun = true;
-      await runSkillify(opts);
-      return 0;
-    }
-    case "check-resolvable": {
-      const limitStr = values.get("--limit");
-      const thresholdStr = values.get("--threshold");
-      const opts: Parameters<typeof runCheckResolvable>[0] = {};
-      if (limitStr !== undefined) {
-        const n = Number(limitStr);
-        if (!Number.isInteger(n) || n < 1 || n > 1000) {
-          throw new Error(`memrain check-resolvable: invalid --limit ${limitStr}`);
-        }
-        opts.reportLimit = n;
-      }
-      if (thresholdStr !== undefined) {
-        const n = Number(thresholdStr);
-        if (!Number.isFinite(n) || n < 0 || n > 100) {
-          throw new Error(
-            `memrain check-resolvable: invalid --threshold ${thresholdStr} (expected 0-100)`,
-          );
-        }
-        opts.threshold = n;
-      }
-      if (flags.has("--strict")) opts.strict = true;
-      await runCheckResolvable(opts);
-      return 0;
-    }
-    case "orphans": {
-      await runOrphans();
-      return 0;
-    }
     case "rename": {
       const expectedVersion = Number(values.get("--expected-version"));
       if (positional.length !== 2 || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
         throw new Error("memrain rename: <from> <to> --expected-version <positive integer> is required");
       }
       return runRename({ from: positional[0]!, to: positional[1]!, expectedVersion, sourceId: values.get("--source") });
-    }
-    case "page-retype": {
-      const to = values.get("--to");
-      if (!to) throw new Error("memrain page-retype: --to <type> is required");
-      const slugsRaw = values.get("--slugs");
-      const opts: Parameters<typeof runPageRetype>[0] = { to };
-      const from = values.get("--from");
-      if (from) opts.from = from;
-      if (slugsRaw) {
-        opts.slugs = slugsRaw.split(",").map((x) => x.trim()).filter((x) => x.length > 0);
-      }
-      const prefix = values.get("--path-prefix");
-      if (prefix) opts.pathPrefix = prefix;
-      const src = values.get("--source-id");
-      if (src) opts.sourceId = src;
-      if (flags.has("--apply")) opts.apply = true;
-      if (flags.has("--json")) opts.json = true;
-      return await runPageRetype(opts);
-    }
-    case "pages": {
-      const limitStr = values.get("--limit");
-      const filter = values.get("--filter");
-      const opts: Parameters<typeof runPages>[0] = {};
-      if (limitStr !== undefined) {
-        const n = Number(limitStr);
-        if (!Number.isInteger(n) || n < 1 || n > 5000) {
-          throw new Error(`memrain pages: invalid --limit ${limitStr}`);
-        }
-        opts.limit = n;
-      }
-      if (filter) opts.filter = filter;
-      await runPages(opts);
-      return 0;
-    }
-    case "lint": {
-      const lintOpts: Parameters<typeof runLint>[0] = {};
-      const target = positional[0];
-      if (target) lintOpts.target = target;
-      if (flags.has("--fix")) lintOpts.fix = true;
-      if (flags.has("--dry-run")) lintOpts.dryRun = true;
-      await runLint(lintOpts);
-      return 0;
-    }
-    case "reports": {
-      const sinceStr = values.get("--since");
-      const opts: Parameters<typeof runReports>[0] = {};
-      if (sinceStr !== undefined) {
-        opts.sinceHours = resolveSinceHours(sinceStr, 24 * 30);
-      }
-      await runReports(opts);
-      return 0;
-    }
-    case "spend": {
-      if (positional[0] === "resume") {
-        const path = positional[1];
-        if (path === undefined || path === "") throw new Error("memrain spend resume: name the paused path");
-        await runSpendResume(path);
-        return 0;
-      }
-      const daysStr = values.get("--days");
-      const days = daysStr === undefined ? undefined : Number(daysStr);
-      if (days !== undefined && (!Number.isInteger(days) || days < 1 || days > 366)) {
-        throw new Error(`memrain spend: invalid --days ${daysStr}`);
-      }
-      await runSpend(days === undefined ? {} : { days });
-      return 0;
-    }
-    case "agent": {
-      const opts: Parameters<typeof runAgentCli>[0] = { sub: positional[0] };
-      if (positional[0] === "run") {
-        const task = positional[1];
-        if (task !== undefined) opts.task = task;
-        const maxUsdStr = values.get("--max-usd");
-        if (maxUsdStr !== undefined) {
-          const n = Number(maxUsdStr);
-          if (!Number.isFinite(n) || n <= 0) {
-            throw new Error(`memrain agent run: invalid --max-usd ${maxUsdStr}`);
-          }
-          opts.maxUsd = n;
-        }
-        if (flags.has("--wait")) opts.wait = true;
-      } else if (positional[1] !== undefined) {
-        opts.jobId = positional[1];
-      }
-      return await runAgentCli(opts);
-    }
-    case "skillopt": {
-      // Raw strings: runSkilloptCli validates them, before anything is opened.
-      const raw = {
-        skill: values.get("--skill"),
-        split: values.get("--split"),
-        repeats: values.get("--repeats"),
-        candidate: values.get("--candidate"),
-        epsilon: values.get("--epsilon"),
-        maxUsd: values.get("--max-usd"),
-      };
-      const opts: Parameters<typeof runSkilloptCli>[0] = { sub: positional[0] };
-      for (const [k, v] of Object.entries(raw) as [keyof typeof raw, string | undefined][]) {
-        if (v !== undefined) opts[k] = v;
-      }
-      return await runSkilloptCli(opts);
-    }
-    case "skillpack": {
-      // --fix and --strict reach here only on `check`: validateFlags refuses
-      // them on `lint` and the bundle (SUBCOMMAND_FLAGS).
-      if (positional[0] === "check") {
-        const checkOpts: Parameters<typeof runSkillpackCheck>[0] = {};
-        const dir = values.get("--dir");
-        if (dir) checkOpts.dir = dir;
-        if (flags.has("--json")) checkOpts.json = true;
-        if (flags.has("--strict")) checkOpts.strict = true;
-        if (flags.has("--fix")) checkOpts.fix = true;
-        return runSkillpackCheck(checkOpts);
-      }
-      if (positional[0] === "lint") {
-        const lintOpts: Parameters<typeof runSkillpackLint>[0] = {};
-        const dir = values.get("--dir");
-        if (dir) lintOpts.dir = dir;
-        if (flags.has("--json")) lintOpts.json = true;
-        return runSkillpackLint(lintOpts);
-      }
-      if (positional[0] !== undefined) {
-        console.error(`memrain skillpack: unknown subcommand '${positional[0]}' (expected: lint, check)`);
-        return 1;
-      }
-      const out = values.get("--out");
-      const opts: Parameters<typeof runSkillpack>[0] = {};
-      if (out) opts.out = out;
-      await runSkillpack(opts);
-      return 0;
-    }
-    case "migrate-engine": {
-      const from = values.get("--from");
-      const to = values.get("--to");
-      if (
-        (from !== "pglite" && from !== "postgres") ||
-        (to !== "pglite" && to !== "postgres")
-      ) {
-        throw new Error(
-          "memrain migrate-engine: --from and --to are required (pglite|postgres)",
-        );
-      }
-      const opts: Parameters<typeof runMigrateEngine>[0] = {
-        from: from as "pglite" | "postgres",
-        to: to as "pglite" | "postgres",
-      };
-      if (flags.has("--dry-run")) opts.dryRun = true;
-      const pPath = values.get("--pglite-path");
-      if (pPath) opts.pgliteDbPath = pPath;
-      const toPath = values.get("--to-pglite-path");
-      if (toPath) opts.toPgliteDbPath = toPath;
-      const pUrl = values.get("--postgres-url");
-      if (pUrl) opts.postgresUrl = pUrl;
-      const batch = values.get("--batch-size");
-      if (batch) opts.batchSize = Number(batch);
-      if (flags.has("--verify-only")) opts.verifyOnly = true;
-      if (flags.has("--allow-dropped-columns")) opts.allowDroppedColumns = true;
-      const tables = values.get("--tables");
-      if (tables) opts.tables = tables.split(",").map((t) => t.trim()).filter(Boolean);
-      const summary = await runMigrateEngine(opts);
-      return summary.ok ? 0 : 1;
     }
     case "admin": {
       // `admin setup-link` — a one-time passkey setup link for the panel owner.
@@ -1862,78 +406,6 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       // Self-issued OAuth 2.1 provider management. Re-parses its own raw flags
       // (--grant-types/--scopes/--source/--federated-read), so pass the raw tail.
       await runAuth(argv.slice(1));
-      return 0;
-    }
-    case "search": {
-      // `search modes` — read-only ranking-config view (no query, no storage).
-      if (positional.length === 1 && positional[0] === "modes") {
-        runSearchModes();
-        return 0;
-      }
-      // `search stats|tune|diagnose` — telemetry dashboard / recommendation
-      // loop / arm-by-arm probe, NOT a free-text search for those words.
-      // stats/tune only claim the EXACT single token (a query like
-      // "stats about x" stays a search); diagnose owns its tail (the query).
-      if (positional.length === 1 && positional[0] === "stats") {
-        const daysStr = values.get("--days");
-        const opts: Parameters<typeof runSearchStats>[0] = {};
-        if (daysStr !== undefined) {
-          const n = Number(daysStr);
-          if (!Number.isInteger(n) || n < 1 || n > 365) {
-            throw new Error(`memrain search stats: invalid --days ${daysStr}`);
-          }
-          opts.days = n;
-        }
-        if (flags.has("--json")) opts.json = true;
-        return await runSearchStats(opts);
-      }
-      if (positional.length === 1 && positional[0] === "tune") {
-        const opts: Parameters<typeof runSearchTune>[0] = {};
-        if (flags.has("--apply")) opts.apply = true;
-        if (flags.has("--json")) opts.json = true;
-        return await runSearchTune(opts);
-      }
-      if (positional[0] === "diagnose") {
-        const target = values.get("--target");
-        if (!target) {
-          console.error(
-            'memrain search diagnose: --target <slug> is required (usage: search diagnose ["<query>"] --target <slug>)',
-          );
-          return 2;
-        }
-        const diagOpts: Parameters<typeof runSearchDiagnose>[0] = {
-          query: positional.slice(1).join(" "),
-          target,
-        };
-        const src = values.get("--source");
-        if (src) diagOpts.sourceId = src;
-        if (flags.has("--json")) diagOpts.json = true;
-        return await runSearchDiagnose(diagOpts);
-      }
-      if (positional.length === 1 && positional[0] === "invisible") {
-        const invOpts: Parameters<typeof runSearchInvisible>[0] = {};
-        const src = values.get("--source");
-        if (src) invOpts.sourceId = src;
-        const limitStr = values.get("--limit");
-        if (limitStr !== undefined) invOpts.limit = Number(limitStr);
-        if (flags.has("--json")) invOpts.json = true;
-        return await runSearchInvisible(invOpts);
-      }
-      const query = positional.join(" ");
-      if (!query) {
-        console.error("memrain search: <query> is required");
-        return 1;
-      }
-      const kStr = values.get("--k");
-      const k = kStr ? Number(kStr) : undefined;
-      if (k !== undefined && (!Number.isInteger(k) || k < 1 || k > 100)) {
-        throw new Error(`memrain search: invalid --k ${kStr}`);
-      }
-      await runSearch({
-        query,
-        ...(k !== undefined ? { k } : {}),
-        ...(flags.has("--explain") ? { explain: true } : {}),
-      });
       return 0;
     }
     case "config": {
@@ -1957,39 +429,6 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       }
       return await runConfig(opts);
     }
-    case "capture": {
-      const opts: Parameters<typeof runCapture>[0] = {};
-      const inline = positional.join(" ").trim();
-      if (inline) opts.text = inline;
-      if (flags.has("--stdin")) opts.stdin = true;
-      const file = values.get("--file");
-      if (file) opts.file = file;
-      const slug = values.get("--slug");
-      if (slug) opts.slug = slug;
-      const type = values.get("--type");
-      if (type) opts.type = type;
-      const src = values.get("--source");
-      if (src) opts.sourceId = src;
-      const title = values.get("--title");
-      if (title) opts.title = title;
-      // Life-Chronicle event frontmatter. --who is comma-separated (the arg
-      // parser keeps only the last of a repeated flag).
-      const who = values.get("--who");
-      if (who) {
-        const names = who.split(",").map((s) => s.trim()).filter(Boolean);
-        if (names.length > 0) opts.who = names;
-      }
-      const what = values.get("--what");
-      if (what) opts.what = what;
-      const where = values.get("--where");
-      if (where) opts.where = where;
-      const kind = values.get("--kind");
-      if (kind) opts.kind = kind;
-      const depth = values.get("--depth");
-      if (depth) opts.depth = depth;
-      if (flags.has("--json")) opts.json = true;
-      return await runCapture(opts);
-    }
     case "transcripts": {
       const opts: Parameters<typeof runTranscripts>[0] = { sub: positional[0] };
       const file = positional[1];
@@ -2000,88 +439,10 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (src) opts.sourceId = src;
       const since = values.get("--since");
       if (since) opts.since = since;
-      const maxCost = values.get("--max-cost-usd");
-      if (maxCost) opts.maxCostUsd = maxCost;
-      const url = values.get("--url");
-      if (url) opts.url = url;
-      const tokenFile = values.get("--token-file");
-      if (tokenFile) opts.tokenFile = tokenFile;
       if (flags.has("--no-embed")) opts.noEmbed = true;
-      if (flags.has("--facts")) opts.facts = true;
-      if (flags.has("--hook-stdin")) opts.hookStdin = true;
-      if (flags.has("--apply")) opts.apply = true;
       if (flags.has("--dry-run")) opts.dryRun = true;
       if (flags.has("--json")) opts.json = true;
-      const planHash = values.get("--plan-hash");
-      if (planHash !== undefined) {
-        if (opts.sub !== "repair-origin") throw new Error("transcripts: --plan-hash is only valid for repair-origin");
-        opts.planHash = planHash;
-      }
       return await runTranscripts(opts);
-    }
-    case "connectors": {
-      const opts: Parameters<typeof runConnectors>[0] = { sub: positional[0] };
-      const action = positional[1];
-      if (action) opts.action = action;
-      const target = positional[2];
-      if (target) opts.target = target;
-      const src = values.get("--source");
-      if (src) opts.sourceId = src;
-      const tokenFile = values.get("--token-file");
-      if (tokenFile) opts.tokenFile = tokenFile;
-      const oldKekFile = values.get("--old-file");
-      if (oldKekFile) opts.oldKekFile = oldKekFile;
-      const newKekFile = values.get("--new-file");
-      if (newKekFile) opts.newKekFile = newKekFile;
-      const days = values.get("--days");
-      if (days !== undefined) opts.days = days;
-      const planHash = values.get("--plan-hash");
-      if (planHash !== undefined) opts.planHash = planHash;
-      const cap = values.get("--cap");
-      if (cap !== undefined) opts.cap = cap;
-      const exportPath = values.get("--export");
-      if (exportPath !== undefined) opts.exportPath = exportPath;
-      if (flags.has("--enable")) opts.enable = true;
-      if (flags.has("--disable")) opts.disable = true;
-      if (flags.has("--forget")) opts.forget = true;
-      if (flags.has("--full")) opts.full = true;
-      if (flags.has("--dry-run")) opts.dryRun = true;
-      if (flags.has("--apply")) opts.apply = true;
-      if (flags.has("--yes")) opts.yes = true;
-      if (flags.has("--json")) opts.json = true;
-      return await runConnectors(opts);
-    }
-    case "daemons": {
-      const opts: Parameters<typeof runDaemons>[0] = { sub: positional[0] };
-      if (positional[1]) opts.name = positional[1];
-      const src = values.get("--source");
-      if (src) opts.sourceId = src;
-      const reason = values.get("--reason");
-      if (reason) opts.reason = reason;
-      if (flags.has("--json")) opts.json = true;
-      return await runDaemons(opts);
-    }
-    case "waiting": {
-      const sub = positional[0];
-      const opts: Parameters<typeof runWaiting>[0] = { sub };
-      if (sub === "mute" || sub === "unmute") {
-        if (positional[1]) opts.target = positional[1];
-        if (positional[2]) opts.id = positional[2];
-      } else if (positional[1]) opts.id = positional[1];
-      const src = values.get("--source");
-      if (src) opts.sourceId = src;
-      const type = values.get("--type");
-      if (type) opts.type = type;
-      const limitStr = values.get("--limit");
-      if (limitStr !== undefined) {
-        const n = Number(limitStr);
-        if (!Number.isInteger(n) || n < 1 || n > 500) throw new Error(`memrain waiting: invalid --limit ${limitStr} (1-500)`);
-        opts.limit = n;
-      }
-      if (flags.has("--stale")) opts.stale = true;
-      if (flags.has("--dry-run")) opts.dryRun = true;
-      if (flags.has("--json")) opts.json = true;
-      return await runWaiting(opts);
     }
     case "quarantine": {
       const sub = positional[0];
@@ -2116,39 +477,6 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       if (flags.has("--json")) opts.json = true;
       return await runQuarantine(opts);
     }
-    case "identity": {
-      const member = values.get("--member");
-      return await runIdentity({ ...(member !== undefined ? { member } : {}), json: flags.has("--json") });
-    }
-    case "member": {
-      const opts: Parameters<typeof runMember>[0] = { sub: positional[0] ?? "", args: positional.slice(1) };
-      if (flags.has("--all")) opts.all = true;
-      const name = values.get("--name");
-      if (name !== undefined) opts.name = name;
-      const email = values.get("--email");
-      if (email !== undefined) opts.email = email;
-      const personal = values.get("--personal-source");
-      if (personal !== undefined) opts.personalSource = personal;
-      const token = values.get("--token");
-      if (token !== undefined) opts.token = token;
-      const client = values.get("--client");
-      if (client !== undefined) opts.client = client;
-      const enrollment = values.get("--enrollment");
-      if (enrollment !== undefined) opts.enrollment = enrollment;
-      if (flags.has("--erase-personal-source")) opts.erasePersonalSource = true;
-      if (flags.has("--clear")) opts.clear = true;
-      if (flags.has("--apply")) opts.apply = true;
-      const out = values.get("--out");
-      if (out !== undefined) opts.out = out;
-      return await runMember(opts);
-    }
-    case "group": {
-      const opts: Parameters<typeof runGroup>[0] = { sub: positional[0] ?? "", args: positional.slice(1) };
-      const name = values.get("--name");
-      if (name !== undefined) opts.name = name;
-      if (flags.has("--allow-owner-source")) opts.allowOwnerSource = true;
-      return await runGroup(opts);
-    }
     case "write-gate": {
       const sub = positional[0];
       const subs = ["list", "approve", "reject", "rows", "release", "drop", "scan"] as const;
@@ -2171,25 +499,6 @@ async function dispatch(parsed: ParsedArgs, argv: readonly string[]): Promise<nu
       }
       if (flags.has("--json")) opts.json = true;
       return await runWriteGate(opts);
-    }
-    case "trust": {
-      const sub = positional[0];
-      if (sub !== "proposals" && sub !== "accept" && sub !== "reject") {
-        console.error("memrain trust: subcommand required (proposals|accept|reject)");
-        return 1;
-      }
-      const opts: Parameters<typeof runTrust>[0] = { sub };
-      if (sub === "proposals" && flags.has("--all")) opts.all = true;
-      if (sub === "accept" || sub === "reject") {
-        const id = Number(positional[1]);
-        if (!positional[1] || !Number.isInteger(id) || id < 1) {
-          console.error(`memrain trust ${sub}: <id> is required (see \`memrain trust proposals\`)`);
-          return 1;
-        }
-        opts.id = id;
-      }
-      if (flags.has("--json")) opts.json = true;
-      return await runTrust(opts);
     }
     case "secrets": {
       const storeSub = positional[0];

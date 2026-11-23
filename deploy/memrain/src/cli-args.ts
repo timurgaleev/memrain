@@ -34,73 +34,28 @@ import { nearest } from "./core/did-you-mean.ts";
  */
 export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--all",
-  "--allow-dropped-columns",
-  "--allow-owner-source",
   "--allow-mass-delete",
-  "--allow-errors",
   "--apply",
-  "--bench",
-  "--by-kind",
-  "--calls",
-  "--catch-up",
-  "--clear",
-  "--code",
-  "--contextual",
-  "--cosine-rescore",
-  "--disable",
   "--documents",
   "--dry-run",
-  "--enable",
-  "--erase-personal-source",
-  "--execute",
-  "--expand",
   "--expect-operator",
-  "--explain",
-  "--facts",
-  "--fix",
   "--force",
-  "--forget",
-  "--full",
-  "--graph-signals",
   "--help",
-  "--hook-stdin",
   "--http",
   "--include-flagged",
   "--json",
-  "--k12",
-  "--live",
-  "--max-pool",
   "--no-embed",
-  "--no-expand",
-  "--no-redact",
   "--no-respect-quiet-hours",
   "--per-source",
   "--pglite",
   "--postgres",
-  "--preview",
   "--probe",
-  "--promote",
   "--purge",
   "--quiescent",
-  "--rechunk-stale",
   "--reconcile-deletes",
-  "--record",
-  "--relational-arm",
-  "--remediate",
-  "--remediation-plan",
-  "--rerank",
   "--respect-quiet-hours",
-  "--retrieval-only",
-  "--save",
   "--stale",
-  "--stdin",
-  "--strict",
   "--transcripts",
-  "--verify-only",
-  "--wait",
-  "--with-calibration",
-  "--write-baseline",
-  "--write-snapshot",
   "--yes",
 ]);
 
@@ -122,32 +77,58 @@ const FALSE_LITERALS: ReadonlySet<string> = new Set(["false", "0", "no"]);
  * typo, so adding a new value-taking flag means adding it here too.
  */
 export const VALUE_FLAGS: ReadonlySet<string> = new Set([
-  "--fact-ids", "--deleted-pages", "--source-ref", "--completed-hash", "--export",
-  "--access-ttl", "--anchor", "--answer-model", "--args", "--baseline", "--batch-size", "--boost-weight", "--candidate",
-  "--bound-slug-prefixes", "--budget", "--cap", "--client", "--client-file", "--config-a",
-  "--config-b", "--corpus", "--rds-instance", "--efs-id", "--copy-report",
-  "--date-context", "--days", "--dedup-type-ratio", "--depth", "--description", "--epsilon",
-  "--dir", "--down", "--email", "--enrollment", "--example-limit", "--expect-source", "--expect-version",
-  "--expected-doc", "--expected-revision", "--expected-top1", "--expected-version", "--family",
-  "--federated-read", "--file", "--format", "--group", "--id-field",
-  "--filter", "--from", "--grant", "--grant-types", "--host", "--id", "--indexed-policy",
-  "--input", "--judge-model", "--k", "--keep-days", "--lme-r", "--lme-r-base", "--kind", "--kinds", "--label", "--limit", "--max-drop",
-  "--new-file", "--old-file",
-  "--max-cost-usd", "--max-jobs", "--max-latency-x", "--max-pages", "--max-retries", "--max-usd",
-  "--member", "--min-confidence", "--min-recall", "--min-trust", "--model", "--modes", "--name", "--notes",
-  "--older-than-days", "--out", "--owner", "--path-prefix", "--paths", "--pattern",
-  "--payload", "--personal-source", "--pglite-path", "--phases", "--plan-hash", "--port", "--postgres-url", "--profile",
-  "--prereg", "--priority", "--qrels", "--query", "--question", "--rate-limit-per-minute",
-  "--reason", "--redirect-uris", "--refresh-ttl", "--repeats", "--replaces", "--rounds", "--rrf-k", "--scopes", "--settle",
-  "--via", "--sealed-fraction", "--search-mode", "--seed", "--severity", "--since", "--skill", "--slug", "--slugs", "--split",
-  "--slug-prefixes", "--source", "--source-id", "--source-path", "--source-slug", "--stale-days",
-  "--status", "--sweep", "--sync-policy", "--tag", "--take", "--takes-holders",
-  "--tables", "--target", "--tenant-mode", "--threshold", "--title", "--to",
-  "--to-pglite-path", "--token",
-  "--token-endpoint-auth-method", "--token-file", "--tool-name", "--top-skills", "--ttl",
-  "--type",
-  "--until", "--url", "--usd", "--vault", "--what", "--where", "--who", "--window-turns",
-  "--written-by",
+  "--fact-ids",
+  "--deleted-pages",
+  "--export",
+  "--access-ttl",
+  "--boost-weight",
+  "--bound-slug-prefixes",
+  "--client",
+  "--client-file",
+  "--rds-instance",
+  "--efs-id",
+  "--copy-report",
+  "--description",
+  "--dir",
+  "--down",
+  "--expect-source",
+  "--expect-version",
+  "--expected-revision",
+  "--expected-version",
+  "--federated-read",
+  "--format",
+  "--from",
+  "--grant",
+  "--grant-types",
+  "--host",
+  "--indexed-policy",
+  "--kind",
+  "--kinds",
+  "--label",
+  "--limit",
+  "--member",
+  "--owner",
+  "--path-prefix",
+  "--pattern",
+  "--plan-hash",
+  "--port",
+  "--rate-limit-per-minute",
+  "--redirect-uris",
+  "--refresh-ttl",
+  "--replaces",
+  "--scopes",
+  "--since",
+  "--slug",
+  "--slugs",
+  "--slug-prefixes",
+  "--source",
+  "--sync-policy",
+  "--tenant-mode",
+  "--token",
+  "--token-endpoint-auth-method",
+  "--token-file",
+  "--ttl",
+  "--vault",
 ]);
 
 /** Union of every flag the CLI understands. Anything else is a typo. */
@@ -164,8 +145,7 @@ export const KNOWN_FLAGS: ReadonlySet<string> = new Set([
  * stdout until the command returns.
  */
 export const JSON_GUARDED_COMMANDS: ReadonlySet<string> = new Set([
-  "call", "connectors", "daemons", "doctor", "engine", "eval", "export", "models",
-  "pages", "search", "secrets", "sources", "spend", "status", "version", "waiting",
+  "doctor", "engine", "export", "secrets", "sources", "status", "version",
 ]);
 
 /** Answered by every command, so no command lists it. */
@@ -178,108 +158,25 @@ const UNIVERSAL_FLAGS: ReadonlySet<string> = new Set(["--help"]);
  * so a flag added to a command without an entry here fails the suite instead of
  * failing the operator.
  *
- * Two commands do their own parsing and so have no reads in the switch:
- * `doctor` reads its remediation flags straight off `process.argv` inside
- * runDoctor, and `auth` re-parses the raw tail with its own `parseFlags`. Their
- * rows come from those modules, and the test reads them from there.
+ * `auth` does its own parsing and so has no reads in the switch: it re-parses
+ * the raw tail with its own `parseFlags`. Its row comes from that module, and
+ * the test reads it from there.
  */
 export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ["aliases", new Set(["--source", "--limit", "--json"])],
-  ["models", new Set(["--probe", "--json", "--max-cost-usd"])],
   ["engine", new Set(["--probe", "--json"])],
   ["backup", new Set(["--rds-instance", "--efs-id", "--copy-report"])],
-  ["import", new Set(["--dir", "--source", "--apply", "--dry-run", "--plan-hash", "--calls"])],
-  ["mirror-adopt", new Set(["--source", "--limit", "--apply", "--plan-hash"])],
-  ["atoms-retire", new Set(["--source-ref", "--completed-hash", "--apply", "--plan-hash"])],
+  ["import", new Set(["--dir", "--source", "--apply", "--dry-run", "--plan-hash"])],
   ["purge-leftovers", new Set(["--apply", "--plan-hash", "--export", "--from"])],
   ["unpurge", new Set(["--source"])],
   ["erase", new Set(["--source", "--fact-ids", "--deleted-pages", "--apply", "--plan-hash", "--owner"])],
   ["init", new Set(["--pglite", "--postgres"])],
   ["serve", new Set(["--host", "--http", "--port"])],
-  ["index", new Set<string>()],
-  [
-    "reindex",
-    new Set([
-      "--all", "--allow-mass-delete", "--contextual", "--dry-run", "--force", "--limit", "--paths",
-      "--max-cost-usd", "--plan-hash", "--rechunk-stale", "--reconcile-deletes", "--source", "--vault",
-    ]),
-  ],
-  ["code", new Set(["--allow-mass-delete", "--apply", "--limit", "--paths", "--sweep"])],
-  ["code-def", new Set(["--json"])],
-  ["code-refs", new Set(["--json"])],
-  ["code-callers", new Set(["--json"])],
-  ["code-callees", new Set(["--json"])],
-  [
-    "doctor",
-    new Set([
-      "--execute", "--max-jobs", "--max-usd", "--remediate",
-      "--remediation-plan", "--yes",
-    ]),
-  ],
-  ["hnsw", new Set(["--force"])],
+  ["reindex", new Set(["--all", "--allow-mass-delete", "--reconcile-deletes", "--vault"])],
+  ["doctor", new Set<string>()],
   ["status", new Set(["--per-source", "--quiescent"])],
-  ["integrity", new Set(["--vault"])],
-  [
-    "eval",
-    new Set([
-      "--allow-errors", "--answer-model", "--baseline", "--config-a", "--config-b", "--cosine-rescore",
-      "--dedup-type-ratio", "--dir", "--dry-run", "--expand", "--expected-top1", "--graph-signals", "--input",
-      "--json", "--judge-model", "--k", "--limit", "--max-drop", "--max-latency-x", "--max-pool", "--max-usd",
-      "--min-recall", "--modes", "--no-expand", "--out", "--prereg", "--qrels", "--record",
-      "--relational-arm", "--rerank", "--rrf-k", "--sealed-fraction", "--seed", "--settle",
-      "--split", "--usd", "--via", "--write-baseline", "--k12", "--write-snapshot", "--bench",
-      "--retrieval-only", "--lme-r", "--lme-r-base", "--live",
-    ]),
-  ],
-  ["eval-probe", new Set(["--limit", "--max-usd"])],
-  ["bench", new Set(["--corpus", "--family", "--json", "--live"])],
-  ["backlinks", new Set(["--limit", "--type"])],
-  ["merge", new Set(["--source", "--written-by"])],
-  ["dedupe", new Set(["--preview", "--json", "--source", "--kind", "--id-field", "--group"])],
-  ["salience", new Set(["--days", "--limit", "--type"])],
-  [
-    "watch",
-    new Set(["--json", "--max-pages", "--min-confidence", "--window-turns"]),
-  ],
-  ["cycle", new Set(["--phases", "--stale-days"])],
-  [
-    "extract",
-    new Set([
-      "--all", "--catch-up", "--dry-run", "--json", "--source-id", "--stale",
-      "--vault",
-    ]),
-  ],
-  [
-    "extract-conversation-facts",
-    new Set(["--budget", "--date-context", "--file", "--json", "--source-slug"]),
-  ],
-  [
-    "think",
-    new Set([
-      "--anchor", "--budget", "--json", "--k", "--model", "--question",
-      "--rounds", "--save", "--since", "--take", "--until",
-      "--with-calibration",
-    ]),
-  ],
-  ["reconcile-links", new Set(["--limit"])],
-  [
-    "friction",
-    new Set([
-      "--example-limit", "--kind", "--limit", "--no-redact", "--query",
-      "--reason", "--severity", "--since", "--skill", "--source-path",
-      "--top-skills",
-    ]),
-  ],
-  ["eval-export", new Set(["--limit", "--out", "--since", "--source"])],
-  ["export", new Set(["--dir", "--source", "--owner"])],
-  ["eval-prune", new Set(["--apply", "--keep-days", "--tool-name"])],
+  ["export", new Set(["--dir", "--source"])],
   ["apply-migrations", new Set(["--down", "--dry-run", "--yes"])],
-  ["cache", new Set<string>()],
-  [
-    "embed",
-    new Set(["--all", "--apply", "--code", "--dry-run", "--limit", "--max-usd", "--slugs", "--source", "--stale"]),
-  ],
-  ["call", new Set(["--args"])],
+  ["embed", new Set(["--all", "--dry-run", "--limit", "--slugs", "--source", "--stale"])],
   [
     "sources",
     new Set([
@@ -288,48 +185,7 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "--respect-quiet-hours", "--sync-policy", "--apply",
     ]),
   ],
-  [
-    "eval-replay",
-    new Set([
-      "--expected-doc", "--k", "--limit", "--notes", "--promote", "--query",
-      "--search-mode", "--source", "--tag",
-    ]),
-  ],
-  [
-    "jobs",
-    new Set([
-      "--by-kind", "--dry-run", "--id", "--kind", "--limit", "--max-retries",
-      "--older-than-days", "--payload", "--priority", "--status",
-    ]),
-  ],
-  ["skillify", new Set(["--dry-run", "--out", "--slug", "--strict"])],
-  ["check-resolvable", new Set(["--limit", "--strict", "--threshold"])],
-  ["orphans", new Set<string>()],
   ["rename", new Set(["--expected-version", "--source"])],
-  [
-    "page-retype",
-    new Set([
-      "--apply", "--from", "--json", "--path-prefix", "--slugs", "--source-id",
-      "--to",
-    ]),
-  ],
-  ["pages", new Set(["--filter", "--limit"])],
-  ["lint", new Set(["--dry-run", "--fix"])],
-  ["reports", new Set(["--since"])],
-  ["spend", new Set(["--days"])],
-  ["agent", new Set(["--max-usd", "--wait"])],
-  [
-    "skillopt",
-    new Set(["--candidate", "--epsilon", "--max-usd", "--repeats", "--skill", "--split"]),
-  ],
-  ["skillpack", new Set(["--dir", "--fix", "--json", "--out", "--strict"])],
-  [
-    "migrate-engine",
-    new Set([
-      "--allow-dropped-columns", "--batch-size", "--dry-run", "--from", "--pglite-path", "--postgres-url",
-      "--tables", "--to", "--to-pglite-path", "--verify-only",
-    ]),
-  ],
   ["admin", new Set(["--json", "--ttl"])],
   [
     "auth",
@@ -337,43 +193,18 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "--access-ttl", "--bound-slug-prefixes", "--client", "--client-file", "--dry-run",
       "--expect-operator", "--expect-source", "--expect-version",
       "--expected-revision", "--federated-read", "--grant", "--grant-types", "--json",
-      "--label", "--limit", "--member", "--min-trust", "--profile", "--purge", "--redirect-uris", "--refresh-ttl", "--replaces", "--scopes", "--source",
-      "--takes-holders", "--tenant-mode", "--token",
-      "--token-endpoint-auth-method", "--token-file", "--ttl",
+      "--label", "--limit", "--member", "--purge", "--redirect-uris", "--refresh-ttl", "--replaces", "--scopes", "--source",
+      "--tenant-mode", "--token", "--token-endpoint-auth-method", "--token-file", "--ttl",
     ]),
-  ],
-  [
-    "search",
-    new Set(["--apply", "--days", "--explain", "--json", "--k", "--limit", "--source", "--target"]),
   ],
   ["config", new Set(["--force", "--pattern"])],
-  [
-    "capture",
-    new Set([
-      "--depth", "--file", "--json", "--kind", "--slug", "--source", "--stdin",
-      "--title", "--type", "--what", "--where", "--who",
-    ]),
-  ],
   [
     "quarantine",
     new Set(["--apply", "--force", "--include-flagged", "--json", "--limit"]),
   ],
   ["write-gate", new Set(["--all", "--json", "--dry-run", "--documents"])],
-  ["trust", new Set(["--all", "--json"])],
-  ["member", new Set(["--all", "--apply", "--clear", "--client", "--email", "--enrollment", "--erase-personal-source", "--name", "--out", "--personal-source", "--token"])],
-  ["identity", new Set(["--json", "--member"])],
-  ["group", new Set(["--allow-owner-source", "--name"])],
   ["secrets", new Set(["--apply", "--dir", "--json", "--kinds", "--limit", "--plan-hash", "--slug", "--slug-prefixes", "--source", "--transcripts", "--yes"])],
-  [
-    "transcripts",
-    new Set([
-      "--apply", "--dry-run", "--facts", "--format", "--hook-stdin", "--json", "--max-cost-usd", "--no-embed", "--since",
-      "--source", "--token-file", "--url", "--plan-hash",
-    ]),
-  ],
-  ["connectors", new Set(["--apply", "--cap", "--days", "--disable", "--dry-run", "--enable", "--export", "--forget", "--full", "--json", "--new-file", "--old-file", "--plan-hash", "--source", "--token-file", "--yes"])],
-  ["daemons", new Set(["--json", "--reason", "--source"])],
-  ["waiting", new Set(["--dry-run", "--json", "--limit", "--source", "--stale", "--type"])],
+  ["transcripts", new Set(["--dry-run", "--format", "--json", "--no-embed", "--since", "--source"])],
   ["version", new Set(["--json"])],
   ["help", new Set<string>()],
 ]);
@@ -388,15 +219,8 @@ export const COMMAND_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
  * these is the mutating or paid path, so silence is the expensive answer.
  */
 export const SAFETY_FLAG_COMMANDS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  [
-    "--dry-run",
-    new Set([
-      "apply-migrations", "auth", "embed", "eval", "extract", "jobs", "lint",
-      "connectors", "import", "migrate-engine", "reindex", "skillify", "transcripts", "waiting", "write-gate",
-    ]),
-  ],
-  ["--apply", new Set(["code", "embed", "import", "mirror-adopt", "erase", "atoms-retire", "purge-leftovers", "eval-prune", "page-retype", "quarantine", "search", "secrets", "transcripts", "connectors", "member", "sources"])],
-  ["--fix", new Set(["lint", "skillpack"])],
+  ["--dry-run", new Set(["apply-migrations", "auth", "embed", "import", "transcripts", "write-gate"])],
+  ["--apply", new Set(["import", "erase", "purge-leftovers", "quarantine", "secrets", "sources"])],
 ]);
 
 export interface ParsedArgs {
@@ -425,9 +249,7 @@ export class UnknownFlagError extends Error {}
  * Flags of a command that only one of its subcommands reads; the others would
  * ignore them. validateFlags refuses them there, and the skill lint follows suit.
  */
-export const SUBCOMMAND_FLAGS: ReadonlyMap<string, ReadonlyMap<string, string>> = new Map([
-  ["skillpack", new Map([["--fix", "check"], ["--strict", "check"]])],
-]);
+export const SUBCOMMAND_FLAGS: ReadonlyMap<string, ReadonlyMap<string, string>> = new Map();
 
 /**
  * Whether `cmd` accepts `flag`, by the same rules `validateFlags` applies;

@@ -2,9 +2,24 @@ import { Storage } from "../core/storage.ts";
 import { loadConfig } from "../core/config.ts";
 import { applyForgottenErasure, planForgottenErasure, type ErasureTargets } from "../core/forgotten-erasure.ts";
 import { withStorage } from "./with-storage.ts";
-import { eraseOwnerChat } from "../core/chat/store.ts";
+import type { Engine } from "../core/engine/interface.ts";
 
 export interface EraseOptions extends ErasureTargets { sub: string; apply?: boolean; planHash?: string; storage?: Storage; owner?: string }
+
+/** Count, and with `apply` delete, every chat thread and message of one owner a 2.x brain kept. */
+async function eraseOwnerChat(engine: Engine, ownerKey: string, apply: boolean): Promise<{ threads: number; messages: number }> {
+  return engine.transaction(async (tx) => {
+    // scope: operator-only the operator's erase command, keyed by the owner it names
+    const c = await tx.query<{ threads: number | string; messages: number | string }>(
+      `SELECT (SELECT count(*) FROM chat_threads WHERE owner_key = $1)::int AS threads,
+              (SELECT count(*) FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id WHERE t.owner_key = $1)::int AS messages`,
+      [ownerKey],
+    );
+    const counts = { threads: Number(c.rows[0]?.threads ?? 0), messages: Number(c.rows[0]?.messages ?? 0) };
+    if (apply) await tx.query(`DELETE FROM chat_threads WHERE owner_key = $1`, [ownerKey]);
+    return counts;
+  });
+}
 
 /** `erase chat --owner KEY [--apply]`: an owner's chat threads and messages. */
 async function runEraseChat(opts: EraseOptions): Promise<number> {
