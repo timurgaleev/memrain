@@ -13,6 +13,14 @@
  *                  write receipts past their replay window, and chat history
  *                  a 2.x brain kept, past MEMRAIN_CHAT_RETENTION_DAYS
  *
+ * The steps that delete or rebuild (purge, mirror_pages, embed_gaps,
+ * retention) obey the off-switches a 2.x maintenance cycle obeyed, so an
+ * install that had switched its cycle off keeps its rows after the upgrade:
+ * MEMRAIN_DAEMONS_DISABLED naming `cycle`, a paused `daemon_controls` row for
+ * every daemon or for the cycle, and MEMRAIN_CYCLE_SKIP_PHASES naming the
+ * step's 2.x phase (`purge` covers purge and retention, as its phase did).
+ * The token sweep and reservation expiry ran outside that cycle and still do.
+ *
  * One process does it at a time: the run holds the `memrain-cycle` row in
  * `cycle_locks`, the lock a 2.x maintenance cycle takes, so the two never
  * overlap on a shared database. A step that fails is recorded and the next
@@ -43,6 +51,17 @@ const EMBED_GAPS_MAX_FAILURES = 3;
 const DEFAULT_MIRROR_PAGES_MAX_PER_RUN = 200;
 const CHAT_DEFAULT_RETENTION_DAYS = 90;
 const CHAT_PURGE_BATCH = 5_000;
+const CHAT_PURGE_MAX_BATCHES = 100;
+const CHAT_THREAD_TITLE_MAX = 80;
+/** The daemon name a 2.x build paused or disabled its maintenance cycle under. */
+const CYCLE_DAEMON = "cycle";
+/** The 2.x cycle phase each switchable step was part of. */
+const STEP_PHASE: Readonly<Record<string, string>> = {
+  purge: "purge",
+  mirror_pages: "mirror-pages",
+  embed_gaps: "embed-gaps",
+  retention: "purge",
+};
 
 export interface HousekeepingOptions {
   /** Sweeps expired OAuth rows; absent when the server runs without its provider. */
@@ -50,6 +69,8 @@ export interface HousekeepingOptions {
   /** Test seam; production embeds with Titan. */
   embed?: EmbedBackfillOptions["embed"];
   now?: Date;
+  /** Where the off-switches are read; the process environment by default. */
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface HousekeepingResult {
@@ -76,23 +97,82 @@ export function chatRetentionDays(env: NodeJS.ProcessEnv = process.env): number 
   return days === 0 ? null : Math.min(days, 36_500);
 }
 
-/** Delete chat messages older than the retention window, then the threads left empty. */
+/**
+ * Why the steps a 2.x cycle ran must not run now, or null when they may.
+ * Fails closed: a control table that cannot be read holds them back.
+ */
+export async function cycleHold(engine: Pick<Engine, "query">, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  const disabled = (env.MEMRAIN_DAEMONS_DISABLED ?? "").split(",").map((d) => d.trim());
+  if (disabled.includes(CYCLE_DAEMON)) return "MEMRAIN_DAEMONS_DISABLED";
+  try {
+    const r = await engine.query<{ paused_reason: string | null; paused_by: string | null }>(
+      `SELECT paused_reason, paused_by FROM daemon_controls
+        WHERE paused AND source_id = '*' AND daemon IN ('*', $1)
+        ORDER BY daemon LIMIT 1`,
+      [CYCLE_DAEMON],
+    );
+    const row = r.rows[0];
+    if (!row) return null;
+    return row.paused_reason || `paused by ${row.paused_by || "operator"}`;
+  } catch (e) {
+    return `daemon controls unreadable: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+/** MEMRAIN_CYCLE_SKIP_PHASES as a set of 2.x phase names. */
+export function skippedPhases(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  return new Set((env.MEMRAIN_CYCLE_SKIP_PHASES ?? "").split(",").map((p) => p.trim()).filter(Boolean));
+}
+
+function chatThreadTitle(message: string): string {
+  const flat = message.replace(/\s+/g, " ").trim();
+  return flat.length > CHAT_THREAD_TITLE_MAX ? `${flat.slice(0, CHAT_THREAD_TITLE_MAX - 1)}…` : flat;
+}
+
+/**
+ * A thread is titled by its first question. Once retention took that
+ * question, the title is the oldest question left, or none: the expired
+ * text must not outlive itself in the thread list.
+ */
+async function retitleChatThreads(engine: Pick<Engine, "query">, threadIds: readonly string[]): Promise<void> {
+  if (threadIds.length === 0) return;
+  // scope: operator-only retention retitles the threads it just took messages from
+  const first = await engine.query<{ id: string; content: string }>(
+    `SELECT DISTINCT ON (thread_id) thread_id::text AS id, content FROM chat_messages
+      WHERE thread_id = ANY($1::uuid[]) AND role = 'user' ORDER BY thread_id, id`,
+    [threadIds],
+  );
+  const titles = new Map(first.rows.map((r) => [r.id, chatThreadTitle(r.content)]));
+  await engine.query(
+    `UPDATE chat_threads t SET title = v.title FROM unnest($1::uuid[], $2::text[]) AS v(id, title) WHERE t.id = v.id`,
+    [threadIds, threadIds.map((id) => titles.get(id) ?? null)],
+  );
+}
+
+/**
+ * Delete chat messages older than the retention window, then the threads
+ * left empty. Each batch retitles the threads it took messages from in the
+ * same transaction.
+ */
 async function purgeOldChat(engine: Engine, days: number | null, now: Date): Promise<{ messages: number; threads: number }> {
   if (days === null) return { messages: 0, threads: 0 };
   const cutoff = new Date(now.getTime() - days * 86_400_000).toISOString();
   let messages = 0;
-  for (;;) {
-    // scope: operator-only retention runs over every owner's history, by age alone
-    const r = await engine.query<{ n: string }>(
-      `WITH doomed AS (
-         SELECT id FROM chat_messages WHERE created_at < $1::timestamptz ORDER BY created_at LIMIT $2
-       ), gone AS (
-         DELETE FROM chat_messages m USING doomed d WHERE m.id = d.id RETURNING 1
-       )
-       SELECT count(*)::text AS n FROM gone`,
-      [cutoff, CHAT_PURGE_BATCH],
-    );
-    const n = Number(r.rows[0]?.n ?? 0);
+  for (let i = 0; i < CHAT_PURGE_MAX_BATCHES; i++) {
+    const n = await engine.transaction(async (tx) => {
+      // scope: operator-only retention runs over every owner's history, by age alone
+      const r = await tx.query<{ n: string; threads: string[] | null }>(
+        `WITH doomed AS (
+           SELECT id FROM chat_messages WHERE created_at < $1::timestamptz ORDER BY created_at LIMIT $2
+         ), gone AS (
+           DELETE FROM chat_messages m USING doomed d WHERE m.id = d.id RETURNING m.thread_id
+         )
+         SELECT count(*)::text AS n, array_agg(DISTINCT thread_id::text) AS threads FROM gone`,
+        [cutoff, CHAT_PURGE_BATCH],
+      );
+      await retitleChatThreads(tx, r.rows[0]?.threads ?? []);
+      return Number(r.rows[0]?.n ?? 0);
+    });
     messages += n;
     if (n < CHAT_PURGE_BATCH) break;
   }
@@ -140,6 +220,8 @@ export async function runHousekeeping(storage: Storage, opts: HousekeepingOption
   if (!lock) return { ran: false, reason: "locked", steps: {}, errors: [] };
   const now = opts.now ?? new Date();
   const result: HousekeepingResult = { ran: true, steps: {}, errors: [] };
+  const env = opts.env ?? process.env;
+  const skip = skippedPhases(env);
   const steps: [string, () => Promise<unknown>][] = [
     ["purge", async () => {
       const docs = await purgeExpiredDocuments(engine);
@@ -167,6 +249,15 @@ export async function runHousekeeping(storage: Storage, opts: HousekeepingOption
       if (!(await lock.refresh())) {
         result.stopped = true;
         break;
+      }
+      const phase = STEP_PHASE[name];
+      if (phase !== undefined) {
+        // Read before each step, so a pause set mid-run stops the next delete.
+        const hold = skip.has(phase) ? "MEMRAIN_CYCLE_SKIP_PHASES" : await cycleHold(engine, env);
+        if (hold !== null) {
+          result.steps[name] = { skipped: hold };
+          continue;
+        }
       }
       try {
         result.steps[name] = await run();

@@ -10,6 +10,9 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { CYCLE_LOCK_ID, tryAcquireDbLock } from "../src/core/db-lock.ts";
 import { chatRetentionDays, lastHousekeepingRun, runHousekeeping } from "../src/core/housekeeping.ts";
+import { deletePage, putPage } from "../src/core/pages.ts";
+import { startBackgroundWork } from "../src/commands/serve.ts";
+import { resolveQuiescence } from "../src/core/quiescence.ts";
 
 let tmp: string;
 let storage: Storage;
@@ -88,5 +91,121 @@ describe("housekeeping", () => {
     expect(chatRetentionDays({ MEMRAIN_CHAT_RETENTION_DAYS: "0" })).toBeNull();
     expect(chatRetentionDays({ MEMRAIN_CHAT_RETENTION_DAYS: "30" })).toBe(30);
     expect(chatRetentionDays({ MEMRAIN_CHAT_RETENTION_DAYS: "x" })).toBe(90);
+  });
+});
+
+describe("housekeeping obeys the off-switches a 2.x cycle obeyed", () => {
+  const SLUG = "notes/expired";
+  const THREAD = "00000000-0000-4000-8000-0000000000d1";
+
+  // A 2.x brain: a page soft-deleted far past its TTL and chat past its window.
+  async function seedExpired(): Promise<void> {
+    const e = storage.engine();
+    await putPage(storage, { slug: SLUG, markdown_body: "gone a long time" });
+    await deletePage(storage, SLUG);
+    await e.query(`UPDATE pages SET deleted_at = NOW() - interval '400 days' WHERE slug = $1`, [SLUG]);
+    await e.query(`INSERT INTO chat_threads (id, owner_key, source_id, title, updated_at) VALUES ($1, 'operator', 'default', 't', NOW() - interval '400 days')`, [THREAD]);
+    await e.query(`INSERT INTO chat_messages (thread_id, role, content, created_at) VALUES ($1, 'user', 'old', NOW() - interval '400 days')`, [THREAD]);
+  }
+  const pageRows = async () => (await storage.engine().query(`SELECT 1 FROM pages WHERE slug = $1`, [SLUG])).rows.length;
+  const chatRows = async () => (await storage.engine().query(`SELECT 1 FROM chat_messages WHERE thread_id = $1`, [THREAD])).rows.length;
+  const pause = (daemon: string) => storage.engine().query(
+    `INSERT INTO daemon_controls (daemon, source_id, paused, paused_reason, paused_by) VALUES ($1, '*', true, 'held for the upgrade', 'ops')`,
+    [daemon],
+  );
+
+  // Value: protects=the baseline the switches are measured against; fails_when=purge or
+  // retention stops deleting expired rows; why_new=the switch cases below need a control; seam=none
+  it("with no switch set, purges the expired page and the old chat", async () => {
+    await seedExpired();
+    const r = await runHousekeeping(storage, { env: {} });
+    expect(r.errors).toEqual([]);
+    expect(await pageRows()).toBe(0);
+    expect(await chatRows()).toBe(0);
+  });
+
+  // Value: protects=an install that switched its 2.x cycle off keeps its expired rows after the
+  // upgrade; fails_when=any one switch is ignored by a deleting step; why_new=housekeeping took
+  // over the cycle's deletes; seam=env and daemon_controls rows as 2.x wrote them
+  for (const [label, env, row] of [
+    ["MEMRAIN_DAEMONS_DISABLED naming cycle", { MEMRAIN_DAEMONS_DISABLED: "notifications, cycle" }, null],
+    ["MEMRAIN_CYCLE_SKIP_PHASES=purge", { MEMRAIN_CYCLE_SKIP_PHASES: "extract,purge" }, null],
+    ["a paused row for every daemon", {}, "*"],
+    ["a paused row for the cycle", {}, "cycle"],
+  ] as const) {
+    it(`keeps the expired page and the old chat under ${label}`, async () => {
+      await seedExpired();
+      if (row !== null) await pause(row);
+      let swept = 0;
+      const r = await runHousekeeping(storage, { env, sweepTokens: async () => ++swept });
+      expect(r.errors).toEqual([]);
+      expect(r.steps["purge"]).toMatchObject({ skipped: expect.any(String) });
+      expect(r.steps["retention"]).toMatchObject({ skipped: expect.any(String) });
+      expect(await pageRows()).toBe(1);
+      expect(await chatRows()).toBe(1);
+      // The token sweep ran outside the 2.x cycle and still runs.
+      expect(swept).toBe(1);
+    });
+  }
+
+  // Value: protects=a paused row for another daemon or one source leaves the cycle running, as in
+  // 2.x; fails_when=the hold matches too broadly; why_new=same; seam=daemon_controls rows
+  it("ignores a pause for another daemon", async () => {
+    await seedExpired();
+    await pause("connector_sync");
+    await runHousekeeping(storage, { env: {} });
+    expect(await pageRows()).toBe(0);
+  });
+
+  // Value: protects=skipping one phase leaves the others; fails_when=the skip list stops every
+  // step; why_new=same; seam=env
+  it("skips only the named phase", async () => {
+    const r = await runHousekeeping(storage, { env: { MEMRAIN_CYCLE_SKIP_PHASES: "mirror-pages,embed-gaps" } });
+    expect(r.steps["mirror_pages"]).toEqual({ skipped: "MEMRAIN_CYCLE_SKIP_PHASES" });
+    expect(r.steps["embed_gaps"]).toEqual({ skipped: "MEMRAIN_CYCLE_SKIP_PHASES" });
+    expect(r.steps["purge"]).not.toHaveProperty("skipped");
+  });
+
+  // Value: protects=MEMRAIN_CYCLE=0 and maintenance mode start no housekeeping at all;
+  // fails_when=serve starts the timer anyway; why_new=same; seam=the start function is a spy
+  it("starts nothing under MEMRAIN_CYCLE=0 or maintenance", () => {
+    let started = 0;
+    const deps = { startHousekeeping: () => { started++; return { stop: async () => {} }; } };
+    expect(startBackgroundWork(storage, resolveQuiescence({ MEMRAIN_CYCLE: "0" }), undefined, deps)).toBeNull();
+    expect(startBackgroundWork(storage, resolveQuiescence({ MEMRAIN_MAINTENANCE: "1" }), undefined, deps)).toBeNull();
+    expect(started).toBe(0);
+    expect(startBackgroundWork(storage, resolveQuiescence({}), undefined, deps)).not.toBeNull();
+    expect(started).toBe(1);
+  });
+});
+
+describe("chat retention", () => {
+  // Value: protects=an expired first question does not outlive itself as the thread title;
+  // fails_when=retention deletes messages without retitling their thread; why_new=2.x retitled
+  // in the same transaction; seam=none
+  it("retitles a thread from its oldest remaining question, or clears the title", async () => {
+    const e = storage.engine();
+    const kept = "00000000-0000-4000-8000-0000000000e1";
+    const emptied = "00000000-0000-4000-8000-0000000000e2";
+    await e.query(
+      `INSERT INTO chat_threads (id, owner_key, source_id, title) VALUES ($1, 'operator', 'default', 'expired secret question'),
+         ($2, 'operator', 'default', 'another expired question')`,
+      [kept, emptied],
+    );
+    await e.query(
+      `INSERT INTO chat_messages (thread_id, role, content, created_at) VALUES
+         ($1, 'user', 'expired secret question', NOW() - interval '400 days'),
+         ($1, 'user', 'a  fresh   question', NOW()),
+         ($2, 'user', 'another expired question', NOW() - interval '400 days'),
+         ($2, 'assistant', 'a fresh answer', NOW())`,
+      [kept, emptied],
+    );
+    const r = await runHousekeeping(storage, { env: {} });
+    expect(r.steps["retention"]).toMatchObject({ chat_messages: 2 });
+    const titles = await e.query<{ id: string; title: string | null }>(
+      `SELECT id::text AS id, title FROM chat_threads WHERE id = ANY($1::uuid[]) ORDER BY id`,
+      [[kept, emptied]],
+    );
+    expect(titles.rows).toEqual([{ id: kept, title: "a fresh question" }, { id: emptied, title: null }]);
   });
 });
