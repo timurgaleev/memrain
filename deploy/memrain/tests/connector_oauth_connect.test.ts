@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { fakeProvider, TEST_ACCESS_TOKEN, TEST_REFRESH_TOKEN, testProvider } from "./helpers/connector-test-provider.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { getAccount, readCredential, setAccountEnabled, markNeedsReconnect, credentialMeta } from "../src/core/connectors/accounts.ts";
 import { setOAuthClient } from "../src/core/connectors/oauth-clients.ts";
 import { ProviderRegistry } from "../src/core/connectors/providers.ts";

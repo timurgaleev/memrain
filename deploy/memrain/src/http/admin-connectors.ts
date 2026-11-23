@@ -83,7 +83,7 @@ import {
 } from "../core/connectors/oauth-connect.ts";
 import type { ConnectorProvider, ProviderRegistry, ProviderService } from "../core/connectors/providers.ts";
 import { builtinProviders, normalizeTenant } from "../core/connectors/providers.ts";
-import { connectorsStatus, loadKek, VaultError, type ConnectorsStatus, type Kek } from "../core/connectors/vault.ts";
+import { connectorsStatus, loadKek, VaultError, type ConnectorsStatus, type Kek } from "../core/vault.ts";
 
 export interface AdminConnectorDeps {
   storage: Storage;

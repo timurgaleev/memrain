@@ -11,7 +11,7 @@ import { storageEngines } from "./helpers/storage-engines.ts";
 import { deletePage, getPage, putPage, renamePage } from "../src/core/pages.ts";
 import { purgeDeletedPages } from "../src/core/pages-purge.ts";
 import { withSecretDisposition } from "../src/core/secret-scan.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { rotateKek } from "../src/core/connectors/vault-rotate.ts";
 import { parseFactsFence, renderFactsFence } from "../src/core/facts-fence.ts";
 import { OUTSIDE_NEUTRALIZED } from "../src/core/fence-carry.ts";

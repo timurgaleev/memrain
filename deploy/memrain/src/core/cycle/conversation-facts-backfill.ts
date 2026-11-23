@@ -30,7 +30,7 @@
  */
 import type { Storage } from "../storage.ts";
 import { runAsPath } from "../budget.ts";
-import { connectorPageSql } from "../connectors/page-kind.ts";
+import { connectorPageSql } from "../connector-page-kind.ts";
 import {
   EXTRACTION_ELIGIBLE_TYPES,
   FACTS_EXTRACT_VERSION,

@@ -12,7 +12,7 @@ import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { GOOGLE_ACCESS_TOKEN, GOOGLE_REFRESH_TOKEN, googleFetch, type GoogleWorld } from "./helpers/google-calendar-fake.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { createAccount, getAccount, storeCredential, type ConnectorAccount } from "../src/core/connectors/accounts.ts";
 import { ProviderRegistry } from "../src/core/connectors/providers.ts";
 import { googleProvider, GOOGLE_CALENDAR_READONLY } from "../src/core/connectors/google/provider.ts";

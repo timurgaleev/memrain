@@ -37,7 +37,7 @@ import type { SyncAccount, SyncDeps } from "./sync-engine.ts";
 import { registerConnectorSync, type ConnectorSyncRuntime } from "./sync-job.ts";
 import { createTokenProvider, tokenEndpointRefresh, type CredentialStore, type RefreshFn } from "./token-provider.ts";
 import { OAuthClientRejectedError, ProviderCannotSyncError, ReauthRequiredError } from "./types.ts";
-import { connectorsStatus, loadKek, type Kek } from "./vault.ts";
+import { connectorsStatus, loadKek, type Kek } from "../vault.ts";
 
 const MAX_REASON = 200;
 /** Every kind a connector page can be; a sweep finds nothing for kinds the account never wrote. */

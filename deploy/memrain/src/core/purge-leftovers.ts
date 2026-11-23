@@ -25,7 +25,7 @@ import type { OpsCheckResult } from "./doctor-ops.ts";
 import { lockPageSlugs } from "./pages.ts";
 import { bumpClock, bumpPageGeneration } from "./generation.ts";
 import { OperationError } from "./operation-error.ts";
-import { applyDerivedCleanup, planDerivedCleanup, type DerivedCleanupPlan, type DerivedCleanupResult } from "./synthesis/derived-cleanup.ts";
+import { applyDerivedCleanup, planDerivedCleanup, type DerivedCleanupPlan, type DerivedCleanupResult } from "./derived-cleanup.ts";
 
 const EXPORT_KIND = "memrain-purge-leftovers-export";
 const RESTORE_WRITER = "purge-leftovers:restore";

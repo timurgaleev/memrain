@@ -5,8 +5,7 @@ import { lockPageSlugs } from "./pages.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
 import { bumpDocumentClock, currentDocumentClock } from "./generation.ts";
 import { chunkMarkdown, AUTO_MARKDOWN_RECHUNK_VERSION } from "./chunkers/recursive.ts";
-import { stripFactsFence } from "./facts-fence.ts";
-import { stripTakesFence } from "./synthesis/takes-fence.ts";
+import { stripFactsFence, stripTakesFence } from "./fences.ts";
 import { guardSecrets, SecretRejectedError } from "./secret-scan.ts";
 import { compiledTruthHash, PAGE_MIRROR_PATH_SQL, PAGE_TRUTH_PATH_SQL, pageText, serializeCompiledTruth } from "./page-index.ts";
 

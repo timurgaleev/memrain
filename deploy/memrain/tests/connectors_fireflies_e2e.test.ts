@@ -17,7 +17,7 @@ import { registerSource } from "../src/core/sources.ts";
 import { putPage } from "../src/core/pages.ts";
 import { purgeDeletedPages } from "../src/core/pages-purge.ts";
 import { readExternalTrust } from "../src/core/trust-frame.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { getAccount, readCredential, setAccountEnabled, type ConnectorAccount } from "../src/core/connectors/accounts.ts";
 import type { ApiKeyConnectError} from "../src/core/connectors/api-key-connect.ts";
 import { connectApiKey } from "../src/core/connectors/api-key-connect.ts";

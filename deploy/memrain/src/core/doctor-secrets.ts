@@ -81,7 +81,7 @@ async function transcriptLaneCompletes(engine: Engine, from: number): Promise<Se
  * encrypted backup hold the store as it is now? Counts and key ids only.
  */
 export async function checkSecretStore(engine: Engine): Promise<OpsCheckResult> {
-  const { loadKek } = await import("./connectors/vault.ts");
+  const { loadKek } = await import("./vault.ts");
   const { unreferencedSecretOriginals } = await import("./secret-store.ts");
   const { readBackupStatus, secretStoreBackupDue } = await import("./secret-store-backup.ts");
   const key = loadKek();

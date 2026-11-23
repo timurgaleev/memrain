@@ -21,8 +21,6 @@
  */
 import { FENCE_BRANDS, fenceBounds, fenceMarkers, locateFenceMarkers, parseRowCells, isSeparatorRow, type FenceKind } from "./fence-shared.ts";
 import { neutralizeOutsideText } from "./neutralize-outside-text.ts";
-import { parseFactsFence } from "./facts-fence.ts";
-import { parseTakesFence } from "./synthesis/takes-fence.ts";
 
 /** Compiled-truth key the GitHub and transcript writers set on every page they write. */
 export const OUTSIDE_NEUTRALIZED = "outside_neutralized";
@@ -103,10 +101,20 @@ export function carryForwardFences(
   return `${newBody}${sep}${kept.map(text).join("\n\n")}\n`;
 }
 
-/** A managed-table edit can keep provenance only when every outside byte stays put. */
+/**
+ * A managed-table edit can keep provenance only when every outside byte stays
+ * put. Checked by shape, not by the facts or takes parsers: one fence per
+ * kind, a header naming `#` and `claim`, a separator row, and nothing but
+ * numbered table rows under them, so no free text can ride inside markers.
+ */
 export function preservesOutsideText(before: string, after: string): boolean {
   const oldOutside = outsideFences(before);
   return oldOutside !== null && oldOutside === outsideFences(after);
+}
+
+function isNumberedRow(line: string): boolean {
+  const cells = parseRowCells(line);
+  return cells !== null && /^\d+$/.test(cells[0] ?? "");
 }
 
 function outsideFences(body: string): string | null {
@@ -123,10 +131,7 @@ function outsideFences(body: string): string | null {
     const header = parseRowCells(rows[0] ?? "");
     const separator = parseRowCells(rows[1] ?? "");
     if (!header?.includes("claim") || !header.includes("#") || !separator || !isSeparatorRow(separator)) return null;
-    const warnings: string[] = [];
-    if (kind === "facts") parseFactsFence(body, warnings);
-    else warnings.push(...parseTakesFence(body).warnings);
-    if (warnings.length > 0) return null;
+    if (!rows.slice(2).every(isNumberedRow)) return null;
     let start = loc.beginLine;
     while (start > 0 && lines[start - 1]!.trim() === "") start--;
     if (start > 0 && lines[start - 1]!.replace(/\r?\n$/, "") === heading) start--;

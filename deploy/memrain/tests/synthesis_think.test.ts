@@ -21,7 +21,7 @@ import {
   stripGapsSection,
 } from "../src/core/synthesis/think.ts";
 import { persistThinkSynthesis } from "../src/core/synthesis/think-persist.ts";
-import { ReferenceDateError } from "../src/core/synthesis/think-temporal.ts";
+import { ReferenceDateError } from "../src/core/temporal.ts";
 import { autoThinkPhase } from "../src/core/synthesis/auto-think.ts";
 import { getPage } from "../src/core/pages.ts";
 import { runThinkCli } from "../src/commands/think.ts";

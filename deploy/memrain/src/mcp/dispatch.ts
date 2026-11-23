@@ -279,7 +279,7 @@ import { getBrainHotMemoryMeta, invalidateHotMemoryMeta } from "../core/hot-memo
 import { factInputMetadata, normalizeAddFactItems, runAddFactBatch } from "../core/facts-batch.ts";
 import { replaceFact } from "../core/facts-replace.ts";
 import { similarActiveAfterForget } from "../core/facts-similar-active.ts";
-import { ReferenceDateError, resolveThinkTemporalContext } from "../core/synthesis/think-temporal.ts";
+import { ReferenceDateError, resolveThinkTemporalContext } from "../core/temporal.ts";
 import { MAX_REQUEST_ID_LEN, OPERATIONS, normalizeOptionalArgs, validateParams } from "./operations.ts";
 import {
   claimWriteRequest,
@@ -726,7 +726,7 @@ async function dispatchToolInner(
         // Defence in depth: the admin panel is the operator (no token, not the public ingress).
         if (!isOperator) throw new OperationError("permission_denied", "reveal_secret is for the brain owner only");
         const { revealSecret } = await import("../core/secret-store.ts");
-        const { VaultError } = await import("../core/connectors/vault.ts");
+        const { VaultError } = await import("../core/vault.ts");
         const actor = "admin-panel";
         try {
           return jsonResult({ ok: true, ...await revealSecret(storage.engine(), {

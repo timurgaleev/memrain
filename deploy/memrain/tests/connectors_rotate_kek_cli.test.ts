@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Storage } from "../src/core/storage.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { createAccount, readCredential, storeCredential } from "../src/core/connectors/accounts.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { runConnectors } from "../src/commands/connectors.ts";
 
 const OLD = randomBytes(32);

@@ -38,7 +38,7 @@ import { putPage, validateSlug } from "../core/pages.ts";
 import { mirrorPage } from "../core/page-index.ts";
 import { neutralizeOutsideText } from "../core/neutralize-outside-text.ts";
 import { auditSecrets, guardEchoes, guardSecrets, withSecretDisposition, type EchoDictionary, type SecretFinding } from "../core/secret-scan.ts";
-import { dayInZone, thinkTimeZone } from "../core/synthesis/think-temporal.ts";
+import { dayInZone, thinkTimeZone } from "../core/temporal.ts";
 import { withStorage } from "./with-storage.ts";
 
 export const CALL_FILE_RE = /\.(txt|md)$/i;

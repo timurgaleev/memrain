@@ -46,7 +46,7 @@
  * TAKES_FENCE_MIXED warning, never rewritten).
  */
 
-import { locateFenceMarkers, fenceMarkers, FENCE_BRANDS, parseRowCells, escapeFenceCell, type FenceBrand } from "../fence-shared.ts";
+import { locateFenceMarkers, fenceMarkers, parseRowCells, escapeFenceCell, type FenceBrand } from "../fence-shared.ts";
 
 export type FenceTakeKind = string;
 
@@ -535,34 +535,4 @@ export function supersedeRow(
   return { body: out, oldRowNum, newRowNum };
 }
 
-/**
- * Strip the fenced takes block from a body — used so takes content lives only
- * in the takes table, not duplicated into page chunks. No-op when no fence is
- * present or the input is not a string. Every brand present is stripped.
- */
-export function stripTakesFence(body: string): string {
-  if (typeof body !== "string") return body;
-  let out = body;
-  for (const brand of FENCE_BRANDS) out = stripOneTakesFence(out, fenceMarkers("takes", brand));
-  return out;
-}
-
-function stripOneTakesFence(body: string, markers: { begin: string; end: string }): string {
-  if (!body.includes(markers.begin)) return body;
-  const lines = body.split(/\r?\n/);
-  const begin = lines.findIndex((l) => l.trim() === markers.begin);
-  const end = lines.findIndex((l) => l.trim() === markers.end);
-  if (begin === -1 || end === -1 || end <= begin) return body;
-
-  // Also drop a `## Takes` heading directly above the fence (and any blank lines
-  // between them), so stripping doesn't leave a dangling header that chunks as
-  // search noise — mirrors stripFactsFence.
-  let from = begin;
-  let probe = begin - 1;
-  while (probe >= 0 && (lines[probe] ?? "").trim() === "") probe--;
-  if (probe >= 0 && /^#{1,6}\s+takes\s*$/i.test((lines[probe] ?? "").trim())) {
-    from = probe;
-  }
-  const kept = [...lines.slice(0, from), ...lines.slice(end + 1)];
-  return kept.join("\n");
-}
+export { stripTakesFence } from "../fences.ts";

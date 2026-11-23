@@ -15,7 +15,7 @@ import { storageEngines } from "./helpers/storage-engines.ts";
 import { gmailFetch, plainMessage, threadCalls, type GmailWorld, type RawMessage } from "./helpers/gmail-fake.ts";
 import { GOOGLE_ACCESS_TOKEN } from "./helpers/google-calendar-fake.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { createAccount, getAccount, setAccountConfig, setAccountEnabled, storeCredential } from "../src/core/connectors/accounts.ts";
 import { ProviderRegistry } from "../src/core/connectors/providers.ts";
 import { readCursor, writeCursor } from "../src/core/connectors/sync-store.ts";

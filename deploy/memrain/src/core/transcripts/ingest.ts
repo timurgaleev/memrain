@@ -35,7 +35,7 @@ import {
   withSecretOriginals,
 } from "../secret-scan.ts";
 import { allowedSecretFingerprints } from "../secret-store.ts";
-import { loadKek, seal, unseal, type Sealed } from "../connectors/vault.ts";
+import { loadKek, seal, unseal, type Sealed } from "../vault.ts";
 import { renderSession, sessionBaseSlug, type RenderedPart } from "./render.ts";
 import type { TranscriptSession } from "./types.ts";
 import type { TrustTier } from "../trust-tier.ts";

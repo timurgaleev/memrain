@@ -15,7 +15,7 @@ import { registerSource } from "../src/core/sources.ts";
 import { createAccount } from "../src/core/connectors/accounts.ts";
 import { conversationFactsBackfillPhase } from "../src/core/cycle/conversation-facts-backfill.ts";
 import { isFactsExtractionEligible } from "../src/core/facts-extract.ts";
-import { isConnectorPageType } from "../src/core/connectors/page-kind.ts";
+import { isConnectorPageType } from "../src/core/connector-page-kind.ts";
 import { mirrorPage } from "../src/core/page-index.ts";
 import type { SonnetFn } from "../src/core/llm/sonnet.ts";
 import type { LlmFn } from "../src/core/llm/haiku.ts";

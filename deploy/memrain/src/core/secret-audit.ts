@@ -41,8 +41,8 @@ import {
   type SecretFinding,
   type SecretOriginal,
 } from "./secret-scan.ts";
-import { connectorPageSql } from "./connectors/page-kind.ts";
-import { loadKek } from "./connectors/vault.ts";
+import { connectorPageSql } from "./connector-page-kind.ts";
+import { loadKek } from "./vault.ts";
 import { OperationError } from "./operation-error.ts";
 import { allowedSecretFingerprints } from "./secret-store.ts";
 import { carryForwardFences, OUTSIDE_NEUTRALIZED } from "./fence-carry.ts";

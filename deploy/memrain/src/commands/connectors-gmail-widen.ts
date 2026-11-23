@@ -41,7 +41,7 @@ import { getAccount, setAccountConfig, type ConnectorAccount } from "../core/con
 import { builtinProviders, type ProviderRegistry } from "../core/connectors/providers.ts";
 import { connectorRuntime, toSyncAccount } from "../core/connectors/runtime.ts";
 import { readCursor } from "../core/connectors/sync-store.ts";
-import { loadKek, type Kek } from "../core/connectors/vault.ts";
+import { loadKek, type Kek } from "../core/vault.ts";
 import {
   GMAIL_HISTORY_DAYS,
   GMAIL_LIST_EXCLUSIONS,

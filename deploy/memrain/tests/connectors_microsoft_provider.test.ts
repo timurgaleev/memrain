@@ -27,7 +27,7 @@ import {
   type MicrosoftWorld,
 } from "./helpers/microsoft-fake.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { credentialMeta, getAccount, readCredential } from "../src/core/connectors/accounts.ts";
 import { getOAuthClient, setOAuthClient } from "../src/core/connectors/oauth-clients.ts";
 import { builtinProviders } from "../src/core/connectors/providers.ts";

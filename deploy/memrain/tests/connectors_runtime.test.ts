@@ -8,7 +8,7 @@ import { describe, expect, it } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { createAccount, getAccount, markNeedsReconnect, setAccountStatus, storeCredential } from "../src/core/connectors/accounts.ts";
 import { vaultCredentialStore } from "../src/core/connectors/runtime.ts";
 

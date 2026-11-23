@@ -11,7 +11,7 @@
 import { randomUUID } from "node:crypto";
 import type { Engine } from "../engine/interface.ts";
 import type { EchoDictionary } from "../secret-scan.ts";
-import { credentialAad, seal, unseal, type Kek } from "./vault.ts";
+import { credentialAad, seal, unseal, type Kek } from "../vault.ts";
 import { PROVIDER_USER_ID } from "./model.ts";
 
 export const CONNECTOR_ACCOUNT_STATUSES = ["active", "paused", "needs_reconnect", "revoked", "error"] as const;

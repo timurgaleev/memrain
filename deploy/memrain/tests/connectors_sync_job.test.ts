@@ -29,7 +29,7 @@ import {
 } from "../src/core/connectors/sync-job.ts";
 import { connectorRuntime } from "../src/core/connectors/runtime.ts";
 import { ProviderRegistry } from "../src/core/connectors/providers.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { testProvider } from "./helpers/connector-test-provider.ts";
 import { deterministicEmbed } from "./det-embed.ts";
 import { fakeClock, replay } from "./github-recorded.ts";

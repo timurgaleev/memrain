@@ -11,7 +11,7 @@ import {
   seal,
   unseal,
   VaultError,
-} from "../src/core/connectors/vault.ts";
+} from "../src/core/vault.ts";
 
 const kek = kekFromBytes(randomBytes(32));
 const other = kekFromBytes(randomBytes(32));

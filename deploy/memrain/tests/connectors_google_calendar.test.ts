@@ -15,7 +15,7 @@ import { storageEngines } from "./helpers/storage-engines.ts";
 import { eventListCalls, GOOGLE_ACCESS_TOKEN, GOOGLE_FIXTURES, googleFetch, type GoogleWorld } from "./helpers/google-calendar-fake.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { putPage } from "../src/core/pages.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { getAccount, setAccountEnabled, storeCredential, type ConnectorAccount } from "../src/core/connectors/accounts.ts";
 import { setOAuthClient } from "../src/core/connectors/oauth-clients.ts";
 import { completeConnect, ConnectError, connectorCallbackUri, startConnect, type ConnectDeps } from "../src/core/connectors/oauth-connect.ts";

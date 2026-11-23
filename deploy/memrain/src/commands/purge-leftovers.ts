@@ -1,6 +1,6 @@
 import { Storage } from "../core/storage.ts";
 import { loadConfig } from "../core/config.ts";
-import { planDerivedCleanup } from "../core/synthesis/derived-cleanup.ts";
+import { planDerivedCleanup } from "../core/derived-cleanup.ts";
 import { applyPurgeLeftovers, restorePurgeLeftovers } from "../core/purge-leftovers.ts";
 import { clearPageTombstones } from "../core/pages-purge.ts";
 import { withStorage } from "./with-storage.ts";

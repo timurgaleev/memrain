@@ -19,7 +19,7 @@
  */
 import type { Engine } from "./engine/interface.ts";
 import { assertSqlAlias } from "./quarantine.ts";
-import { slugifyTitle } from "./synthesis/atoms.ts";
+import { slugifyTitle } from "./derived-cleanup.ts";
 import type { BrainAccess } from "./caller-access.ts";
 
 export type DerivedRowKind = "fact" | "timeline" | "take" | "atom" | "page";

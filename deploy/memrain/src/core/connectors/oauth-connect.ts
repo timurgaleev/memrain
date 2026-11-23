@@ -54,7 +54,7 @@ import { openNotice, resolveNotice } from "./sync-store.ts";
 import { acquireWorkerLock, heartbeatWorkerLock, releaseWorkerLock } from "../jobs/worker-lock.ts";
 import { refreshLockId } from "./token-provider.ts";
 import { normalizeTenant, oauthEndpoints, type ConnectorProvider, type ProviderRegistry } from "./providers.ts";
-import { oauthStateAad, seal, unseal, type Kek } from "./vault.ts";
+import { oauthStateAad, seal, unseal, type Kek } from "../vault.ts";
 
 export const OAUTH_STATE_TTL_MS = 10 * 60_000;
 /** Consumed and expired states linger this long, then the next start prunes them. */

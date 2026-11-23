@@ -12,7 +12,7 @@
 import type { Engine } from "../engine/interface.ts";
 import { assertConnectorName, ConnectorAccountError } from "./accounts.ts";
 import { normalizeTenant } from "./providers.ts";
-import { oauthClientAad, seal, unseal, type Kek } from "./vault.ts";
+import { oauthClientAad, seal, unseal, type Kek } from "../vault.ts";
 
 /** OAuth client ids and secrets are printable ASCII with no whitespace. */
 const CLIENT_TOKEN_RE = /^[\x21-\x7E]+$/;

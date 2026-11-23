@@ -14,7 +14,7 @@ import type { Storage } from "../src/core/storage.ts";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import type { Engine } from "../src/core/engine/interface.ts";
 import { putPage } from "../src/core/pages.ts";
-import { planDerivedCleanup } from "../src/core/synthesis/derived-cleanup.ts";
+import { planDerivedCleanup } from "../src/core/derived-cleanup.ts";
 import { applyPurgeLeftovers, checkPurgeLeftovers, restorePurgeLeftovers } from "../src/core/purge-leftovers.ts";
 import { pageSourcePath } from "../src/core/page-index.ts";
 import { deterministicEmbed } from "./det-embed.ts";

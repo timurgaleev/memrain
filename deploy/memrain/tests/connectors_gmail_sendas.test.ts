@@ -12,7 +12,7 @@ import { fixtureMessages, GMAIL_FIXTURES, gmailFetch, plainMessage, sendAsCalls,
 import { GOOGLE_ACCESS_TOKEN } from "./helpers/google-calendar-fake.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { putPage } from "../src/core/pages.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { createAccount, getAccount, setAccountConfig, setAccountEnabled, storeCredential } from "../src/core/connectors/accounts.ts";
 import { ProviderRegistry } from "../src/core/connectors/providers.ts";
 import { runConnectorSync } from "../src/core/connectors/sync-engine.ts";

@@ -12,7 +12,7 @@ import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { SLACK_BOT_TOKEN, SLACK_TEAM, slackCalls, slackFetch, type SlackWorld } from "./helpers/slack-fake.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { getAccount, type ConnectorAccount } from "../src/core/connectors/accounts.ts";
 import { connectApiKey } from "../src/core/connectors/api-key-connect.ts";
 import { ProviderRegistry } from "../src/core/connectors/providers.ts";

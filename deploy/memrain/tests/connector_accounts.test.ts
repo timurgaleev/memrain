@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { deleteSource, registerSource, sourceReferences } from "../src/core/sources.ts";
-import { kekFromBytes, oauthStateAad, seal, VaultError } from "../src/core/connectors/vault.ts";
+import { kekFromBytes, oauthStateAad, seal, VaultError } from "../src/core/vault.ts";
 import {
   createAccount,
   credentialMeta,

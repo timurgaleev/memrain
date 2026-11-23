@@ -23,7 +23,7 @@ import type { EnqueueOutcome, Queue } from "../jobs/queue.ts";
 import { UnrecoverableJobError, type JobHandler, type JobRow } from "../jobs/types.ts";
 import { runConnectorSync, type SyncAccount, type SyncDeps } from "./sync-engine.ts";
 import { CONNECTOR_SYNC_DAEMON } from "./sync-daemon.ts";
-import { connectorsSwitchOn } from "./vault.ts";
+import { connectorsSwitchOn } from "../vault.ts";
 import { ProviderCannotSyncError } from "./types.ts";
 
 export { CONNECTOR_SYNC_DAEMON };

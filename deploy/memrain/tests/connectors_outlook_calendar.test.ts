@@ -17,7 +17,7 @@ import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { deltaCalls, GRAPH_ACCESS_TOKEN, GRAPH_FIXTURES, graphFetch, MS_TOKEN_URL, type GraphWorld } from "./helpers/graph-calendar-fake.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { getAccount, setAccountConfig, setAccountEnabled, type ConnectorAccount } from "../src/core/connectors/accounts.ts";
 import { completeConnect, ConnectError, connectorCallbackUri, disconnectAccount, startConnect, type ConnectDeps } from "../src/core/connectors/oauth-connect.ts";
 import { builtinProviders, normalizeTenant, oauthEndpoints, ProviderRegistry } from "../src/core/connectors/providers.ts";

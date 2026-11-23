@@ -28,13 +28,83 @@
  * paths) or refuses when the reviewed hash no longer matches (the repair).
  */
 import { createHash, randomUUID } from "node:crypto";
-import type { Engine } from "../engine/interface.ts";
-import { hashBody, lockPageSlugs, softDeleteLockedPage } from "../pages.ts";
-import { pageSourcePath, pageTruthSourcePath } from "../page-index.ts";
-import { bumpClock, bumpDocumentClock, bumpPageGeneration } from "../generation.ts";
-import { OperationError } from "../operation-error.ts";
-import { slugifyTitle } from "./atoms.ts";
-import { atomSourceLiveSql, CONCEPT_WRITER, conceptPageBody, deterministicNarrative, tierFor } from "./concepts.ts";
+import type { Engine } from "./engine/interface.ts";
+import { hashBody, lockPageSlugs, softDeleteLockedPage } from "./pages.ts";
+import { pageSourcePath, pageTruthSourcePath } from "./page-index.ts";
+import { bumpClock, bumpDocumentClock, bumpPageGeneration } from "./generation.ts";
+import { OperationError } from "./operation-error.ts";
+
+// The atom and concept shapes the synthesis phases of a 2.x brain wrote;
+// cleanup rebuilds a concept with the same deterministic text they used.
+
+/** Kebab page-slug segment from a free-text title. */
+export function slugifyTitle(title: string): string {
+  // Measured linear through slugifyTitle: 0.6 ms at 800 K chars, ratio 1.99 on
+  // a doubling (`-`*n, `!`*n and `-a`*n/2 all agree). The `-+` run the rule
+  // warns about cannot reach either trim: the `[^a-z0-9]+` collapse on the line
+  // above rewrites EVERY run of non-alphanumerics to a single `-`, so by the
+  // time these two run the string has no two adjacent dashes to back over.
+  const s = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    // eslint-disable-next-line regexp/no-super-linear-move
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60)
+    // ...and this one also sees at most 60 chars, whatever the title was.
+    // eslint-disable-next-line regexp/no-super-linear-move
+    .replace(/^-+|-+$/g, "");
+  return s.length > 0 ? s : "atom";
+}
+
+const TIER_T1_MIN = 10;
+const TIER_T2_MIN = 5;
+export const TIER_T3_MIN = 2;
+
+/** The writer of every concept page version this phase publishes. */
+export const CONCEPT_WRITER = "synthesize-concepts";
+
+/** The body of a concept page: the narrative and up to ten member titles. */
+export function conceptPageBody(narrative: string, titles: readonly string[]): string {
+  const mentions = titles.slice(0, 10).map((t) => `- ${t}`).join("\n");
+  return `${narrative}\n\n## Atoms (${titles.length})\n${mentions}\n`;
+}
+
+/**
+ * Whether the atom `a` (with its document LEFT JOINed as `d`) still has a live
+ * source: a document that exists and is not deleted, or a live page.
+ */
+export function atomSourceLiveSql(a: string, d: string): string {
+  // scope: operator-only synthesis rows have no source axis; this only asks whether the source is still live
+  return `CASE ${a}.source_kind
+            WHEN 'document' THEN ${d}.id IS NOT NULL AND ${d}.deleted_at IS NULL
+            WHEN 'page' THEN EXISTS (SELECT 1 FROM pages sp WHERE sp.slug = ${a}.source_ref AND sp.deleted_at IS NULL)
+            ELSE true END`;
+}
+
+export type ConceptTier = "T1" | "T2" | "T3";
+
+export function tierFor(count: number): ConceptTier {
+  if (count >= TIER_T1_MIN) return "T1";
+  if (count >= TIER_T2_MIN) return "T2";
+  return "T3";
+}
+
+/** A concept's display name: the last slug segment, hyphens as spaces. */
+export function conceptName(slug: string): string {
+  return (slug.split("/").pop() ?? slug).replace(/-/g, " ");
+}
+
+/**
+ * Deterministic narrative for T3 groups (and LLM-failure fallback). It names
+ * the concept: one atom carries several concept tags, so two concepts often
+ * share their atoms, and without the name their pages would be byte-identical
+ * and their search text would never say which concept it is.
+ */
+export function deterministicNarrative(group: { slug: string; tier: ConceptTier; titles: readonly string[] }): string {
+  const n = group.titles.length;
+  const top = group.titles.slice(0, 5).map((t) => `- ${t}`).join("\n");
+  return `${group.tier} concept "${conceptName(group.slug)}". ${n} atom${n === 1 ? "" : "s"} reference this.\nTop mentions:\n${top}`;
+}
 
 /** A contradiction row snapshotting one of the facts `$1`, takes `$2` or pages `$3`. */
 const CONTRADICTION_REFS = `(a_kind = 'fact' AND a_ref = ANY($1::text[])) OR (b_kind = 'fact' AND b_ref = ANY($1::text[]))

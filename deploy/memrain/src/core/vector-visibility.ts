@@ -16,8 +16,7 @@
 import type { Engine } from "./engine/interface.ts";
 import { PAGE_MIRROR_PATH_SQL } from "./page-index.ts";
 import { chunkMarkdown } from "./chunkers/recursive.ts";
-import { stripFactsFence } from "./facts-fence.ts";
-import { stripTakesFence } from "./synthesis/takes-fence.ts";
+import { stripFactsFence, stripTakesFence } from "./fences.ts";
 import { isQuarantined } from "./quarantine.ts";
 import { isEmbedSkipped } from "./embed-skip.ts";
 

@@ -16,6 +16,7 @@
  * deterministic narrative, never aborts).
  */
 import { createHash } from "node:crypto";
+import { atomSourceLiveSql, CONCEPT_WRITER, conceptName, conceptPageBody, deterministicNarrative, TIER_T3_MIN, tierFor, type ConceptTier } from "../derived-cleanup.ts";
 import type { Engine } from "../engine/interface.ts";
 import { isTruncated } from "../llm/truncation.ts";
 import { TERMINAL_STOP_REASONS } from "../llm/converse.ts";
@@ -83,32 +84,10 @@ function conceptsBudgetUsd(): number {
   return n;
 }
 
-/** The writer of every concept page version this phase publishes. */
-export const CONCEPT_WRITER = "synthesize-concepts";
 
-/** The body of a concept page: the narrative and up to ten member titles. */
-export function conceptPageBody(narrative: string, titles: readonly string[]): string {
-  const mentions = titles.slice(0, 10).map((t) => `- ${t}`).join("\n");
-  return `${narrative}\n\n## Atoms (${titles.length})\n${mentions}\n`;
-}
 
-/**
- * Whether the atom `a` (with its document LEFT JOINed as `d`) still has a live
- * source: a document that exists and is not deleted, or a live page.
- */
-export function atomSourceLiveSql(a: string, d: string): string {
-  // scope: operator-only synthesis rows have no source axis; this only asks whether the source is still live
-  return `CASE ${a}.source_kind
-            WHEN 'document' THEN ${d}.id IS NOT NULL AND ${d}.deleted_at IS NULL
-            WHEN 'page' THEN EXISTS (SELECT 1 FROM pages sp WHERE sp.slug = ${a}.source_ref AND sp.deleted_at IS NULL)
-            ELSE true END`;
-}
 
-const TIER_T1_MIN = 10;
-const TIER_T2_MIN = 5;
-const TIER_T3_MIN = 2;
 
-export type ConceptTier = "T1" | "T2" | "T3";
 
 export interface SynthesizeConceptsOptions {
   /** Max concept groups to LLM-synthesize this run (cost guard). Default 30. */
@@ -163,11 +142,6 @@ interface ConceptGroup {
   bodies: string[];
 }
 
-export function tierFor(count: number): ConceptTier {
-  if (count >= TIER_T1_MIN) return "T1";
-  if (count >= TIER_T2_MIN) return "T2";
-  return "T3";
-}
 
 /** Normalize a stored `concepts` JSONB into a clean string[]. Never throws. */
 function parseConcepts(raw: unknown): string[] {
@@ -185,22 +159,7 @@ function parseConcepts(raw: unknown): string[] {
     .map((c) => slugifyTitle(c)))];
 }
 
-/** A concept's display name: the last slug segment, hyphens as spaces. */
-export function conceptName(slug: string): string {
-  return (slug.split("/").pop() ?? slug).replace(/-/g, " ");
-}
 
-/**
- * Deterministic narrative for T3 groups (and LLM-failure fallback). It names
- * the concept: one atom carries several concept tags, so two concepts often
- * share their atoms, and without the name their pages would be byte-identical
- * and their search text would never say which concept it is.
- */
-export function deterministicNarrative(group: Pick<ConceptGroup, "slug" | "tier" | "titles">): string {
-  const n = group.titles.length;
-  const top = group.titles.slice(0, 5).map((t) => `- ${t}`).join("\n");
-  return `${group.tier} concept "${conceptName(group.slug)}". ${n} atom${n === 1 ? "" : "s"} reference this.\nTop mentions:\n${top}`;
-}
 
 export async function synthesizeConceptsPhase(
   engine: Engine,
@@ -414,3 +373,5 @@ export async function synthesizeConceptsPhase(
 
   return result;
 }
+
+export { atomSourceLiveSql, CONCEPT_WRITER, conceptName, conceptPageBody, deterministicNarrative, tierFor, type ConceptTier };

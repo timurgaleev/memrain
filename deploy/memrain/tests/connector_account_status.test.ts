@@ -14,7 +14,7 @@ import { Storage } from "../src/core/storage.ts";
 import { accountStatusLine, runConnectors } from "../src/commands/connectors.ts";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import {
   createAccount,
   credentialMeta,

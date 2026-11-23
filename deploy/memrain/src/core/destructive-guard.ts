@@ -9,7 +9,7 @@
  */
 import type { Engine } from "./engine/interface.ts";
 import { bumpDocumentClock } from "./generation.ts";
-import { applyDerivedCleanup, planDerivedCleanup, type DerivedCleanupResult } from "./synthesis/derived-cleanup.ts";
+import { applyDerivedCleanup, planDerivedCleanup, type DerivedCleanupResult } from "./derived-cleanup.ts";
 import { codePrunesKeptFromPurge } from "./code-prune.ts";
 
 /** Hours a soft-deleted / archived document survives before hard purge. */
@@ -178,7 +178,7 @@ export interface PurgeResult {
  * archived whose `archive_expires_at` has passed. Cascades to chunks/embeddings
  * via FK; what synthesis derived from them (atoms, their pages, takes,
  * concepts) has no foreign key and goes in the same transaction
- * (synthesis/derived-cleanup.ts). Set-based; safe to run every cycle.
+ * (core/derived-cleanup.ts). Set-based; safe to run every cycle.
  */
 export async function purgeExpiredDocuments(
   engine: Engine,

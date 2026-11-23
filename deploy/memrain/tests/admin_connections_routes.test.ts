@@ -12,7 +12,7 @@ import { storageEngines } from "./helpers/storage-engines.ts";
 import { fakeProvider, TEST_ACCESS_TOKEN, TEST_REFRESH_TOKEN, testProvider } from "./helpers/connector-test-provider.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { putPage } from "../src/core/pages.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { builtinProviders, ProviderRegistry } from "../src/core/connectors/providers.ts";
 import { createAccount, getAccount, setAccountStatus, storeCredential, type ConnectorAccount } from "../src/core/connectors/accounts.ts";
 import { getOAuthClient, setOAuthClient } from "../src/core/connectors/oauth-clients.ts";

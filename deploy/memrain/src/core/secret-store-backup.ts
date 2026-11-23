@@ -19,7 +19,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 import type { Engine } from "./engine/interface.ts";
 import { resolveConfigDir } from "./config.ts";
-import { loadKek, unseal, VaultError, type Kek } from "./connectors/vault.ts";
+import { loadKek, unseal, VaultError, type Kek } from "./vault.ts";
 import { OperationError } from "./operation-error.ts";
 import { secretStoreAad } from "./secret-store.ts";
 

@@ -7,7 +7,7 @@
 import { loadConfig } from "../core/config.ts";
 import { Storage } from "../core/storage.ts";
 import { rotateKek } from "../core/connectors/vault-rotate.ts";
-import { loadKek, VaultError } from "../core/connectors/vault.ts";
+import { loadKek, VaultError } from "../core/vault.ts";
 import { withStorage } from "./with-storage.ts";
 
 export interface RotateKekOptions {

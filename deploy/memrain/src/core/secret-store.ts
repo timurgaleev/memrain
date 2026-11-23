@@ -5,7 +5,7 @@
  * A page write collects the values its scans replace (withSecretOriginals in
  * secret-scan.ts). Once the page row is written, every value whose marker
  * `[REDACTED:<kind>:<fingerprint>]` the stored title, body or truth holds is
- * sealed under the connector key (connectors/vault.ts) with its source and
+ * sealed under the connector key (core/vault.ts) with its source and
  * fingerprint as additional authenticated data, and each place the marker
  * landed is recorded. A marker typed into a page by hand binds to nothing.
  *
@@ -19,7 +19,7 @@
 import { createHash } from "node:crypto";
 import type { Engine } from "./engine/interface.ts";
 import type { Storage } from "./storage.ts";
-import { loadKek, seal, unseal, VaultError, type Kek } from "./connectors/vault.ts";
+import { loadKek, seal, unseal, VaultError, type Kek } from "./vault.ts";
 import { logIngest } from "./ingest-log.ts";
 import { appendAudit, auditDir } from "./audit-week-file.ts";
 import { OperationError } from "./operation-error.ts";

@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { createAccount, markNeedsReconnect, storeCredential } from "../src/core/connectors/accounts.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { setOAuthClient } from "../src/core/connectors/oauth-clients.ts";
 import { checkConnectorAccounts } from "../src/core/connectors/doctor.ts";
 

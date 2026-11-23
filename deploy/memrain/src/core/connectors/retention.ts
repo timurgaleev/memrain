@@ -62,7 +62,7 @@ import { logIngest } from "../ingest-log.ts";
 import { OperationError } from "../operation-error.ts";
 import { deadlockSafeTransaction } from "../retry.ts";
 import { slugifyTitle } from "../synthesis/atoms.ts";
-import { deleteSynthesisDerived } from "../synthesis/derived-cleanup.ts";
+import { deleteSynthesisDerived } from "../derived-cleanup.ts";
 import { purgeSecretOriginals } from "../secret-store.ts";
 import { shortHash, SOURCE_KIND_FOR, type ConnectorDataKind } from "./model.ts";
 import {

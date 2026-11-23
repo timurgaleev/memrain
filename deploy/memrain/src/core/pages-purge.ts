@@ -13,7 +13,7 @@
  * purged old name to a live page is the rename redirect and stays. Facts
  * written on or about a purged page are retired (cause 'purge') in that
  * transaction too, before the row goes, with a receipt naming the retired ids,
- * and so is what synthesis derived from the page (synthesis/derived-cleanup.ts).
+ * and so is what synthesis derived from the page (core/derived-cleanup.ts).
  * An explicit purge of named pages also tombstones their content hashes, so no
  * later write brings the text back.
  *
@@ -32,7 +32,7 @@ import { andSourceScope } from "./source-scope.ts";
 import { deadlockSafeTransaction } from "./retry.ts";
 import { hashBody, tombstoneLockKey } from "./pages.ts";
 import { purgeSecretOriginals } from "./secret-store.ts";
-import { applyDerivedCleanup, pageMirrorDocIds, planDerivedCleanup, type DerivedCleanupPlan, type DerivedCleanupResult } from "./synthesis/derived-cleanup.ts";
+import { applyDerivedCleanup, pageMirrorDocIds, planDerivedCleanup, type DerivedCleanupPlan, type DerivedCleanupResult } from "./derived-cleanup.ts";
 
 export interface PurgeDeletedPagesResult {
   /** Number of pages hard-deleted. */

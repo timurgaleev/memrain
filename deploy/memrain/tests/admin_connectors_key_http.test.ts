@@ -11,7 +11,7 @@ import { storageEngines } from "./helpers/storage-engines.ts";
 import { FIREFLIES_KEY, firefliesFetch } from "./helpers/fireflies-recorded.ts";
 import { testProvider } from "./helpers/connector-test-provider.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { ProviderRegistry } from "../src/core/connectors/providers.ts";
 import { firefliesProvider } from "../src/core/connectors/fireflies.ts";
 import { listAccounts, readCredential } from "../src/core/connectors/accounts.ts";

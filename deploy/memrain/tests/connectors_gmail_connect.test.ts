@@ -10,7 +10,7 @@ import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { GOOGLE_FIXTURES, googleFetch, type GoogleWorld } from "./helpers/google-calendar-fake.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { credentialMeta, getAccount, listAccounts, readCredential } from "../src/core/connectors/accounts.ts";
 import { completeConnect, ConnectError, connectorCallbackUri, startConnect, type ConnectDeps } from "../src/core/connectors/oauth-connect.ts";
 import { builtinProviders, ProviderRegistry } from "../src/core/connectors/providers.ts";

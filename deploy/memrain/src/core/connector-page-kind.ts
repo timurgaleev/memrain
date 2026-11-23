@@ -9,7 +9,7 @@
  * (render.ts names every kind `connector-<kind>`) or when a connector item
  * maps onto it, so a renderer that ever emits a plain type stays covered.
  */
-import type { Engine } from "../engine/interface.ts";
+import type { Engine } from "./engine/interface.ts";
 
 const CONNECTOR_TYPE_PREFIX = "connector-";
 

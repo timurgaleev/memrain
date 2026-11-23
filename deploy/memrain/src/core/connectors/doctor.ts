@@ -5,7 +5,7 @@
  */
 import type { Engine } from "../engine/interface.ts";
 import type { OpsCheckResult } from "../doctor-ops.ts";
-import { connectorsStatus } from "./vault.ts";
+import { connectorsStatus } from "../vault.ts";
 
 const NAMED = 5;
 

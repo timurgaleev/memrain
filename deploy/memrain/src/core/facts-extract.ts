@@ -44,7 +44,7 @@ import { slugifyTarget } from "./links.ts";
 import { makeSlugResolver } from "./slug-canonicalize.ts";
 import { isJunkEntityName, isJunkEntitySlug } from "./entity-junk.ts";
 import { BudgetTracker, BudgetExhausted, runAsPath } from "./budget.ts";
-import { isConnectorPageType } from "./connectors/page-kind.ts";
+import { isConnectorPageType } from "./connector-page-kind.ts";
 import {
   classifyFactsAbsorbError,
   writeFactsAbsorbLog,

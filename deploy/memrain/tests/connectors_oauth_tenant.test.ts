@@ -10,7 +10,7 @@ import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { TEST_ACCESS_TOKEN, TEST_REFRESH_TOKEN } from "./helpers/connector-test-provider.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { createAccount, getAccount, storeCredential } from "../src/core/connectors/accounts.ts";
 import { getOAuthClient, listOAuthClients, setOAuthClient } from "../src/core/connectors/oauth-clients.ts";
 import { normalizeTenant, ProviderRegistry, type ConnectorProvider } from "../src/core/connectors/providers.ts";

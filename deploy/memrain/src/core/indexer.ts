@@ -20,8 +20,7 @@ import { MARKDOWN_CHUNKER_VERSION } from "./chunkers/recursive.ts";
 import { extractFencedCode } from "./chunkers/fenced-code.ts";
 import { chunkCode } from "./chunkers/code.ts";
 import { qualifiedSymbolName } from "./code-edges.ts";
-import { stripFactsFence } from "./facts-fence.ts";
-import { stripTakesFence } from "./synthesis/takes-fence.ts";
+import { stripFactsFence, stripTakesFence } from "./fences.ts";
 import { embedText, EMBED_DIMENSIONS } from "./embedding.ts";
 import { embeddingInputHash } from "./embedding-input-hash.ts";
 import { isEmbedSkipped } from "./embed-skip.ts";
@@ -71,7 +70,7 @@ import { acquireWriteEmbedSlot, writeEmbedWidth } from "./concurrency.ts";
 import { planWriteGate } from "./write-gate-index.ts";
 import type { Storage } from "./storage.ts";
 import type { Engine } from "./engine/interface.ts";
-import { isConnectorPageMirror } from "./connectors/page-kind.ts";
+import { isConnectorPageMirror } from "./connector-page-kind.ts";
 import type { TrustTier } from "./trust-tier.ts";
 import {
   checkLocalWriteOwner,

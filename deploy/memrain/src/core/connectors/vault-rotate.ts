@@ -8,7 +8,7 @@
  * the new key are skipped, so a rotation that is run again is a no-op.
  */
 import type { Engine } from "../engine/interface.ts";
-import { credentialAad, oauthClientAad, oauthStateAad, seal, unseal, type Kek } from "./vault.ts";
+import { credentialAad, oauthClientAad, oauthStateAad, seal, unseal, type Kek } from "../vault.ts";
 import { secretStoreAad } from "../secret-store.ts";
 
 export interface RotationResult {

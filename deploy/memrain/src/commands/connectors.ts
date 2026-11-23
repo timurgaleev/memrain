@@ -46,7 +46,7 @@ import {
 import type { ConnectorRunStatus } from "../core/connectors/types.ts";
 import { listConnectorStates } from "../core/connectors/watermark.ts";
 import { grantExpiryText, listAccountStatus, runCountsText, type AccountStatus } from "../core/connectors/account-status.ts";
-import { connectorsStatus } from "../core/connectors/vault.ts";
+import { connectorsStatus } from "../core/vault.ts";
 import { sweepMeetingCredentials, type MeetingRedactSweepResult } from "../core/connectors/meeting-redact-sweep.ts";
 import { privateChatPagesInSharedSources } from "../core/connectors/slack/restamp.ts";
 import { withStorage } from "./with-storage.ts";

@@ -30,7 +30,7 @@ const audited = {
   "core/pages-purge.ts": { pages: 2, entity_facts: 1, reason: "Expired soft-delete purge with transaction retry; retires the purged page's facts with a receipt" },
   "core/pages.ts": { pages: 6, page_versions: 6, entity_facts: 2, reason: "Canonical page mutations under slug locks" },
   "core/purge-leftovers.ts": { pages: 1, page_versions: 1, entity_facts: 1, reason: "Restore from an operator's purge-leftovers export: earlier page text as a new version under slug locks, and un-retires exactly the exported purge facts" },
-  "core/synthesis/derived-cleanup.ts": { pages: 1, page_versions: 1, entity_facts: 1, reason: "Purge cleanup of synthesis output under slug locks: a concept page rebuilt from its surviving atoms as a new version, and leftover facts retired with a receipt" },
+  "core/derived-cleanup.ts": { pages: 1, page_versions: 1, entity_facts: 1, reason: "Purge cleanup of synthesis output under slug locks: a concept page rebuilt from its surviving atoms as a new version, and leftover facts retired with a receipt" },
   "core/transcripts/origin-repair.ts": { entity_facts: 1, reason: "Operator-gated attribution repair by exact source/session evidence; collisions roll back" },
   "core/trust-derived.ts": { pages: 3, reason: "Trust tier only: lowers a derived page to its least trusted input, never raises it" },
   "core/trust-proposals.ts": { entity_facts: 4, reason: "Owner decision on a trust proposal: accept applies the replacement, reject retires the less trusted fact" },

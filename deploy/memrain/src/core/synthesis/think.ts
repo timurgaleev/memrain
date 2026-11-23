@@ -43,7 +43,7 @@ import { getCalibrationProfile } from "./reads.ts";
 import { traverseGraph } from "../links.ts";
 import { pageSourcePath } from "../page-index.ts";
 import { isDiarySourcePath } from "../pages.ts";
-import { pageContentDate, questionDateWindow, resolveThinkTemporalContext } from "./think-temporal.ts";
+import { pageContentDate, questionDateWindow, resolveThinkTemporalContext } from "../temporal.ts";
 import { thinkQuoteVerifyEnabled, verifyQuotes, type QuoteCheck } from "./quote-verify.ts";
 import { quarantineFilterFragment } from "../quarantine.ts";
 import { frameForRead, markExternalChunks, readTrustTiers } from "../trust-frame.ts";

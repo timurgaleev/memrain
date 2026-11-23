@@ -110,7 +110,7 @@ import { rankFlag } from "./ranking-flags.ts";
 import { downweightKeywordArm, KEYWORD_WEAK_WEIGHT } from "./arm-confidence.ts";
 import { fuseByPage, pageKeyFor, pageKeysForChunks } from "./page-fusion.ts";
 import { applyTimeScope, dayInRange, parseQueryTimeRange } from "./time-range.ts";
-import { dayInZone, pageContentDate, thinkTimeZone } from "../synthesis/think-temporal.ts";
+import { dayInZone, pageContentDate, thinkTimeZone } from "../temporal.ts";
 import { CACHE_HIT_CONFIDENCE, gradeConfidence } from "./confidence-grade.ts";
 import { paidStageEnabled, runPostFusionStages } from "./stages/pipeline.ts";
 import { shadowCopy, shadowFlag, startShadow } from "./shadow.ts";

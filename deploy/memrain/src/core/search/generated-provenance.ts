@@ -4,8 +4,7 @@ import { andSourceScope } from "../source-scope.ts";
 import { visibilityClause } from "../visibility.ts";
 import { pageText, serializeCompiledTruth, PAGE_MIRROR_PATH_SQL, PAGE_TRUTH_PATH_SQL } from "../page-index.ts";
 import { chunkMarkdown } from "../chunkers/recursive.ts";
-import { stripFactsFence } from "../facts-fence.ts";
-import { stripTakesFence } from "../synthesis/takes-fence.ts";
+import { stripFactsFence, stripTakesFence } from "../fences.ts";
 
 const GENERATORS = ["extract-atoms", "synthesize-concepts", "patterns", "reflection", "think", "auto-think", "life-chronicle"];
 

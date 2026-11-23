@@ -16,7 +16,7 @@ import { putPage } from "../src/core/pages.ts";
 import { purgeDeletedPages } from "../src/core/pages-purge.ts";
 import { addFact } from "../src/core/facts.ts";
 import { readExternalTrust } from "../src/core/trust-frame.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { createAccount, getAccount, setAccountEnabled, storeCredential } from "../src/core/connectors/accounts.ts";
 import { listClientHolds } from "../src/core/connectors/client-holds.ts";
 import { completeConnect, connectorCallbackUri, startConnect, type ConnectDeps } from "../src/core/connectors/oauth-connect.ts";

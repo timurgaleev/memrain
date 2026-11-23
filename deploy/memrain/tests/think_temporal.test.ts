@@ -7,7 +7,7 @@ import {
   parseReferenceDate,
   resolveThinkTemporalContext,
   thinkTimeZone,
-} from "../src/core/synthesis/think-temporal.ts";
+} from "../src/core/temporal.ts";
 
 const NOW = new Date("2026-10-10T22:30:00Z");
 

@@ -10,7 +10,7 @@ import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { registerSource } from "../src/core/sources.ts";
 import { createAccount, storeCredential } from "../src/core/connectors/accounts.ts";
-import { loadKek } from "../src/core/connectors/vault.ts";
+import { loadKek } from "../src/core/vault.ts";
 import { GOOGLE_CALENDAR_READONLY, GOOGLE_GMAIL_READONLY } from "../src/core/connectors/google/provider.ts";
 import { handleAdminApi } from "../src/http/admin-api.ts";
 import type { Storage } from "../src/core/storage.ts";

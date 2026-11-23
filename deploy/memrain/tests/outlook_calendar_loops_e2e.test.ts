@@ -13,7 +13,7 @@ import { randomBytes } from "node:crypto";
 import { storageEngines } from "./helpers/storage-engines.ts";
 import { GRAPH_ACCESS_TOKEN, GRAPH_FIXTURES, GRAPH_REFRESH_TOKEN, graphFetch, type GraphWorld } from "./helpers/graph-calendar-fake.ts";
 import { registerSource } from "../src/core/sources.ts";
-import { kekFromBytes } from "../src/core/connectors/vault.ts";
+import { kekFromBytes } from "../src/core/vault.ts";
 import { createAccount, setAccountEnabled, storeCredential } from "../src/core/connectors/accounts.ts";
 import { ProviderRegistry } from "../src/core/connectors/providers.ts";
 import { runConnectorSync } from "../src/core/connectors/sync-engine.ts";

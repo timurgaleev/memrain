@@ -6,6 +6,7 @@
  * Only proven automatic pages from the previous completed manifest may retire.
  */
 import { createHash } from "node:crypto";
+import { slugifyTitle } from "../derived-cleanup.ts";
 import type { Engine } from "../engine/interface.ts";
 import { notSynthesizedDocSql } from "../page-index.ts";
 import type { Storage } from "../storage.ts";
@@ -116,24 +117,6 @@ export function synthPagesEnabled(
   return (raw ?? "").trim() !== "0";
 }
 
-/** Kebab page-slug segment from a free-text title. */
-export function slugifyTitle(title: string): string {
-  // Measured linear through slugifyTitle: 0.6 ms at 800 K chars, ratio 1.99 on
-  // a doubling (`-`*n, `!`*n and `-a`*n/2 all agree). The `-+` run the rule
-  // warns about cannot reach either trim: the `[^a-z0-9]+` collapse on the line
-  // above rewrites EVERY run of non-alphanumerics to a single `-`, so by the
-  // time these two run the string has no two adjacent dashes to back over.
-  const s = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    // eslint-disable-next-line regexp/no-super-linear-move
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60)
-    // ...and this one also sees at most 60 chars, whatever the title was.
-    // eslint-disable-next-line regexp/no-super-linear-move
-    .replace(/^-+|-+$/g, "");
-  return s.length > 0 ? s : "atom";
-}
 
 /** Stable 16-char content hash of a document's text (source-change signal). */
 export function contentHash16(text: string): string {
@@ -528,3 +511,5 @@ export async function extractAtomsPhase(
   }
   return result;
 }
+
+export { slugifyTitle };

@@ -75,7 +75,7 @@ import type { ConnectorAccountStatus } from "./accounts.ts";
 import { deleteStaleParts, DETACHED_ORIGIN, massDeleteVerdict } from "./retention.ts";
 import { accountRef, type ConnectorDataKind, type Person } from "./model.ts";
 import { mapLoopSignalsText, type LoopSignals } from "../loops/signals.ts";
-import { connectorsSwitchOn } from "./vault.ts";
+import { connectorsSwitchOn } from "../vault.ts";
 import { extension } from "../extension.ts";
 import { ReauthRequiredError, type ConnectorRunStatus, type ResponseClass } from "./types.ts";
 import {
