@@ -36,6 +36,9 @@ import {
   RETIRED_SCOPES,
 } from "./scope.ts";
 
+/** Job kinds a 2.x build queued with a credential's principal in the payload. */
+const QUEUED_INGEST_JOB_KINDS = ["ingest_capture", "transcripts_ingest"];
+
 // ---------------------------------------------------------------------------
 // Local helpers
 // ---------------------------------------------------------------------------
@@ -3453,12 +3456,27 @@ export class OAuthProvider {
   // -------------------------------------------------------------------------
 
   /** Delete expired access/refresh tokens and authorization codes. Returns
-   *  the total row count swept. */
+   *  the total row count swept. A pending or running ingest job a 2.x build
+   *  queued re-reads the token rows it names (one family-less token, or every
+   *  row of a refresh family) when a build that runs jobs resumes it, so rows
+   *  still named by such a job stay: reaching the TTL is not a revocation. */
   async sweepExpiredTokens(): Promise<number> {
     const now = Math.floor(Date.now() / 1000);
+    // scope: operator-only the boot sweep reads every source's queued ingest jobs to hold their tokens
     const tokens = await this.rows(
-      `DELETE FROM oauth_tokens WHERE expires_at < $1 RETURNING 1`,
-      [now],
+      `WITH held AS (
+         SELECT DISTINCT payload->'principal'->>'kind' AS kind, payload->'principal'->>'id' AS id
+           FROM jobs
+          WHERE kind = ANY($2::text[])
+            AND status IN ('pending', 'running')
+            AND payload->'principal'->>'kind' IN ('oauth_token', 'oauth_family')
+       )
+       DELETE FROM oauth_tokens
+        WHERE expires_at < $1
+          AND NOT (family_id IS NULL AND token_hash IN (SELECT id FROM held WHERE kind = 'oauth_token' AND id IS NOT NULL))
+          AND (family_id IS NULL OR family_id NOT IN (SELECT id FROM held WHERE kind = 'oauth_family' AND id IS NOT NULL))
+       RETURNING 1`,
+      [now, QUEUED_INGEST_JOB_KINDS],
     );
     const codes = await this.rows(
       `DELETE FROM oauth_codes WHERE expires_at < $1 RETURNING 1`,
