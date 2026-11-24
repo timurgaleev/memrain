@@ -24,31 +24,10 @@ NOT_ENV = {
     "MEMRAIN_X",  # the placeholder in the legacy-name comments (core/env-compat.ts)
 }
 
-# Documented rows the source reads without spelling the full name:
-# resolve-model.ts builds MEMRAIN_<FEATURE>_MODEL at run time,
-# search/ranking-flags.ts builds MEMRAIN_RANK_<FLAG>,
-# connectors/retention.ts builds MEMRAIN_CONNECTOR_RETENTION_DAYS_<KIND>, and
-# connectors/oauth-connect.ts builds MEMRAIN_<PROVIDER>_OAUTH_CLIENT_ID and
-# MEMRAIN_<PROVIDER>_OAUTH_TENANT.
-DOC_ONLY = {
-    "MEMRAIN_MICROSOFT_OAUTH_CLIENT_ID",
-    "MEMRAIN_MICROSOFT_OAUTH_TENANT",
-    "MEMRAIN_CONNECTOR_RETENTION_DAYS_MAIL",
-    "MEMRAIN_CONNECTOR_RETENTION_DAYS_CALENDAR",
-    "MEMRAIN_CONNECTOR_RETENTION_DAYS_CHAT",
-    "MEMRAIN_CONNECTOR_RETENTION_DAYS_MEETING",
-    "MEMRAIN_THINK_MODEL",
-    "MEMRAIN_DRIFT_MODEL",
-    "MEMRAIN_CONCEPTS_MODEL",
-    "MEMRAIN_EXPANSION_MODEL",
-    "MEMRAIN_INTENT_MODEL",
-    "MEMRAIN_RERANK_MODEL",
-    "MEMRAIN_RANK_METADATA_GATE",
-    "MEMRAIN_RANK_ENTITY_TRUTH_SOFT",
-    "MEMRAIN_RANK_PAGE_FUSION",
-    "MEMRAIN_RANK_KEYWORD_CONFIDENCE",
-    "MEMRAIN_RANK_EXACT_LOOKUP",
-}
+# Documented rows the source reads without spelling the full name (a name
+# built at run time). None today; add such a name here with the file that
+# builds it.
+DOC_ONLY: set[str] = set()
 
 QUIESCENCE_SWITCHES = (
     "MEMRAIN_MAINTENANCE",

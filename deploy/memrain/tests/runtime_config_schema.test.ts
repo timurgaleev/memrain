@@ -14,7 +14,7 @@ it("normalizes every flag, rejects invalid known values even with force, and pre
   expect(validateConfigValue("MEMRAIN_PG_POOL_MAX", "0004")).toEqual({ ok: true, value: "4" });
   for (const v of ["", "3.5", "1e3", "NaN", "9007199254740992"]) expect(validateConfigValue("MEMRAIN_PG_POOL_MAX", v).ok).toBe(false);
   expect(validateConfigValue("MEMRAIN_REQUIRE_WRITE_PRECONDITION", "warn")).toEqual({ ok: true, value: "warn" });
-  expect(validateConfigValue("MEMRAIN_ANOMALY_SIGMA", "2.5")).toEqual({ ok: true, value: "2.5" });
+  expect(validateConfigValue("MEMRAIN_NEARDUP_JACCARD", "0.9")).toEqual({ ok: true, value: "0.9" });
   expect(validateConfigValue("toString", "x").ok).toBe(false);
 });
 
@@ -25,13 +25,13 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
   it("reports unknown, malformed and noncanonical rows without leaking values or rewriting them", async () => {
     const e = db.storage.engine();
     await setRuntimeConfig(e, "MEMRAIN_PRIVATE_FUTURE", "private-secret");
-    await setRuntimeConfig(e, "MEMRAIN_GRAPH_SIGNALS", "true");
+    await setRuntimeConfig(e, "MEMRAIN_TRACK_RETRIEVAL", "true");
     await setRuntimeConfig(e, "MEMRAIN_PG_POOL_MAX", "bad-private-value");
     const before = await listRuntimeConfig(e);
     const report = await checkRuntimeConfigValues(e);
     expect(report.status).toBe("warn");
     expect(report.detail).toContain("MEMRAIN_PRIVATE_FUTURE: unknown key");
-    expect(report.detail).toContain("MEMRAIN_GRAPH_SIGNALS: noncanonical value");
+    expect(report.detail).toContain("MEMRAIN_TRACK_RETRIEVAL: noncanonical value");
     expect(report.detail).toContain("MEMRAIN_PG_POOL_MAX: invalid value");
     expect(report.detail).not.toContain("private-secret");
     expect(report.detail).not.toContain("bad-private-value");

@@ -49,7 +49,7 @@ afterAll(() => {
   rmSync(tmp, { recursive: true, force: true });
   // The Storage.init overlay may have projected the stored keys onto this
   // process's env — scrub so later test files never see them.
-  for (const k of ["SEARCH_MODE", "INTERNAL_TOKEN"]) {
+  for (const k of ["SEARCH_EXCLUDE", "INTERNAL_TOKEN"]) {
     delete process.env["MEMEX_" + k];
     delete process.env[`MEMRAIN_${k}`];
   }
@@ -62,7 +62,7 @@ describe("memrain config CLI", () => {
     try {
       code = await runConfig({
         sub: "set",
-        key: "MEMRAIN_SEARCH_MODE",
+        key: "MEMRAIN_SEARCH_EXCLUDE",
         value: "balanced",
         configPath: cfgPath,
       });
@@ -72,7 +72,7 @@ describe("memrain config CLI", () => {
     expect(code).toBe(0);
     const c2 = capture();
     try {
-      code = await runConfig({ sub: "get", key: "MEMRAIN_SEARCH_MODE", configPath: cfgPath });
+      code = await runConfig({ sub: "get", key: "MEMRAIN_SEARCH_EXCLUDE", configPath: cfgPath });
     } finally {
       c2.restore();
     }
@@ -124,26 +124,26 @@ describe("memrain config CLI", () => {
 
   it("rejects typos, canonicalizes flags, and warns when actual env wins", async () => {
     const c = capture();
-    const previous = process.env.MEMRAIN_GRAPH_SIGNALS;
-    process.env.MEMRAIN_GRAPH_SIGNALS = "0";
+    const previous = process.env.MEMRAIN_TRACK_RETRIEVAL;
+    process.env.MEMRAIN_TRACK_RETRIEVAL = "0";
     try {
-      expect(await runConfig({ sub: "set", key: "MEMRAIN_GRAPH_SIGNAL", value: "true", configPath: cfgPath })).toBe(2);
-      expect(c.err.join("\n")).toContain("did you mean MEMRAIN_GRAPH_SIGNALS");
-      expect(await runConfig({ sub: "set", key: "MEMRAIN_GRAPH_SIGNALS", value: "true", configPath: cfgPath })).toBe(0);
-      expect(c.out.join("\n")).toContain("MEMRAIN_GRAPH_SIGNALS = 1");
+      expect(await runConfig({ sub: "set", key: "MEMRAIN_TRACK_RETRIEVA", value: "true", configPath: cfgPath })).toBe(2);
+      expect(c.err.join("\n")).toContain("did you mean MEMRAIN_TRACK_RETRIEVAL");
+      expect(await runConfig({ sub: "set", key: "MEMRAIN_TRACK_RETRIEVAL", value: "true", configPath: cfgPath })).toBe(0);
+      expect(c.out.join("\n")).toContain("MEMRAIN_TRACK_RETRIEVAL = 1");
       expect(c.err.join("\n")).toContain("environment");
       expect(c.err.join("\n")).toContain("restart");
-      expect(await runConfig({ sub: "set", key: "MEMRAIN_GRAPH_SIGNALS", value: "perhaps", force: true, configPath: cfgPath })).toBe(2);
+      expect(await runConfig({ sub: "set", key: "MEMRAIN_TRACK_RETRIEVAL", value: "perhaps", force: true, configPath: cfgPath })).toBe(2);
       expect(await runConfig({ sub: "set", key: "MEMRAIN_PG_POOL_MAX", value: "2.5", configPath: cfgPath })).toBe(2);
       expect(await runConfig({ sub: "set", key: "MEMRAIN_FUTURE_KNOB", value: "custom", force: true, configPath: cfgPath })).toBe(0);
       await runConfig({ sub: "show", configPath: cfgPath });
       const rows = JSON.parse(c.out.at(-1)!).entries;
-      expect(rows.find((r: { key: string }) => r.key === "MEMRAIN_GRAPH_SIGNAL")).toBeUndefined();
-      expect(rows.find((r: { key: string }) => r.key === "MEMRAIN_GRAPH_SIGNALS").value).toBe("1");
+      expect(rows.find((r: { key: string }) => r.key === "MEMRAIN_TRACK_RETRIEVA")).toBeUndefined();
+      expect(rows.find((r: { key: string }) => r.key === "MEMRAIN_TRACK_RETRIEVAL").value).toBe("1");
     } finally {
       c.restore();
-      if (previous === undefined) delete process.env.MEMRAIN_GRAPH_SIGNALS;
-      else process.env.MEMRAIN_GRAPH_SIGNALS = previous;
+      if (previous === undefined) delete process.env.MEMRAIN_TRACK_RETRIEVAL;
+      else process.env.MEMRAIN_TRACK_RETRIEVAL = previous;
       delete process.env.MEMRAIN_FUTURE_KNOB;
     }
   });
@@ -161,7 +161,7 @@ describe("memrain config CLI", () => {
     expect(deleted.deleted).toBeGreaterThanOrEqual(2);
     const c2 = capture();
     try {
-      code = await runConfig({ sub: "get", key: "MEMRAIN_SEARCH_MODE", configPath: cfgPath });
+      code = await runConfig({ sub: "get", key: "MEMRAIN_SEARCH_EXCLUDE", configPath: cfgPath });
     } finally {
       c2.restore();
     }

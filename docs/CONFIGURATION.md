@@ -53,7 +53,7 @@ nearest known name. `--force` permits a custom key, but does not bypass type
 validation for a known key.
 
 Actual process environment values always override stored rows. The command
-warns when it sees such an override; a running daemon loads stored changes on
+warns when it sees such an override; a running server loads stored changes on
 restart. Environment-only switches remain environment-only, even if a row is
 stored. `memrain config show` redacts values; `memrain doctor` reports unknown,
 invalid, and noncanonical stored rows without rewriting them. Use `config unset`
@@ -63,13 +63,13 @@ to remove an override instead of assigning an empty flag value.
 
 ```bash
 # 1. On the live host, add the flag to /opt/memrain/.env
-echo 'MEMRAIN_DREAM_SYNTHESIS=1' >> /opt/memrain/.env
+echo 'MEMRAIN_HNSW_ZOMBIE_SWEEP=1' >> /opt/memrain/.env
 
 # 2. Confirm the key is in the compose allowlist (environment: block).
 #    If it is "code-only" below, add a line to deploy/docker-compose.yml:
 #      - MEMRAIN_MYFLAG=${MEMRAIN_MYFLAG:-}
 #    and commit/deploy that change first.
-grep MEMRAIN_DREAM_SYNTHESIS deploy/docker-compose.yml
+grep MEMRAIN_HNSW_ZOMBIE_SWEEP deploy/docker-compose.yml
 
 # 3. Rebuild and restart memrain so it picks up the new env.
 bash deploy/deploy.sh
@@ -77,7 +77,7 @@ bash deploy/deploy.sh
 #    (never add -f: it overrides COMPOSE_FILE in .env and drops the ingress overlay)
 
 # 4. Verify the process actually sees it, and the brain is healthy.
-docker exec deploy-memrain-1 sh -c 'echo "$MEMRAIN_DREAM_SYNTHESIS"'
+docker exec deploy-memrain-1 sh -c 'echo "$MEMRAIN_HNSW_ZOMBIE_SWEEP"'
 docker exec deploy-memrain-1 wget -qO- http://127.0.0.1:18790/health   # -> {"ok":true,...}
 ```
 
@@ -87,40 +87,18 @@ boot rather than silently falling back, so a bad edit is caught immediately.
 
 ---
 
-## Quality & cost tiers (pick one)
+## What costs money
 
-Memrain's **runtime code ships everything paid OFF by default** — a bare
-`git clone` is a pure retrieval brain that never makes a billable model call
-beyond embeddings, so cloning the repo can never surprise you with a bill. The
-opt-in happens one layer up: **`scripts/init.sh` defaults to the Max quality
-tier** and writes those flags into the generated (gitignored) `.env`, so a real
-operator install gets the full-featured experience by default. Pick `balanced`
-or `free` at the init prompt, or set `MEMRAIN_INIT_TIER=free|balanced|max` for the
-non-interactive path. **More spend buys more quality** — the paid tiers below are
-what the project is capable of at its best, and Max is the *recommended* setup.
-Change tiers any time by editing the flags in `.env` (all are in the compose
-allowlist) and recomposing. On an EC2 host every `scripts/bootstrap.sh` run
-rewrites `.env` and keeps only the `*_SECRET_NAME` keys, so re-add hand-set
-flags after a bootstrap re-run.
+The only paid call Memrain makes is a Bedrock Titan text embedding: one per
+chunk written, and one per search query. No other model is called. With
+`MEMRAIN_KEYWORD_ONLY=1` nothing is embedded and nothing is paid for.
 
-| Tier | What you get | Flags | ~Cost/mo* |
-|------|--------------|-------|-----------|
-| **Free — Retrieval** (runtime default) | Hybrid search + graph + code intel. No LLM calls beyond embeddings. | *(none)* | infra only (~$52) |
-| **Balanced — Haiku** *(best value)* | + Haiku two-pass rerank on every search, nightly note synthesis, per-source health, tenant fail-closed. Sharper ranking + a self-thinking brain, cheaply. | `MEMRAIN_RERANK` `MEMRAIN_DREAM_SYNTHESIS` `MEMRAIN_DOCTOR_PER_SOURCE` `MEMRAIN_TENANT_FAIL_CLOSED` | +$5–15 |
-| **Max quality — Sonnet** *(recommended for best results)* | Everything. Sonnet graph-aware rerank on every search, relational reasoning, `think`, scheduled deep-synth, take-ensemble grading, conversation→facts, per-chunk LLM contextual embeddings. The full-fat brain. | all of the above **plus** `MEMRAIN_GRAPH_RERANK` `MEMRAIN_RELATIONAL_LLM` `MEMRAIN_THINK` `MEMRAIN_DEEP_SYNTH` `MEMRAIN_TAKE_ENSEMBLE` `MEMRAIN_FACTS_EXTRACTION` `MEMRAIN_CONTEXTUAL_LLM` | +$25–390 |
+Two kinds of daily cap bound that spend, both in USD per UTC day:
 
-\* Above the ~$52/mo fixed infra (one small EC2 + RDS). Variable cost is
-dominated by **`MEMRAIN_GRAPH_RERANK`** — a paid Sonnet call on *every* search, so
-it scales with query volume (the swing between the $25 and $390 ends of the Max
-tier). If you want Max-tier reasoning everywhere *except* the per-search Sonnet
-cost, run the **Balanced** tier's `MEMRAIN_RERANK` (Haiku, ~$1–3/mo) in place of
-`MEMRAIN_GRAPH_RERANK` — near-identical ranking quality at a fraction of the cost.
-Every paid Sonnet slice is independently bounded by a `*_BUDGET_USD` cap
-(default `1.0`), so no single call or run can run away.
-
-The Free tier is what the code does with no flags set; `scripts/init.sh`
-proposes Max by default. Set `MEMRAIN_INIT_TIER=free|balanced|max` to pick
-non-interactively.
+- `MEMRAIN_DAILY_BUDGET_USD` caps the whole brain (every client, the hourly
+  housekeeping and the CLI together).
+- `memrain auth set-budget <client_id|token_name|enrollment_id> <usd>` caps
+  one OAuth client, personal access token or enrollment (`none` removes it).
 
 ---
 
@@ -136,13 +114,11 @@ Secrets Manager (via `fetch-secrets.sh`), not the compose allowlist.
 | `MEMRAIN_INTERNAL_TOKEN` | *(none)* | Shared bearer authenticating peer containers on the internal docker bridge to Memrain's mutating routes. From `<prefix>/memrain-internal-token`. | free |
 | `MEMRAIN_HOST` | `127.0.0.1` | Bind address of the HTTP server. The image sets `0.0.0.0` inside the container; the CLI `--host` flag overrides. It is not the public hostname. | free |
 | `SUBDOMAIN` | `brain` | The public MCP subdomain. `init.sh` and `bootstrap.sh` write it into `.env` together with `PUBLIC_HOST=<subdomain>.<domain>`; the server does not read it (the terraform var `subdomain` is the source of truth). | free |
-| `MEMRAIN_KEYWORD_ONLY` | off (`=1` on) | Runs the brain without AWS: nothing is embedded, no model is invoked, and search is keyword-only. Every paid call is refused before it is sent with error `unsupported`, so semantic search, `think`, `query` synthesis and fact extraction are unavailable. `/health` reports `keyword_only: true`. The local Docker quickstart turns it on. Chunks written in this mode have no vectors (an unchanged chunk keeps the one it had); after turning it off, `memrain embed` adds them. | free |
+| `MEMRAIN_KEYWORD_ONLY` | off (`=1` on) | Runs the brain without AWS: nothing is embedded, no model is invoked, and search is keyword-only. Every paid call is refused before it is sent with error `unsupported`, so semantic search is unavailable. `/health` reports `keyword_only: true`. The local Docker quickstart turns it on. Chunks written in this mode have no vectors (an unchanged chunk keeps the one it had); after turning it off, `memrain embed` adds them. | free |
 | `MEMRAIN_REQUIRE_POSTGRES` | off (`=1` on) | For a host that must run on Postgres. With it on, a PGLite `config.json` or a missing Postgres URL stops the server and the container entrypoint instead of starting an empty local brain, `init --pglite` refuses, and `fetch-secrets.sh` fails when the URL secret is missing. `bootstrap.sh` writes it on new installs. Env-only: a `runtime_config` row cannot set it. | free |
-| `MEMRAIN_VAULT_PATHS` | `/memory` (compose) | CSV of directory roots the indexer may sweep and the path-guard treats as in-bounds. Mounted read-only into the container. | free |
-| `MEMRAIN_CODE_PATHS` | `/repo-source` (compose) | CSV of repo checkouts the code-chunkers index (call/def/ref graph, plus a vector per chunk). Empty → boot warns "0 indexable files" and continues. | free |
-| `MEMRAIN_CODE_EMBED_MAX_USD` | `0` | Dollar cap on the embedding calls one code sweep (or one `memrain index` of a code file) may make, priced at the worst case before each call. `0`, the default, indexes code without vectors: the code graph and keyword search still cover it. Above `0`, a chunk whose stored vector matches its input keeps it for free, and the sweep also stops adding vectors once the projected HNSW index (`rows x (vector bytes + 640) x 1.1`) would pass the database's `shared_buffers` on a Postgres server; past either limit the remaining chunks are written without a vector and the sweep logs one line. `memrain embed --code --apply --max-usd X` fills those chunks under its own cap and refuses a run whose index would not fit `shared_buffers`. | **paid (Titan)** |
-| `MEMRAIN_CODE_PRUNE` | on | After a complete walk, the code sweep soft-deletes the documents of files gone from each root and records them in `code_prunes`. A missing file whose content arrived at a new path in the same walk is a move: its old document is retired without counting toward the limits below. It does nothing for a root that is missing, shows no files or could not be read in full, and withholds the deletions of a pass that would retire more than one and more than half of a root's code documents, more than 500 of them, or more than 1% of them once past 50. `0` turns the automatic pass off; `memrain code prune` still works. | free |
-| `MEMRAIN_VAULT_PATH` | unset | Single vault path for `reindex` and `integrity` when no `--vault` flag is given, and for `doctor`'s vault check. It takes precedence over `storage.vault` in the config file. Code-only; the server sweeps `MEMRAIN_VAULT_PATHS`. | free |
+| `MEMRAIN_VAULT_PATHS` | `/memory` (compose) | CSV of directory roots the path guard treats as in-bounds for the `index` tool. Mounted read-only into the container. With this and `MEMRAIN_CODE_PATHS` both unset, every index request is refused. | free |
+| `MEMRAIN_CODE_PATHS` | `/repo-source` (compose) | More roots the same path guard accepts. Lite has no code index; these roots only widen where `index` may read. | free |
+| `MEMRAIN_VAULT_PATH` | unset | Single vault path for `reindex` when no `--vault` flag is given, and for `doctor`'s vault check. It takes precedence over `storage.vault` in the config file. Code-only; the server sweeps `MEMRAIN_VAULT_PATHS`. | free |
 | `MEMRAIN_VERSION` | `dev` | Build stamp baked into the image by `deploy/deploy.sh` (`git describe`). `/health` and MCP `serverInfo.version` report it; `memrain auth doctor --expect-version` compares against it. Set by the deploy script, not by hand. Allowlisted (build arg). | free |
 
 ### Secret names
@@ -160,8 +136,10 @@ Secrets Manager (via `fetch-secrets.sh`), not the compose allowlist.
 | `<prefix>/memrain-notify-webhook` (optional) | `MEMRAIN_NOTIFY_WEBHOOK_SECRET` in `.secrets/memrain.env` |
 
 The two optional secrets have no legacy name to fall back to. Missing, or
-created without a value yet, means no line is written and the run succeeds
-([docs/connectors/KEY.md](connectors/KEY.md)).
+created without a value yet, means no line is written and the run succeeds.
+The connector key seals the secret store (see `MEMRAIN_CONNECTOR_KEK`); Lite
+sends no notifications, so the webhook secret is only kept out of
+`runtime_config`.
 
 A stack whose secrets carry other names sets any of six optional `.env` keys
 to the full secret id: `POSTGRES_URL_SECRET_NAME`, `PUBLIC_BEARER_SECRET_NAME`,
@@ -197,239 +175,59 @@ to `environment:` before overriding.
 
 | Variable | Default | What it does | Cost |
 |---|---|---|---|
-| `MEMRAIN_GRAPH_SIGNALS` | off (`=1` on) | Fold graph centrality signals into the ranking score. | free |
-| `MEMRAIN_GRAPH_SIGNALS_FLOOR` | unset (gate off) | Ratio in `0..1`; hits below the floor are excluded from the graph boost. Unset → every hit stays eligible. Fail-loud on out-of-range. | free |
-| `MEMRAIN_RECENCY_DECAY` | built-in map | Per-path-prefix half-life/floor overrides, merged over the default decay map (`prefix:halfLifeDays:floor`, CSV). Recency weighting is on by default. | free |
-| `MEMRAIN_ALIAS_HOP` | on (`=0` off) | Inject up to 3 alias/redirect hops so a query for an alias also surfaces the canonical page. | free |
-| `MEMRAIN_ALIAS_FANOUT` | on (`=0` off) | When the query names an entity, by its title or a declared alias, its other names are also searched: each as a keyword list that requires the name as a phrase and ranks by the query's other words (5 rows a name). A hit only such a list found carries `matched_alias`; the operator meta's `fanout` lists what was searched and skipped. Not in the compose allowlist: turn it off with `memrain config set MEMRAIN_ALIAS_FANOUT 0`. | free (one title and alias read per query, one more when an entity resolves) |
-| `MEMRAIN_ALIAS_FANOUT_MAX` | `4` | Names the alias fan-out searches per query, `0..16`; `0` turns it off. Anything else uses the default. Part of the query-cache key when not the default. Not compose-allowlisted. | free |
-| `MEMRAIN_SEARCH_COLLAPSE` | on (`=0` off) | One result place per page: a redirect stub (frontmatter `redirect_to` / `redirect` / `merged_into`, a `*-redirect` type, or a short "merged into [[x]]" body) gives its place to its target, and a copy of a page in another source folds into the better-ranked one, which names it in `collapsed`. A missing target is read in under the caller's scope (never for a remote caller). Not compose-allowlisted. | free (one read only when a stub's target is not in the results) |
 | `MEMRAIN_NEARDUP_JACCARD` | `0.85` | Jaccard threshold for near-duplicate collapse in results. A value `> 1.0` disables dedup. | free |
-| `MEMRAIN_TITLE_BOOST` | `1.25` (on) | Multiplier applied to hits whose title matches the query. A value in `(0,1)` is inert (boost only multiplies up). | free |
 | `MEMRAIN_CURATION_BOOST` | built-in map | Per-prefix score multipliers (`prefix:factor`, CSV). Set replaces the default map entirely. | free |
-| `MEMRAIN_BACKLINK_BOOST` | on (`=0` off) | Always-on log-scaled backlink-count boost (`1 + 0.05·ln(1+in_degree)`, floor-gated) so hub pages carry a standing lift. `=0` disables. | free |
-| `MEMRAIN_COSINE_RESCORE` | off (`=1` on) | Blend a query-chunk cosine term into the fused score (`0.7·RRF + 0.3·cosine`). Inert on the keyword-only fallback path. | free |
 | `MEMRAIN_SEARCH_EXCLUDE` | empty | CSV of path prefixes to exclude from search results (e.g. `.raw/`). | free |
-| `MEMRAIN_QUERY_CACHE` | on (`=0` off) | Cache query→results within a process. | free |
-| `MEMRAIN_QUERY_CACHE_SEMANTIC` | off (`=1` on) | Adds a paraphrase arm to the query cache — a near-identical query hits on query-embedding cosine instead of an exact-string match. Only ever *adds* hits; never suppresses a fresh search. (mig 065.) | free |
 | `MEMRAIN_QUERY_EMBED_TIMEOUT_MS` | `6000` | Wall-clock budget for the query-embed Bedrock call; on timeout search falls back to keyword-only (non-fatal). Floor 2000ms. | free |
 | `MEMRAIN_EMBED_DIM` | `1024` | Embedding vector width. Must match the `vector(...)` column width — changing it requires a schema migration + full re-embed. Fail-loud on a non-positive-integer value. | free |
 | `MEMRAIN_CHUNK_OVERLAP` | `300` (on) | Characters of tail-of-previous-chunk to prepend to each chunk. `0` turns overlap off; an unparseable value falls back to the default. Applies to newly indexed pages; stored chunks keep their overlap until re-indexed. Capped at half the previous chunk. | free |
 | `MEMRAIN_TRACK_RETRIEVAL` | on (`=0` off) | Write-back `last_retrieved` timestamps on hit. | free |
-| `MEMRAIN_ANOMALY_SIGMA` | `2` | k in `mean + k·stddev` for usage-insight anomaly flags. | free |
-| `MEMRAIN_SEARCH_MODE` | `conservative` | Picks a bundle of search knobs at once. `conservative`: every optional stage off, no token cap. `balanced`: Haiku rerank, graph signals, cosine rescore and the relational arm on, 12000-token result cap. `tokenmax`: all of that plus LLM query expansion, no cap. A per-knob env set to `1`/`0` wins over the bundle. Unknown values fall back to `conservative`. | paid in `balanced`/`tokenmax` (Haiku) |
-| `MEMRAIN_RELATIONAL_ARM` | from the mode bundle | `1` adds the relational (typed-edge) arm to hybrid search, `0` removes it, whatever the mode says. | free |
-| `MEMRAIN_RELATIONAL_ARM_WEIGHT` | `1.0` | RRF weight of the relational arm. Non-positive or invalid values fall back to the default. | free |
-| `MEMRAIN_RELATIONAL_CHAIN` | on (`=0` off) | A question that chains two or three typed relations ("who founded the companies alice invested in") is planned and walked hop by hop in `relational_recall` and the relational arm; answers carry their path. Off, such questions stay on the single-relation parser, which answers nothing for them; turning it off is part of the query-cache key. Set with `memrain config set`; not compose-allowlisted. | free (one bounded query per hop, at most 3) |
-| `MEMRAIN_ENTITY_ANCHOR` | off (`=1` on) | A query asking for the present state ("now", "currently", "latest") that names exactly one person, company, organization or project page adds that page and up to 10 pages linking to it, newest first, as one more RRF list. Reorders the head of the result, so it is opt-in; when on it is part of the query-cache key. Set with `memrain config set`; not compose-allowlisted. | free (three reads per matching query) |
-| `MEMRAIN_TITLE_ARM` | on (`=0` off) | Title-match arm that lets a query naming a page reach it directly. | free |
-| `MEMRAIN_MAXPOOL` | off (`=1` on) | Each retrieval arm returns its best chunk per page, so the candidate budget covers distinct pages. Skipped for `exact` intent and structural walks. | free |
 | `MEMRAIN_MAX_TYPE_RATIO` | `0.6` | Largest share of the candidate set one page type may hold. `>= 1` disables the cap. Fail-loud on a malformed value. | free |
-| `MEMRAIN_RECENCY_BOOST` | built-in map | Per-prefix recency boost (`prefix:halfLifeDays:coefficient`, CSV), merged over the defaults. `0` for either number marks a prefix evergreen. Fail-loud on a malformed entry. | free |
-| `MEMRAIN_QUERY_CACHE_SIM` | `0.92` | Cosine floor for a hit on the semantic query-cache arm (`MEMRAIN_QUERY_CACHE_SEMANTIC`). Values outside `(0, 1]` fall back to the default. | free |
-| `MEMRAIN_QUERY_CACHE_TTL` | `3600` | Seconds a semantic query-cache entry lives. | free |
-| `MEMRAIN_RERANK_WINDOW` | `30` | How many top candidates the rerank pass sees; it may promote one from below the return cutoff. Clamped to `>= k`. Allowlisted. | free (the rerank call itself is priced under `MEMRAIN_RERANK`) |
-| `MEMRAIN_RERANK_GATE` | `off` | `shadow` grades the head before the rerank (whole-title match, or the vector and keyword arms putting one page first) and records `would_skip` and `gate_reason` in the operator meta's `rerank`; the rerank still runs. Nothing skips the call live. Not compose-allowlisted. | free |
-| `MEMRAIN_RELATIONAL_RERANK_PIN` | `3` | How many relational-arm pages go back to the head of the rerank window after the rerank, `0..10`; `0` or `off` keeps the reranked order. Part of the query-cache key when not the default. Not compose-allowlisted. | free |
-| `MEMRAIN_SEARCH_SNIPPET_CHARS` | `0` (off) | When `> 0`, the `search` and `query` MCP tools cut each hit's `content` to this many characters at a word boundary and mark it `truncated: true`; a page hit also gets a `full` pointer containing `page_get` with JSON arguments `slug` and `source_id`. `0`, unset or malformed returns hits uncut. Allowlisted. | free |
-| `MEMRAIN_FEEDBACK` | off (`=1` on) | Learn from ratings of search results. On, the "useful / not useful" buttons on an Ask answer's sources rate those pages, and reading a page with `page_get` or `get_chunks` within 5 minutes of the `search` that returned it counts as a light positive vote. Each page gets a soft weight in its own source, and search moves it by at most ±10% of its score; a brain without ratings ranks exactly as before. A vote counts by who gave it (owner 1, member 0.5, agent 0.25), loses half its weight every 90 days and half again once the page is edited; each principal's latest vote replaces its earlier one, and one principal may give 60 ratings an hour. Only a hash of the principal is stored, never the question; raw ratings are deleted after 180 days and the weight keeps their effect. Off, no rating is accepted and search reads no weight. No MCP tool. | free |
-| `MEMRAIN_RERANK_TIMEOUT_MS` | `5000` | Wall-clock limit for one rerank call; on timeout the hits come back unreranked. | free |
-| `MEMRAIN_TRAJECTORY_REGRESSION_THRESHOLD` | `0.1` | Drop in `find_trajectory` score that counts as a regression. Must be in `(0, 1)`; anything else uses the default. | free |
-| `MEMRAIN_ORPHAN_EXCLUDE_WRITERS` | built-in list | Replaces the list of `written_by` values whose pages never count as orphans. Presence decides: set to empty, every page counts. CSV. | free |
+| `MEMRAIN_SEARCH_SNIPPET_CHARS` | `0` (off) | When `> 0`, the `search` MCP tool cuts each hit's `content` to this many characters at a word boundary and mark it `truncated: true`; a page hit also gets a `full` pointer containing `page_get` with JSON arguments `slug` and `source_id`. `0`, unset or malformed returns hits uncut. Allowlisted. | free |
+| `MEMRAIN_RERANK_TIMEOUT_MS` | — | Not read. Lite has no rerank; the name appears only in a code comment. | free |
+| `MEMRAIN_ORPHAN_EXCLUDE_WRITERS` | built-in list | Replaces the list of `written_by` values a remote caller may not stamp on a page write; such a value is replaced with the caller's own identity. Lite has no orphan report, so this is all the list does. Presence decides: set to empty, no value is replaced. CSV. | free |
 | `MEMRAIN_ORPHAN_EXCLUDE_EXTRA` | empty | Adds `written_by` values to that list. CSV. | free |
-| `MEMRAIN_RANK_METADATA_GATE` | off (`=1` on) | Ranking flag: the recency, salience, chronicle, mattering, graph, backlink and alias boosts apply only when a lexical arm (keyword, title or relational) voted for the query. Read per call and keyed into the query cache. Allowlisted. | free |
-| `MEMRAIN_RANK_ENTITY_TRUTH_SOFT` | off (`=1` on) | Ranking flag: the ×2 entity-truth boost needs an explicit `detail: "low"`; a low detail inferred by the intent classifier gets ×1.2. Allowlisted. | free |
-| `MEMRAIN_RANK_PAGE_FUSION` | off (`=1` on) | Ranking flag: fusion votes per page instead of per chunk, so a page's mirror and its truth copy pool their votes and agreement across arms counts once per arm. (They share one per-page result cap with or without it.) Allowlisted. | free |
-| `MEMRAIN_RANK_KEYWORD_CONFIDENCE` | off (`=1` on) | Ranking flag: when the keyword arm's top hit barely leads its runner-up and the vector arm voted, the keyword and title arms fuse at half weight. Allowlisted. | free |
-| `MEMRAIN_RANK_EXACT_LOOKUP` | off (`=1` on) | Ranking flag: when exactly one page's title or slug equals the whole query, its best chunk moves to rank 1. Allowlisted. | free |
-| `MEMRAIN_RANK_SHADOW` | unset | Shadow ranking: name one ranking flag read after fusion (`METADATA_GATE`, `ENTITY_TRUTH_SOFT`, `EXACT_LOOKUP`) and each search with telemetry that runs its ranking (not a query-cache hit) also ranks its candidates with that flag flipped, recording only daily counts in `search_telemetry_shadow` (shown by `memrain search stats`). Results do not change; other values are ignored. Read at server start. See `docs/eval/BENCH-AND-PROMOTE.md`. | free |
-
-The `MEMRAIN_RANK_*` flags ship off and are promoted one at a time, after a
-paired A/B on the live corpus says the change helps. `memrain eval
---config-a '{"name":"off"}' --config-b '{"name":"on","env":{"MEMRAIN_RANK_EXACT_LOOKUP":"1"}}'`
-sets the flag for the B side's queries only; see `docs/eval/PREREG-TEMPLATE.md`
-for the sealed run that decides a promotion. `memrain eval promote <FLAG>` runs
-the acceptance protocol on the search bench in one step; see
-`docs/eval/BENCH-AND-PROMOTE.md`.
-
-`near_symbol` and `walk_depth` are **search-tool parameters**, not env vars —
-pass them per call (`walk_depth` 1–2, capped at 2; inert unless `walk_depth > 0`
-or `near_symbol` is set). They drive the structural call-graph expansion pass.
+| `MEMRAIN_RANK_PAGE_FUSION` | — | Not read. Search does not switch on it; the name appears only in a code comment. | free |
 
 ---
 
-## 3. Agent-layer synthesis (cheap — Claude Haiku)
+## 3. Spend and Bedrock calls
 
-Opt-in synthesis chain (atoms → concepts → takes → grade → calibration) written
-to the isolated `synth_*` store and read via `list_concepts` / `list_takes`.
-Runs on Bedrock **Claude Haiku** (the utility tier — Amazon Nova was removed).
-Cost is low but non-zero; all default OFF, so the brain is pure-retrieval unless
-you opt in.
+The only model Memrain calls is Bedrock Titan text embeddings. These knobs cap
+that spend and bound the calls. A few names below come from 2.x, which also
+called chat models; their rows say what Lite does with them.
 
 | Variable | Default | What it does | Cost |
 |---|---|---|---|
-| `MEMRAIN_RERANK` | off (`=1` on) | Two-pass rerank — reorders the top hybrid hits with one Claude Haiku call per search. The budget alternative to the paid Sonnet `MEMRAIN_GRAPH_RERANK`; near-identical ranking quality. No call is made when the top hit's title holds the query as a phrase or the vector and keyword arms both rank its page first. With the relational arm on, up to 3 relational pages go back to the head of the reranked window. | cheap (Haiku, ~$1–3/mo) |
-| `MEMRAIN_DREAM_SYNTHESIS` | off (`=1` on) | Appends the Haiku synthesis chain to quiet-hours cycle ticks only. Idempotent, count-capped. | cheap (Haiku) |
-| `MEMRAIN_DREAM_SYNTHESIS_MAX_DOCS` | `25` | Max source docs fed per synthesis run. Code-only. | — |
-| `MEMRAIN_DREAM_SYNTHESIS_MAX_CONCEPTS` | `30` | Max concepts produced per run. Code-only. | — |
-| `MEMRAIN_DREAM_SYNTHESIS_MAX_TAKES` | `25` | Max takes produced per run. Code-only. | — |
-| `MEMRAIN_DREAM_SYNTHESIS_MIN_GRADED` | `5` | Minimum graded takes before the run is considered complete. Code-only. | — |
-| `MEMRAIN_GRADE_MIN_AGE_DAYS` | `182` | Minimum age a take must reach before it becomes eligible for grading — lets a take settle before it is judged. `0` disables the gate. Fail-loud on a negative value. Code-only. | free |
-| `MEMRAIN_TAKE_EMBED` | off (`=1` on) | Embed each synthesized take so takes are semantically searchable; off leaves the take's embedding column NULL. Code-only. | cheap (embed) |
-| `MEMRAIN_DREAM_INTERVAL_S` | `21600` (6h) | Maintenance-cycle interval. | free |
-| `MEMRAIN_DREAM_STALE_DAYS` | `30` | Re-embed docs older than this many days during the cycle. | free |
-| `MEMRAIN_UTILITY_MODEL` | `eu.anthropic.claude-haiku-5-5` | Overrides the Haiku utility-tier model id (intent classification, query expansion, rerank, synthesis, contextual blurbs, `skillify` drafts and `friction propose-fix`; `SKILLIFY_MODEL_ID` overrides the last two for a CLI run outside the container; compose does not pass it in). Use the per-feature keys below to move one call site. | cheap (Haiku) |
-| `MEMRAIN_INTENT_LLM` | off (`=1` on) | Paid Haiku tie-break for queries the regex intent taxonomy cannot place. Off, intent classification makes no model call. Code-only. | cheap (Haiku) |
-| `MEMRAIN_QUERY_EXPANSION` | off (`=1` on) | LLM query expansion: Haiku generates query variants for extra keyword passes. Off in the default search mode. Code-only. | cheap (Haiku) |
-| `MEMRAIN_EXPANSION_MODEL` | utility model | Model id for query expansion only. Allowlisted. | cheap (Haiku) |
-| `MEMRAIN_INTENT_MODEL` | utility model | Model id for the `MEMRAIN_INTENT_LLM` tie-break only. Allowlisted. | cheap (Haiku) |
-| `MEMRAIN_RERANK_MODEL` | utility model | Model id for the `MEMRAIN_RERANK` two-pass rerank only. Allowlisted. | cheap (Haiku) |
-| `MEMRAIN_CONCEPTS_MODEL` | utility model | Model id for concept synthesis only; `MEMRAIN_CONCEPTS_BUDGET_USD` prices the same model. Allowlisted. | cheap (Haiku) |
-| `MEMRAIN_WORTH_GATE` | off (`=1` on) | A cached Haiku verdict ("is this transcript worth synthesizing?") in front of the paid transcript consumers (reflections, conversation-facts backfill). Fail-open: a judge error lets the transcript through. Code-only. | cheap (Haiku) |
-| `MEMRAIN_SYNTH_PAGES` | on (`=0` off) | Mirrors synthesis atoms and concepts into pages. `0` keeps them in the `synth_*` tables only and disables atom-page retirement. Code-only. | free |
-| `MEMRAIN_LLM_MAX_INFLIGHT` | `4` | Bedrock chat calls one process runs at once; the rest wait. Code-only. | — |
-
-Model ids resolve in `core/llm/resolve-model.ts`, in this order: the feature's
-own key (`MEMRAIN_<FEATURE>_MODEL`), then the tier key (`MEMRAIN_UTILITY_MODEL` or
-`MEMRAIN_FACTS_MODEL`), then the built-in default. An empty value falls through.
-
-Atom extraction publishes a new completed source manifest only after the whole
-response and required page writes have passed validation. Capped input/output,
-malformed or duplicate atoms, and empty or below-half replacements of a prior
-nonempty extraction are held. Only proven automatic pages from the previous
-completed manifest can retire, with at most 100 attempts per phase. Source and
-page versions are rechecked at each retirement; authored or ambiguous legacy
-pages remain held. Retired pages keep their tombstones and version history,
-and old `synth_atoms` rows remain stored. Concept synthesis filters older atoms
-only when an authoritative completed manifest exists.
-
----
-
-## 4. Paid opt-in Bedrock Sonnet slices
-
-**Every flag here triggers a PAID Claude Sonnet call when set.** Each is bounded
-by its own `*_BUDGET_USD` companion (default `1.0`) via a USD `BudgetTracker`
-that stops making calls once the budget is spent. All default OFF.
-
-| Variable | Default | What it does | Cost |
-|---|---|---|---|
-| `MEMRAIN_THINK` | off | Enables `memrain think <q>` deep synthesis — **CLI-only**, does not fire on search. | **paid (Sonnet)** |
-| `MEMRAIN_DAILY_BUDGET_USD` | off | Brain-wide daily USD cap over every paid call (all clients, cycle, jobs and CLI) in a UTC day, holds included. Blank, malformed or negative is off; `0` refuses everything. Refusals carry reason `daily_cap`. Suggested `1.00`. Allowlisted. | — |
-| `MEMRAIN_CYCLE_MAX_USD_PER_DAY` | off | Daily USD cap over calls made under a cycle phase. Same parsing as `MEMRAIN_DAILY_BUDGET_USD`. Suggested `0.30`. Allowlisted. | — |
-| `MEMRAIN_DAEMON_<NAME>_MAX_USD_PER_DAY` | per daemon (`connector_sync`: `5`) | Daily USD cap over one paid daemon's calls for every source (`<NAME>` upper-cased, e.g. `MEMRAIN_DAEMON_CONNECTOR_SYNC_MAX_USD_PER_DAY`). A `daemon_controls` row can lower it, never raise it; a row for one source adds that source's own day cap. A paid daemon does not run at all while `MEMRAIN_DAILY_BUDGET_USD` is unset. Code-only. | — |
-| `MEMRAIN_DAEMON_<NAME>_MAX_USD_PER_RUN` | per daemon (off) | USD cap over one run of a paid daemon, held at each call's maximum cost. Same parsing; a control row can lower it. Code-only. | — |
-| `MEMRAIN_SPEND_PATH_<PATH>_MAX_USD_PER_DAY` | off | Optional daily USD cap over one paid path that predates the spend wallet (`FACTS_EXTRACT`, `CONVERSATION_FACTS_BACKFILL`, `CONTEXTUAL_LLM`, `DEEP_SYNTH`). Their existing run caps are unchanged. A path whose call costs more than its hold is paused until `memrain spend resume <path>`; `memrain doctor` (`spend-wallet`) and the advisor report it. Code-only. | — |
-| `MEMRAIN_CHAT` | off (`=1` on) | The admin **Ask** page: a question answered from the brain with numbered citations, by one `think` synthesis per answer over the operator's whole brain. Off, every send is answered `disabled` and no model is called. On, it also needs `MEMRAIN_DAILY_BUDGET_USD` (chat is a paid path added after the spend wallet). The model gets no tools and changes nothing; outside text reaches it only inside the external frame. Allowlisted. | **paid (chat model)** |
-| `MEMRAIN_CHAT_MODELS` | `eu.anthropic.claude-haiku-5-5` | Comma list of model ids the Ask page offers; the first is the default. A model without a price in `MODEL_PRICING` is left out, and so is one whose reserved answer output alone costs more than `MEMRAIN_CHAT_ANSWER_MAX_USD`. Allowlisted. | — |
-| `MEMRAIN_CHAT_ANSWER_MAX_USD` | `0.02` | The most one answer may cost (the follow-up rewrite and the synthesis together). Held in the spend ledger before the first call and enforced on every call. Allowlisted. | — |
-| `MEMRAIN_CHAT_ANSWER_MAX_USD_CAP` | `0.50` | Hard ceiling on `MEMRAIN_CHAT_ANSWER_MAX_USD`: a larger value is lowered to it. Allowlisted. | — |
-| `MEMRAIN_CHAT_USER_DAY_USD` | `0.50` | One chat owner's UTC day. A send that would not fit is answered `budget` with no model call. Allowlisted. | — |
-| `MEMRAIN_CHAT_RETENTION_DAYS` | `90` (`0` = keep forever) | Age past which the purge phase deletes chat messages, and the threads they leave empty. Allowlisted. | free |
-| `MEMRAIN_CHAT_SHARE` | off (`=1` on) | Share one Ask answer as a password link (`/s/<token>`) that works for 7 days. The page shows the answer text and the titles of its sources, never a page body; it is `noindex` and never cached, and five wrong passwords lock the link for 15 minutes. Only an answer that finished `ok` can be shared, and only by its owner, who can also end the link early. Links go with the answer: deleting the thread, retention and `memrain erase chat` take them. Off, `/s/` answers as before and no link can be made. Allowlisted. | free |
-| `MEMRAIN_CHAT_TIMEOUT_MS` | `120000` | How long one answer may take before it is stopped and answered `timeout` (1000 to 540000; kept a minute under the 10-minute spend hold). Allowlisted. | — |
-| `MEMRAIN_THINK_BUDGET_USD` | `1.0` | USD ceiling for `think`. | — |
-| `MEMRAIN_THINK_OUTPUT_TOKENS` | `4000` | Output-token cap for one `think` call. `think` returns structured JSON, so a cut-off answer is total loss rather than a shorter answer — raise this if answers come back incomplete. Clamped to 8000. Code-only. | — |
-| `MEMRAIN_THINK_AUTO_ANCHOR` | on (`=0` off) | When a temporal question ("when did X change, is it still…") names no anchor, `think` derives candidate entity slugs from the question + retrieved pages and anchors on them. Temporal/knowledge-update intents only, fail-soft. A behavior toggle inside the `think` flow — no extra billable call beyond `think` itself. Code-only. | — |
-| `MEMRAIN_RELATIONAL_LLM` | off | Sonnet fallback for `relational_recall` when the deterministic path finds nothing and planned no multi-hop chain; one call (plus at most one budget-checked retry on truncated output) that may return a single relation or a chain of up to 3 hops. | **paid (Sonnet)** |
-| `MEMRAIN_RELATIONAL_LLM_BUDGET_USD` | `1.0` | USD ceiling for the relational arm. | — |
-| `MEMRAIN_GRAPH_RERANK` | off | Sonnet rerank over graph-expanded candidates — **fires on every search**, so the highest-frequency paid path. Enable deliberately. | **paid (Sonnet)** |
-| `MEMRAIN_GRAPH_RERANK_BUDGET_USD` | `1.0` | USD ceiling for graph rerank. | — |
-| `MEMRAIN_DEEP_SYNTH` | off | Scheduled `think` over the top concepts during the cycle. It gathers only pages at trust tier `agent` or above, so outside text (connector, GitHub, webhook) stays out of its prompt. | **paid (Sonnet)** |
-| `MEMRAIN_DEEP_SYNTH_BUDGET_USD` | `1.0` | USD ceiling for deep-synth. | — |
-| `MEMRAIN_DEEP_SYNTH_MAX_QUESTIONS` | built-in | Cap on questions per deep-synth run. | — |
-| `MEMRAIN_TAKE_ENSEMBLE` | off | N-judge Sonnet grading of takes. | **paid (Sonnet)** |
-| `MEMRAIN_TAKE_ENSEMBLE_BUDGET_USD` | `1.0` | USD ceiling for the ensemble. | — |
-| `MEMRAIN_TAKE_ENSEMBLE_JUDGES` | `3` | Judges per take. | — |
-| `MEMRAIN_FACTS_EXTRACTION` | off | Conversation → structured facts extraction via Sonnet. A page whose frontmatter sets `facts_extraction: false` is left out, on write and in the backfill, until it is saved without that line. | **paid (Sonnet)** |
-| `MEMRAIN_FACTS_BUDGET_USD` | `1.0` | USD ceiling for facts extraction. | — |
-| `MEMRAIN_OWNER_ENTITY` | unset | Slug of the brain owner's entity page (e.g. `people/alice`). When set, a first-person claim the owner makes as `User` in a first-party transcript (Claude Code, Codex, ChatGPT, Claude.ai imports under `transcripts/`, or a `User:` turn in `extract-conversation-facts`) and that the extractor left without an entity is stored on this entity instead of being dropped. Diarised speakers ("Speaker 2") never map. Unset: no change. An invalid slug is ignored with one warning. | — |
-| `MEMRAIN_FACTS_JUNK_FILTER` | on (`=0` off) | Drops extracted "facts" that are assistant plan narration ("Let me read the file"), narration about the conversation itself, or a provider spend/rate-limit error sentence. Three anchored patterns; a `commitment` is exempt from the narration one. | free |
-| `MEMRAIN_FACTS_MAX_WINDOWS` | `1` | Extractor calls one long non-transcript page may get. `1` reads the first 12,000 characters, as before. Higher cuts the body at paragraph boundaries into 12,000-character windows, one call each under the same per-write ceiling (`MEMRAIN_FACTS_WRITE_BUDGET_USD`); the first window the ceiling refuses ends the run. A window the model declines (a refusal or a content filter) is read once more as two halves, at most two more calls under the same ceiling; a half still declined is skipped and logged as `model_declined` with its character range, never its text, and the rest of the page counts as read. Transcript pages are already split by the importer. Clamped to 20. | **paid (Sonnet)** per window |
-| `MEMRAIN_THINK_QUOTE_VERIFY` | on (`=0` off) | Checks every quoted span of four or more words in a `think` answer against the evidence it was given: an exact match stays, a near match is repaired to the evidence's wording, anything else loses its quotes and is marked `[unverified]`. Deterministic, no model call. | free |
-| `MEMRAIN_TIMEZONE` | `UTC` | IANA time zone `think` uses for "today" and for page dates (e.g. `Europe/Berlin`). An invalid name falls back to UTC. | free |
-| `MEMRAIN_FACTS_MODEL` | `eu.anthropic.claude-sonnet-5-5` | Overrides the paid-tier Sonnet model id for the slices above. | **paid (Sonnet)** |
-| `MEMRAIN_FACTS_EXTRACT_MODEL` | `MEMRAIN_FACTS_MODEL` | Model id for fact extraction only (on write, on demand and the conversation backfill). Allowlisted. | **paid (Sonnet)** |
-| `MEMRAIN_THINK_MODEL` | `MEMRAIN_FACTS_MODEL` | Model id for `think` only. Allowlisted. | **paid (Sonnet)** |
-| `MEMRAIN_DRIFT_MODEL` | `MEMRAIN_FACTS_MODEL` | Model id for the drift judge only (the cycle phase that checks whether a take's evidence still holds). Allowlisted. | **paid (Sonnet)** |
-| `MEMRAIN_DEEP_MODEL` | unset (falls back to `MEMRAIN_FACTS_MODEL`) | Opt-in deeper model for scheduled deep-synth. Unset, deep-synth runs on the `MEMRAIN_FACTS_MODEL` model. Code-only. | **paid** |
-| `MEMRAIN_CONCEPTS_BUDGET_USD` | `0.5` | USD ceiling for one `synthesize_concepts` run. Unlike the caps above this one is ALWAYS on — `maxConcepts` bounds the call count, not the spend, and the cycle passes no tracker of its own. Concepts refused by the ceiling keep their deterministic narrative. Code-only. | — |
-| `MEMRAIN_REFLECTIONS` | off | `reflections` cycle phase: one budget-capped Sonnet pass over recent un-reflected transcripts writes cited `reflections/<topic-slug>` pages, giving the `patterns` phase a source to mine. Runs before `patterns`. When the model answers that nothing is worth reflecting on, the transcripts it was sent are not sent again until they are edited or the model changes; an answer with no JSON array gets one follow-up asking for it, and a second such answer, or an array with no usable entry, holds the transcripts back for 24 hours, doubling up to 7 days. Code-only. | **paid (Sonnet)** |
-| `MEMRAIN_REFLECTIONS_BUDGET_USD` | `1.0` | USD ceiling for the reflections pass. Code-only. | — |
-| `MEMRAIN_REFLECTIONS_LOOKBACK_DAYS` | `14` | How far back the pass scans for un-reflected transcripts. Code-only. | — |
-| `MEMRAIN_REFLECTIONS_MAX_TRANSCRIPTS` | `20` | Max transcripts fed into one reflections pass. Code-only. | — |
-| `MEMRAIN_PATTERNS` | off | `patterns` cycle phase: one budget-capped Sonnet pass mines recent `reflections/` pages for themes recurring across ≥`MIN_EVIDENCE` distinct reflections and writes one `patterns/<topic-slug>` page each (citing its evidence). The one synthesis phase that writes real pages; reads/writes pinned to a single `source_id` (no cross-tenant mining). Code-only. | **paid (Sonnet)** |
-| `MEMRAIN_PATTERNS_BUDGET_USD` | `1.0` | USD ceiling for the patterns pass. Code-only. | — |
-| `MEMRAIN_PATTERNS_REFLECTION_PREFIX` | `reflections/` | Slug prefix the miner reads (kept in lockstep with what the reflections phase writes). Code-only. | — |
-| `MEMRAIN_PATTERNS_MIN_EVIDENCE` | `3` | Minimum distinct reflections a theme must span before a pattern page is written. Code-only. | — |
-| `MEMRAIN_PATTERNS_LOOKBACK_DAYS` | `30` | How far back the patterns pass reads reflections. Code-only. | — |
-| `MEMRAIN_PATTERNS_MAX_REFLECTIONS` | `100` | Max reflections fed into one patterns pass. Code-only. | — |
-| `MEMRAIN_AUTO_THINK` | off (`=1` on) | `auto-think` cycle phase: runs the questions in `MEMRAIN_AUTO_THINK_QUESTIONS` through `think` and writes each answer as a draft page under `drafts/think/`. Code-only. | **paid (Sonnet)** |
-| `MEMRAIN_AUTO_THINK_QUESTIONS` | empty | CSV of standing questions. With none set the phase does nothing. Code-only. | — |
-| `MEMRAIN_AUTO_THINK_MAX` | `5` | Max questions per run. Code-only. | — |
-| `MEMRAIN_AUTO_THINK_BUDGET_USD` | `2.0` | USD ceiling for one run, shared across its questions. `0` is a real cap. Code-only. | — |
-| `MEMRAIN_AUTO_THINK_COOLDOWN_HOURS` | `12` | Minimum hours between runs per tenant. `0` disables the cooldown. Code-only. | — |
-| `MEMRAIN_DRIFT` | off (`=1` on) | `drift` cycle phase: takes (weight 0.3–0.85) whose source document was re-ingested after the take was made are judged against the new text, and the result is written to a `drift-reports/` page. Code-only. | **paid (Sonnet)** |
-| `MEMRAIN_DRIFT_BUDGET_USD` | `1.0` | USD ceiling for one drift run. `0` is a real cap. Code-only. | — |
-| `MEMRAIN_DRIFT_COOLDOWN_HOURS` | `12` | Minimum hours between drift runs per tenant. Code-only. | — |
-| `MEMRAIN_DRIFT_MAX_CANDIDATES` | `12` | Max takes judged per run. Code-only. | — |
-| `MEMRAIN_ENRICH_THIN` | off (`=1` on) | `enrich-thin` cycle phase: rewrites a few short real pages in place, expanding each from its linked neighbours only (one Sonnet call per page, citations as wiki links). Code-only. | **paid (Sonnet)** |
-| `MEMRAIN_ENRICH_THIN_BUDGET_USD` | `1.0` | USD ceiling for one run. `0` is a real cap. Code-only. | — |
-| `MEMRAIN_ENRICH_THIN_COOLDOWN_HOURS` | `12` | Minimum hours between runs per tenant. Code-only. | — |
-| `MEMRAIN_ENRICH_THIN_MAX_PAGES` | `3` | Max pages rewritten per run. Code-only. | — |
-| `MEMRAIN_ENRICH_THIN_THRESHOLD` | `400` | Body length (characters) under which a page counts as thin. Code-only. | — |
-| `MEMRAIN_ENRICH_THIN_TYPES` | `person,company,concept,note` | Page types eligible for enrichment. CSV. Code-only. | — |
-| `MEMRAIN_FACTS_WRITE_BUDGET_USD` | `0.25` | USD ceiling for one fact extraction, either the one a page write triggers when `MEMRAIN_FACTS_EXTRACTION` is on or an on-demand `extract_facts` call, including its one retry when the output is cut off. Code-only. | — |
-| `MEMRAIN_AUTO_CHRONICLE` | off (`=1` on) | On an operator write of a conversation-shaped page, queue one `chronicle_extract` job that projects its events into the chronicle. Tenant and public writes never trigger it. A calendar invite with a title, `start` and `end` costs no call: once it has ended it becomes one "Scheduled: <title>" event (when = start, who = attendees), and before that it is skipped; `chronicle_backfill` picks up invites that ended since. Connector calendar pages are left to the sync, which already writes their chronicle row. Two events of one page with the same people and summary on one day (two calls at different times) get separate event pages. Code-only. | **paid (Sonnet)** |
-| `MEMRAIN_CHRONICLE_WRITE_BUDGET_USD` | `0.05` | USD ceiling for one page's chronicle extraction (also what `chronicle_backfill` quotes per page). Code-only. | — |
-| `MEMRAIN_CHRONICLE_TZ` | `UTC` | Time zone used to turn a chronicle event's time into a date. Code-only. | free |
-| `MEMRAIN_TAKE_AUTO_RESOLVE` | off (`=1` on) | Lets a high-confidence ensemble verdict resolve a take instead of staying advisory. Never overwrites a human resolution. Code-only. | free (uses the ensemble's calls) |
-| `MEMRAIN_PROBE_VERDICT_TTL_DAYS` | `30` | Days a cached contradiction-probe verdict is reused before the pair is judged again. Code-only. | — |
-| `MEMRAIN_REMEDIATION_MAX_USD` | `1.0` | USD ceiling for one `memrain doctor --remediate` run (the re-embed and re-run jobs it queues). Code-only. | — |
-| `MEMRAIN_PROBE_CONTRADICTIONS` | off | Latent-contradiction probe (mig 064): a paid cycle phase that caches LLM-suspected fact conflicts so `find_contradictions` can surface them. Paired candidates stay `source_id`-scoped (no cross-tenant pairing). Code-only. | **paid (Sonnet)** |
-| `MEMRAIN_PROBE_CONTRADICTIONS_BUDGET_USD` | `1.0` | USD ceiling for the contradiction probe. Code-only. | — |
-| `MEMRAIN_FACTS_BACKFILL` | off | `conversation-facts-backfill` cycle phase: extracts facts from historical transcripts that predate on-write extraction. Synthesis-written pages (`reflections/`, `patterns/`) are excluded from the selector. No-ops unless set truthy. Code-only. | **paid (Sonnet)** |
-| `MEMRAIN_FACTS_BACKFILL_BUDGET_USD` | `1.0` | Brain-wide USD ceiling for the backfill. Code-only. | — |
-| `MEMRAIN_CONNECTOR_FACTS_MODEL` | `eu.anthropic.claude-haiku-5-5` | Model of the `connector-facts` cycle phase, which extracts facts from the mail, chat and meeting pages of the connector accounts that opted in. Off for every account until `memrain connectors facts <account-id> --enable --cap <usd> --apply` (refused unless `MEMRAIN_WRITE_GATE_ROWS=quarantine`, `MEMRAIN_DAILY_BUDGET_USD` is set and the account's source is not a calendar); each account spends under its own daily cap (at most $20), separate from its sync. Needs `MEMRAIN_FACTS_EXTRACTION`. The facts are private, HIGH notability only, written by `connector-facts:<account-id>`; `--forget --apply` forgets that account's rows only, after an export. A page that fails three times at the same body is not read again until it changes. Code-only. | **paid (Haiku)** |
-| `MEMRAIN_CONTEXTUAL_RETRIEVAL` | off | **LLM-free** contextual-embed wrapper. ⚠️ Enabling it changes only *future* embeds — **run a full re-embed after enabling**, or the vector space becomes a mix of wrapped and unwrapped vectors and search quality degrades. | free (but forces re-embed) |
-| `MEMRAIN_CONTEXTUAL_LLM` | off | **PAID per-chunk** contextual tier (Haiku): asks a utility model to write a short blurb situating EACH chunk within its whole document, replacing the deterministic synopsis before embedding. Fail-open — budget/errors fall back to the deterministic prefix. ⚠️ Same re-embed caveat as above; run `reindex --contextual` after enabling. | **paid (Haiku)** |
-| `MEMRAIN_CONTEXTUAL_LLM_DOC_MAX_CHARS` | `60000` | How much of the document the contextual tier sends with each chunk: a window of about this many characters around the chunk. Clamped to 2000–300000. Allowlisted. | — |
-| `MEMRAIN_CONTEXTUAL_LLM_BUDGET_USD` | `5.0` | USD ceiling for the per-chunk LLM tier. Shared across a whole `reindex --contextual` run; when spent mid-run, remaining chunks fall back to deterministic. A later `--force` re-run with more budget upgrades them. | — |
-| `MEMRAIN_EMBED_MAX_INFLIGHT` | `4` | How many chunks an interactive write (`page_put`, `page_append`, `page_revert`, `page_restore`) situates and embeds at once, shared by every concurrent write in the process. Each chunk costs a contextual call and an embed; serially a page paid about 1.3 s per chunk. Sweeps, reindex and the cycle stay serial. `1` restores the old serial behaviour everywhere. Not the backfill's pool width (`MEMRAIN_EMBED_CONCURRENCY`), and not applied to query embeds. | — |
-| `MEMRAIN_PAGE_MIRROR_SYNC` | `1` | Where a written page's search mirror is built. `1` (default): inline, before `page_put` / `page_append` return, which is where their latency goes. `0`: queued as a `page_mirror` job on the worker, so the write returns at once and search sees the page seconds later; the response carries `search_pending: true` and `search_job_id` instead of `search_indexed`, and a caller that must search straight away passes `wait_for_index: true`. `page_revert` and `page_restore` always mirror inline. | — |
-| `MEMRAIN_LLM_TIMEOUT_MS` | per kind | Shared Bedrock request timeout for every call kind that has no knob of its own. A timeout ENDS the request (it used to only log a warning while the request ran on) and the spend wallet retries it with the other transient failures — up to 4 attempts with backoff, each holding and booking its own worst case (a timed-out attempt counts as spent). Search-time steps (intent, expansion, rerank) make one attempt. | — |
-| `MEMRAIN_LLM_UTILITY_TIMEOUT_MS` | `30000` | Timeout for utility-tier chat (Haiku): contextual chunk blurbs, reranking, query expansion, intent. | — |
-| `MEMRAIN_LLM_REASONING_TIMEOUT_MS` | `120000` | Timeout for reasoning-tier chat (Sonnet). Longer by default so a long generation does not start failing now that the limit is enforced. | — |
+| `MEMRAIN_DAILY_BUDGET_USD` | off | Brain-wide daily USD cap over every paid call (all clients, the housekeeping embeds and the CLI) in a UTC day, holds included. Blank, malformed or negative is off; `0` refuses everything. Refusals carry reason `daily_cap`. Suggested `1.00`. Allowlisted. | — |
+| `MEMRAIN_CYCLE_MAX_USD_PER_DAY` | off | Daily USD cap over calls made under a 2.x cycle phase. Lite tags no call with a phase, so the spend it sums is only what a 2.x cycle booked today; every paid call is still checked against it, and `0` refuses them all. Same parsing as `MEMRAIN_DAILY_BUDGET_USD`, which is the cap to use. Code-only. | — |
+| `MEMRAIN_CHAT_RETENTION_DAYS` | `90` (`0` = keep forever) | Lite has no chat. The housekeeping retention step deletes chat messages a 2.x brain kept once they are older than this, and the threads they leave empty. `memrain erase chat --owner KEY` counts one owner's threads and messages; add `--apply` to delete them. Allowlisted. | free |
+| `MEMRAIN_EMBED_MAX_INFLIGHT` | `4` | How many chunks an interactive write (`page_put`, `page_append`, `page_revert`, `page_restore`) embeds at once, shared by every concurrent write in the process. `1` embeds one chunk at a time. Not the backfill's pool width (`MEMRAIN_EMBED_CONCURRENCY`), and not applied to query embeds. | — |
 | `MEMRAIN_EMBED_TIMEOUT_MS` | `10000` | Timeout for Titan embedding calls. | — |
-
-
-> **Measured, not estimated** — a single-operator brain with
-> `MEMRAIN_CONTEXTUAL_LLM=1`, 30 days to 2026-09-08: the utility tier booked
-> **$12.12 over 1924 calls**, and **970 of those calls ($9.83) landed inside a
-> `page_put` window** — i.e. eight dollars in ten are spent wrapping chunks
-> while the caller waits. `page_put` averaged **33 s** that week (worst 116 s),
-> against **2 cents** for every Titan embedding in the same period. The wrapper
-> is on the write path and synchronous: one Haiku call per chunk, per write.
-> Turn it off and writes drop to seconds; measure `eval-probe`'s hit rate
-> before and after rather than guessing at the quality it buys.
+| `MEMRAIN_LLM_TIMEOUT_MS` | unset | Fallback for `MEMRAIN_EMBED_TIMEOUT_MS` when that is unset. A timeout ends the request. | — |
+| `MEMRAIN_LLM_UTILITY_TIMEOUT_MS` | — | Not used: Lite makes no chat-model call. A helper still parses it, but nothing calls the helper. | — |
+| `MEMRAIN_LLM_REASONING_TIMEOUT_MS` | — | Not used, as `MEMRAIN_LLM_UTILITY_TIMEOUT_MS`. | — |
+| `MEMRAIN_LLM_MAX_INFLIGHT` | — | Not used, as `MEMRAIN_LLM_UTILITY_TIMEOUT_MS`. | — |
+| `MEMRAIN_UTILITY_MODEL` | — | Not read. Lite calls no chat model; the name appears only in the hint printed when a Bedrock call fails because its model id does not resolve. | — |
+| `MEMRAIN_FACTS_MODEL` | — | Not read, as `MEMRAIN_UTILITY_MODEL`. | — |
+| `MEMRAIN_DEEP_MODEL` | — | Not read, as `MEMRAIN_UTILITY_MODEL`. | — |
 
 ---
 
-## 5. Auth & source scoping
+## 4. Auth & source scoping
 
 | Variable | Default | What it does | Cost |
 |---|---|---|---|
 | `MEMRAIN_TENANT_FAIL_CLOSED` | off (`=1` on) | When on, an authenticated PUBLIC principal with no source grant reads/writes **nothing** instead of the redacted whole brain. The static bearer (no `authInfo`) is unaffected. Flip once a real remote OAuth client with a grant exists. | free |
 | `MEMRAIN_OPERATOR` | unset (falls back to `USER`, then `cli`) | Name recorded as the actor on grant changes made with `memrain auth rescope-client`. Audit data only; it grants nothing. A self-chosen label, not an authenticated identity. | free |
-| `MEMRAIN_PUBLIC_WRITE` | `0` | When `1`, the public `/mcp` path may call the constructive write tools (`index`, `page_put`, `page_append`, `add_fact`, `add_timeline_event`, `add_tag`, `link`). Destructive ops + privacy-sensitive reads stay internal-only regardless. The static bearer is permanent, so anyone holding it can then write; prefer scoped PATs or OAuth clients for writers. | free |
+| `MEMRAIN_PUBLIC_WRITE` | `0` | When `1`, the public `/mcp` path may call the constructive write tools (`index`, `page_put`, `page_append`, `page_edit`, `add_tag`, `link`). Destructive ops + privacy-sensitive reads stay internal-only regardless. The static bearer is permanent, so anyone holding it can then write; prefer scoped PATs or OAuth clients for writers. | free |
 | `MEMRAIN_ASSUME_PUBLIC` | off (`=1` on) | Treat every HTTP request as public ingress. Public detection otherwise keys on the `Cf-Connecting-Ip` header a Cloudflare Tunnel injects; behind another proxy that does not add it, set this (or inject the header) or remote callers are judged as internal peers. Allowlisted. | free |
 | `MEMRAIN_HTTP_CORS_ORIGIN` | unset (no cross-origin) | CSV of browser origins allowed to call Memrain cross-origin. Unset denies every cross-origin request. Allowlisted. | free |
 | `MEMRAIN_MCP_RATE_LIMIT_PER_TOKEN_PER_MINUTE` | unset (off) | Per-credential cap on `/mcp` requests per minute, applied after authentication, on top of the per-IP limiter. Allowlisted. | free |
 | `MEMRAIN_PUBLIC_AUTH` | unset | `oauth`: public requests have no static bearer; a missing or unknown credential gets 401 with the resource-metadata challenge, and OAuth tokens and personal access tokens are verified as usual. Refuses to start with `MEMRAIN_PUBLIC_BEARER` also set; any other value is refused. Environment only. | free |
-| `MEMRAIN_REQUIRE_MEMBER` | off (`=1` on) | Refuse a credential that is not bound to a member on `/mcp` and `/ingest`. Environment only. | free |
-| config `access.serves` | unset (derived) | `several` makes the brain serve several people (unbound keys refused for reads) even with one member. Owner-only sources are closed to every key but the owner's either way. Two or more enabled members always count as several, whatever it says. Set in the `config` table on the brain host. | free |
-| config `access.owner_member` | unset | The member whose keys read as the brain owner. Set with `memrain member owner <id>`. | free |
-| `MEMRAIN_TENANT_ID` | unset | Read only by a build that wraps the server with an extension (`core/extension.ts`). Set without one registered, the server refuses to start. Environment only. | free |
-| `MEMRAIN_CONTROL_URL` | unset | As `MEMRAIN_TENANT_ID`: meaningful only to a wrapping build; set without one registered, the server refuses to start. Environment only. | free |
+| `MEMRAIN_REQUIRE_MEMBER` | off (`=1` on) | Refuse a credential on `/mcp` that is not bound to a member. Lite has no command that creates or binds members, so with it on only a credential a 2.x brain bound to an enabled member passes. Environment only. | free |
+| `MEMRAIN_TENANT_ID` | unset | Meant for a wrapped, multi-tenant deployment this build does not support. Set to anything non-blank, every entry point refuses to start. Environment only. | free |
+| `MEMRAIN_CONTROL_URL` | unset | As `MEMRAIN_TENANT_ID`: set to anything non-blank, every entry point refuses to start. Environment only; `memrain config set` refuses to store it. | free |
 | `MEMRAIN_PUBLIC_READ_BODIES` | off (redacted) | When on, public reads return full page bodies instead of redacted snippets. Leave off on a shared brain. Code-only. | free |
 | `MEMRAIN_HTTP_TRUST_PROXY` | off (`=1` on) | Let every header-keyed rate limiter fall back to `X-Forwarded-For` (first hop) then `X-Real-IP` when `Cf-Connecting-Ip` is absent. Both are attacker-controlled unless a trusted reverse proxy overwrites them, and a spoofable key is worse than none — the caller rotates values and mints a fresh bucket per request. Off, an unattributable caller is not metered per-IP at all. Turn on ONLY behind a proxy that terminates the client connection and rewrites those headers itself. On, the admin same-origin check also takes the browser's scheme from `X-Forwarded-Proto` for a host `MEMRAIN_PUBLIC_URL` does not name, so the proxy must send the right value or leave it out. | free |
 | `MEMRAIN_ADMIN_BOOTSTRAP` | unset | Admin-panel bootstrap token consumed by `serve.ts` at start. Must be 32+ chars from `[A-Za-z0-9_-]` or the server refuses to boot; unset ⇒ an ephemeral per-run token is printed to stderr. | free |
@@ -438,38 +236,14 @@ that stops making calls once the budget is spent. All default OFF.
 | `MEMRAIN_OAUTH_REQUIRE_LOGIN` | on (`=0` off) | Owner approval for every new agent sign-in: `GET /authorize` issues a code only to a signed-in operator who approved that exact request in the dashboard. `=0` auto-approves (and then refuses public client-mode clients). Tokens already issued keep working either way. Without `MEMRAIN_ADMIN_BOOTSTRAP` the admin token changes on every restart. | free |
 | `MEMRAIN_OAUTH_REFRESH_REUSE_REVOKE` | off (`=1` on) | What happens when a client presents a refresh token it already rotated more than 60 seconds ago. Off (default): the request is refused with `invalid_grant` and logged as `[oauth] refresh token reuse`, and the session keeps working. On: every live access and refresh token of that sign-in is also deleted, so both holders must sign in again. Turn on once the logs show no legitimate client replays late. | free |
 | `MEMRAIN_PUBLIC_URL` | unset (request host) | External base URL (Cloudflare tunnel origin). When set, the OAuth discovery document + issuer advertise this `https://…` origin so a cloud MCP client auto-configures against the real host. Set it behind any TLS-terminating proxy: unset, the issuer comes from the request (`http://…` there), and the RFC 8707 `resource` check at `/authorize` and `/token` refuses a client's `https://` connector URL with `invalid_target`. `serve` warns at boot when OAuth is on and it is unset. Passkey sign-in for the admin panel needs it too: the passkey is bound to its hostname, and without an `https://` value the panel offers the bootstrap login only. | free |
-| `MEMRAIN_HOT_MEMORY_META` | off (`=1` on) | Attach recent facts as `_meta.brain_hot_memory` on successful MCP tool responses from an unscoped operator. Excludes public, tenant-scoped, and admin-panel calls. Disabled by default; independent of the `hot_memory` tool. | free |
-| `MEMRAIN_DOCTOR_PER_SOURCE` | off (`=1` on) | Makes `doctor` WARN per-source (per-tenant) when a single source has chunks but zero embeddings. | free |
 | `MEMRAIN_REQUEST_LOG_DB` | off (`=1` on) | Also write calls without a credential (the shared bearer, internal callers) to `mcp_request_log`. Calls with an OAuth or personal access token and admin-panel tool calls are written whatever this says. Code-only. | free |
-| `MEMRAIN_REQUEST_LOG_RETENTION_DAYS` | 180 (`0` = keep forever; 7 to 36500) | Days of rows kept in `mcp_request_log`. The cycle's purge phase deletes older rows in batches of 5000, at most 500,000 per cycle. Under 180 the Overview comparison periods thin out; under 90 the 90-day chart and the idle-client check in `doctor` lose data. 1 to 6 are raised to 7 and anything above 36500 is lowered to it; any other value that is not a whole number falls back to 180 with a warning. | free |
+| `MEMRAIN_REQUEST_LOG_RETENTION_DAYS` | 180 (`0` = keep forever; 7 to 36500) | Days of rows kept in `mcp_request_log`. The hourly housekeeping deletes older rows in batches of 5000, at most 500,000 per run. Under 180 the Overview comparison periods thin out; under 90 the 90-day chart and the idle-client check in `doctor` lose data. 1 to 6 are raised to 7 and anything above 36500 is lowered to it; any other value that is not a whole number falls back to 180 with a warning. | free |
 | `MEMRAIN_LOG_REQUESTS` | off | Emit redacted per-request MCP param logs to stderr. Nothing is logged unless set. Code-only. | free |
-| `MEMRAIN_DEPLOYMENT_IDENTITY` | unset | One line on what this brain is (for example "Team brain for the docs group"). Appended to the MCP `initialize` instructions as a `Deployment:` paragraph after Memrain's built-in operating contract. Trimmed and capped at 2000 characters. Served to **every** caller, public ingress included: public-facing prose only, never a secret. | free |
+| `MEMRAIN_DEPLOYMENT_IDENTITY` | unset | One line on what this brain is (for example "Personal notes on infrastructure work"). Appended to the MCP `initialize` instructions as a `Deployment:` paragraph after Memrain's built-in operating contract. Trimmed and capped at 2000 characters. Served to **every** caller, public ingress included: public-facing prose only, never a secret. | free |
 | `MEMRAIN_MCP_INSTRUCTIONS` | unset | Extra operator guidance appended after the deployment identity in the `initialize` instructions (for example where meeting notes belong). Trimmed and capped at 2000 characters. Served to every caller, public ingress included, so it must not hold secrets. | free |
 | `MEMRAIN_MCP_LENIENT_ARGS` | off | MCP calls that pass an argument the tool does not declare are refused with `invalid_params` and a did-you-mean hint. `=1` accepts and ignores unknown arguments again: a temporary escape for an old client, since a misspelled key is then dropped without an error. | free |
 | `MEMRAIN_MCP_FORCE_SURFACE` | unset (off) | Incident switch: `starter` or `verbs` narrows `tools/list` and `tools/call` for every `/mcp` connection, the operator and public bearers included, to that surface (see `memrain auth` tool surfaces). It only narrows: a credential already on a narrower surface keeps it, and `full`, unset or an unknown value (warned once) change nothing. The local CLI and the admin panel are not affected. Environment only: a `memrain config` row is ignored. Read on every request, but the container sees `.env` only when it starts: set it in `/opt/memrain/.env` and run `bash deploy/deploy.sh` (or recreate the memrain container); to lift it, remove the line and do the same. | free |
-| `MEMRAIN_MCP_MAX_RESULT_BYTES` | `4194304` (4 MiB) | Maximum serialized UTF-8 tool-result bytes for `page_list`, `page_versions`, `get_chunks`, `graph_*` and `find_orphans`, measured after redaction, including JSON escaping and metadata. Oversized results return `result_too_large` with pagination/projection advice; stored content is unchanged. Positive safe integer; empty or invalid values use the default. Existing errors and the refusal envelope are exempt. Runtime config takes effect on restart. | free |
-
-### Agent jobs and skill optimization
-
-Both are off unless switched on, and both run under a per-run dollar ceiling.
-
-| Variable | Default | What it does | Cost |
-|---|---|---|---|
-| `MEMRAIN_AGENT_ENABLED` | off (`=1` on) | Registers the `subagent` job kind: a read-only research agent (`memrain agent run`) that uses Memrain's read tools and writes nothing. Allowlisted. | **paid (Sonnet)** |
-| `MEMRAIN_AGENT_TENANT_ENABLED` | off (`=1` on) | Also lets OAuth clients holding the `agent` scope queue jobs with `submit_agent` / `get_agent_job`, run under the submitter's grant and daily budget. Needs `MEMRAIN_AGENT_ENABLED=1`. Allowlisted. | **paid (Sonnet)** |
-| `MEMRAIN_AGENT_MAX_USD` | `0.25` | Per-job ceiling; a job's own `max_usd` is clamped to it. Allowlisted. | — |
-| `MEMRAIN_SKILLOPT_ENABLED` | off (`=1` on) | Enables `memrain skillopt eval`, which scores skill routing on the pack benchmark. Allowlisted. | **paid (Haiku)** |
-| `MEMRAIN_SKILLOPT_MAX_USD` | `0.25` | Per-run ceiling; `--max-usd` can lower it, not raise it. Allowlisted. | — |
-| `MEMRAIN_SKILLS_DIR` | `deploy/skills` (compose: `/skills`) | Skill pack served by `list_skills` / `get_skill` and linted by `memrain skillpack lint`. Allowlisted. | free |
-
-Skills in this directory can also opt into MCP prompts with top-level
-`prompt: true` frontmatter. Four bundled read-only skills opt in: `query`,
-`connect-client`, `cross-modal-review` and `daily-task-prep`.
-The caller must be able to use `list_skills`, `get_skill` and every tool the
-skill declares. Public callers cannot list or retrieve prompts. The existing
-path containment, symlink and 256 KiB file-size checks apply. A prompt returns
-literal Markdown; it accepts no arguments and runs no tools or models.
-See [the prompt API](../deploy/memrain/docs/API.md#promptslist-and-promptsget).
+| `MEMRAIN_MCP_MAX_RESULT_BYTES` | `4194304` (4 MiB) | Maximum serialized UTF-8 tool-result bytes for `page_list`, `page_versions`, `get_chunks` and `search_exact`, measured after redaction, including JSON escaping and metadata. Oversized results return `result_too_large` with pagination/projection advice; stored content is unchanged. Positive safe integer; empty or invalid values use the default. Existing errors and the refusal envelope are exempt. Runtime config takes effect on restart. | free |
 
 ### Source scope contract
 
@@ -493,8 +267,7 @@ grant strictly more than a caller with a narrow one. The rule is therefore:
 
 - **`isNoGrant(scope)`** — true for `[]` or a sentinel-only list. Use it to
   return early before doing paid or expensive work: `hybridSearch` returns no
-  rows before embedding the query or touching the cache, so an empty grant costs
-  nothing.
+  rows before embedding the query, so an empty grant costs nothing.
 - **`andSourceScope(col, scope, params)`** — the SQL fragment for a read. It
   returns `""` when unscoped (so the operator's SQL text is byte-identical),
   ` AND FALSE` for an empty grant or a sentinel-only list (never a lookup of the
@@ -518,7 +291,7 @@ Three tests hold the contract in place:
   `source(s)`/`sourceId(s)` name, and fails on any hit. A second case proves the pattern still matches a probe,
   so the ratchet cannot pass by matching nothing.
 - `deploy/memrain/tests/operator_scope_parity.test.ts` proves the operator's reads
-  did not move. It seeds a fixed two-tenant brain, runs 46 read tools UNSCOPED
+  did not move. It seeds a fixed two-tenant brain, runs its read tools UNSCOPED
   through `dispatchTool`, and compares the SQL text, bound params and response of
   each with `deploy/memrain/tests/fixtures/operator_scope_parity.json`
   (timestamps, latencies and float tails beyond six decimals are scrubbed). When
@@ -542,30 +315,21 @@ Three tests hold the contract in place:
 
 ### Federated sources
 
-Every source carries a `federated` flag (migration 195). A read that names no
-source, from a caller whose grant names none (the operator, the CLI, `memrain
-eval`, a key with `read_sources` null), reads the `default` source plus the
-federated sources only. That holds for `search`, `query`, `recall`, `think`,
-`context_pack`, `volunteer_context`, `page_list` and `find_experts`, and for
-`memrain search` and `memrain eval`. A source that is not federated is reached
-only by:
+Every source carries a `federated` flag (migration 195). A `search` or
+`page_list` call that names no source, from a caller whose grant names none
+(the operator, the CLI, a key with `read_sources` null), reads the `default`
+source plus the federated sources only. A source that is not federated is
+reached only by an explicit `source_ids` on `search` or `page_list`, or by a
+token or client grant that lists it (grants are never changed by the flag).
 
-- an explicit `source_ids` on `search`, `query` or `page_list`;
-- a token or client grant that lists it (grants are never changed by the flag);
-- a code filter on `search` or `query` (`lang`, `near_symbol`, `symbol_kind`);
-- the code tools (`code_def`, `code_refs`, `code_callers`, `code_callees`,
-  `code_blast`, `code_flow`), which read every source in the caller's grant.
-
-A source registered with `--kind code` starts unfederated, so its chunks stay
-out of ordinary search; every other kind starts federated, so connectors and
-note sources read as before. Migration 195 left every existing source
-federated except code sources (kind `code`, and `repo-source-code`).
-Re-registering a source keeps its flag. Change it on the brain host:
+A source registered with `--kind code` starts unfederated; every other kind
+starts federated. Re-registering a source keeps its flag. Change it on the
+brain host:
 
 ```bash
-memrain sources unfederate repo-source-code   # only grants, source_ids and code tools reach it
-memrain sources federate repo-source-code     # unscoped reads reach it again
-memrain sources list                          # each row shows "federated"
+memrain sources unfederate notes-archive   # only grants and source_ids reach it
+memrain sources federate notes-archive     # unscoped reads reach it again
+memrain sources list                       # each row shows "federated"
 ```
 
 When every source is federated, an unscoped read keeps the `undefined` scope
@@ -573,46 +337,38 @@ and its SQL is unchanged. Otherwise the scope becomes the list of federated
 sources, and like every source list it leaves out documents no source owns
 (`source_id` NULL).
 
-Hybrid search honours the contract end to end: query-cache keys for `[]` differ
-from the unscoped key, both hydration passes are scoped, and the identifier,
-relational, structural and alias-hop arms read nothing for an empty grant. The
-final hydration pass also applies the visibility filter, so a soft-deleted,
-archived or quarantined page no longer surfaces as a structural neighbour. The
-remaining layers — core readers, MCP dispatch, derived writes, source deletion,
-purge and code-graph edges — are tracked with file:line in `TODO.md` under
-RM-01.
+Hybrid search honours the contract end to end: an empty grant returns before
+the query is embedded, and both hydration passes are scoped. The final hydration pass also applies the
+visibility filter, so a soft-deleted, archived or quarantined page does not
+surface.
 
-The same split governs writes. A page's derived rows — links, mentions, typed
-and verb edges, the extraction watermark, fence-derived facts — carry the
-**page's** source, not the caller's, so an unscoped operator write cannot
-re-home a tenant's projections into `default`. `page_put` does this; the
-`page_append`, `page_revert` and `page_restore` paths still carry the caller's
-source (RM-01 Release B).
+The same split governs writes. A page's derived rows (links and mentions)
+carry the **page's** source, not the caller's, so an unscoped operator write
+cannot re-home a source's projections into `default`. `page_put` does this;
+the `page_append`, `page_revert` and `page_restore` paths still carry the
+caller's source.
 
-### Running more than one tenant
+### Scoped clients
 
-A source is the tenancy unit: it owns writes, and a client's read set is a union
-of sources. Nothing below is on by default — a single-operator brain stays
-single-tenant and unaffected.
+A source owns writes, and a client's read set is a union of sources. A client
+can be held to part of the brain: its own source to write into, and only the
+sources it lists to read. Nothing below is on by default.
 
 ```bash
-# 1. One source per person or team.
-memrain sources register alice --kind other --path-prefix tenant:alice
+# 1. A source for what this client may write.
+memrain sources register laptop --kind other --path-prefix laptop
 
-# 2. One OAuth client per source. --source is the WRITE authority;
+# 2. One OAuth client for it. --source is the WRITE authority;
 #    --federated-read is the read union (list only what this client may see).
-memrain auth register-client alice-laptop \
-  --scopes 'read write' --source alice --federated-read alice
+memrain auth register-client work-laptop \
+  --scopes 'read write' --source laptop --federated-read laptop
 
-# 3. Optional daily ceiling, in USD, enforced across every paid op.
+# 3. Optional daily ceiling, in USD, over this client's paid calls.
 memrain auth set-budget <client_id|token_name|enrollment_id> 2.00 # 'none' removes it
 ```
 
 A cap can sit on an OAuth client, a personal access token (by name) or an
-enrollment. To see where the money went, run `memrain spend [--days N]` (default
-7) or call `GET /admin/api/spend/report?days=N`: spend by model, feature and
-spender (OAuth clients, personal access tokens, enrolled people), plus the
-unpriced models and the calls that failed before the provider reported usage.
+enrollment.
 
 Print the client's own view any time with the `whoami` tool: it returns the
 `write_source` and the `read_sources` the token actually carries.
@@ -621,68 +377,35 @@ What a scoped client can reach, and what it cannot:
 
 | Surface | Scoped client sees |
 |---|---|
-| `search`, `page_get`, `page_list`, `recall`, `think` | its own read set only |
+| `search`, `search_exact`, `page_get`, `page_list` | its own read set only |
 | `add_tag` on another tenant's slug | the same "not found" as a slug nobody holds — no existence oracle |
 | an enrollment code | single-use, expiring; binds the grant to one source |
 | `index` / `page_put` onto another tenant's path | refused (`permission_denied`) |
 | `get_brain_identity` counters | its own read set; `sources` is the size of that set |
-| `run_doctor`, `stats`, `get_status_snapshot` (whole brain) | refused — operator-only |
+| `run_doctor`, `stats` (whole brain) | refused — operator-only |
 | `sources_list` | only the sources its grant covers |
 | `purge_deleted_pages` | needs the `admin` scope, recorded deliberately |
 
-A deleted page stays restorable for 30 days (720 hours) before the cycle's
-purge phase removes it for good, with its versions, aliases, links, timeline
-rows, `raw_data`, `tags` and the redirects that pointed at it. Indexed
+A deleted page stays restorable for 30 days (720 hours) before the hourly
+housekeeping purges it for good, with its versions, aliases, links, `tags`
+and the redirects that pointed at it. Indexed
 documents, which can be re-read from their files, keep a 72-hour window.
 `purge_deleted_pages` without `older_than_hours` uses the same 720 hours and
 reports the cutoff it applied as `ttl_hours`; pass `older_than_hours` to purge
 sooner, for example after a leaked secret.
 
-The purge also retires the facts written on each page it removes: facts in
-the page's source that name it as their source page, and any of the page's
-own `## Facts` rows still on file (`page_delete` already removes those when
-the page is deleted, so they are not in a receipt). Every such fact is
-retired, even when another page states the same claim: that page holds its
-own fact row, which stays live. Retired facts keep their
-row with `forgotten_cause = 'purge'` and drop out of every read, so a later
-page on the same slug starts without them. The result reports the count as
-`facts_retired`; a dry run reports how many would go. Each purged page that
-retired facts leaves a row in `fact_purge_receipts` with the retired
-`fact_ids`. To undo one, clear the tombstone on exactly those ids:
-
-```sql
-UPDATE entity_facts
-   SET forgotten_at = NULL, forgotten_cause = NULL, forgotten_reason = NULL
- WHERE forgotten_cause = 'purge'
-   AND id IN (SELECT unnest(fact_ids) FROM fact_purge_receipts WHERE id = <receipt id>);
-```
-
-Restored facts show in recall again at once, still naming the purged page as
-their source.
-
-Facts about a purged page go too when their own source page does not survive
-either: a fact whose entity is the page and whose source page is gone is
-retired. A fact about the page that names no source page was stated directly
-and stays, as do ontology observations (a `dimension` such as employer or
-location) and facts another surviving page holds.
-
-What synthesis derived from a purged page or document goes in the same
-transaction, since none of it has a foreign key to its source: the atoms and
-takes distilled from it, the atom pages published from it, and the
-contradiction rows that snapshot a retired fact or take. A concept narrated
-over a purged atom is rebuilt from the members it keeps, with a deterministic
-narrative and its member hash cleared so the next concepts run narrates it
-again; a concept left with no live member is retired and its page hidden, and
-it comes back once live atoms carry the tag again. Atom and concept pages
-someone edited keep their text. The result reports these counts as
-`synthesis`.
+A brain upgraded from 2.x may still hold facts and synthesis rows derived from
+a page. The purge removes those with the page: it retires the page's facts
+(reported as `facts_retired`; each page that retired facts leaves a row in
+`fact_purge_receipts`)
+and deletes what synthesis derived from it (reported as `synthesis`). A dry
+run reports how many would go.
 
 `purge_deleted_pages` with named `slugs` is the owner's purge of those pages:
 it also records the content hash of each page and of every version it kept in
 `page_purges` (reported as `tombstoned`). A write of that content under any
-slug of the same source is then refused (`invalid_params`), so a connector
-resync, a re-import or a restored snapshot cannot bring the text back; a
-connector holds the one item and syncs the rest. The TTL purge leaves no
+slug of the same source is then refused (`invalid_params`), so a re-import
+or a restored snapshot cannot bring the text back. The TTL purge leaves no
 tombstone. `memrain unpurge <slug> [--source ID]` clears a page's tombstones.
 
 `reindex --reconcile-deletes` soft-deletes documents whose file is gone. It
@@ -691,76 +414,16 @@ refuses when the vault root is missing or not a directory, and when more than
 (and more than one), would go; pass
 `--allow-mass-delete` after checking the count and the sample paths in the refusal.
 
-### Connecting a whole team through ONE connector
+### OAuth clients
 
-> Task-oriented walkthrough, day-2 operations and troubleshooting:
-> [TEAM-SETUP.md](./TEAM-SETUP.md). What follows is the reference.
-
-On a Claude Team or Enterprise plan **only an Owner can add a connector**, and
-every member then authorises against that single client. So the tenant cannot
-come from the client row — one connector would be one tenant for everybody.
-An **enrollment-mode** client fixes that: the grant is bound to a source at the
-moment the person authorises, not at registration.
-
-```bash
-# 1. One source per person.
-memrain sources register alice --kind other --path-prefix tenant:alice
-
-# 2. ONE connector for the whole team, in enrollment mode.
-memrain auth register-client team-connector --tenant-mode enrollment \
-  --scopes 'read write' --source default \
-  --redirect-uris 'https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback'
-
-# 3. One code per person, bound to her source. Printed ONCE.
-memrain auth enroll alice --label alice --client <client_id> --ttl 7d
-```
-
-The Owner puts the connector URL + `client_id` + `client_secret` into the
-organisation's connector once (Advanced settings). Each person clicks
-**Connect**, is asked for her enrollment code, and from then on her sessions —
-and every refresh after them — are pinned to her own source.
-
-**In enrollment mode the code is the per-person credential; the client secret
-is shared.** The `client_id` and secret identify the connector, not a person,
-and every organisation admin can read them in the connector settings. That is
-safe only because a browser client (registered with `--redirect-uris`) has no
-`client_credentials` grant, so the secret alone mints nothing: `/authorize`
-shows the code form and stops there. Check the grant list with
-`memrain auth list-clients`; the step-by-step is in
-[TEAM-SETUP.md](./TEAM-SETUP.md#why-sharing-the-connector-secret-is-safe).
-
-`memrain auth enrollments [--client <client_id>]` lists what was issued (never
-the codes). `memrain auth revoke-enrollment <id>` kills a code that has not been
-used; `memrain auth revoke-grant <id>` cuts off a person who already redeemed
-hers and deletes that grant's tokens, while everyone else on the connector keeps
-working. `memrain auth enroll --replaces <id>` issues a new code for the same
-person, keeping her source, read set, spend key and daily cap. A code is
-single-use, expires (7 days by default), and a wrong, used, expired or revoked
-code all fail identically so the form cannot be used to probe. The admin
-panel's Credentials page has the same actions under **Members** for each
-browser connector.
-
-**Per-person connectors** (`--tenant-mode client`, the default) are still the
-right shape when each person has her own individual Pro/Max account and adds
-her own connector: the tenant then comes from the client row, so
-`claude-alice` → source `alice` with no code to enter. Here the client secret
-IS the per-person credential — hand it over the way you would a password, and
-never share one client between two people.
-
-**Budgets are per person on a team connector.** A token redeemed from an
-enrollment code spends under that enrollment, and
-`memrain auth set-budget <enrollment_id> <usd>` caps one person. Without such a
-cap, the connector's `budget_usd_per_day` applies to each person separately.
-
-**`MEMRAIN_OAUTH_REQUIRE_LOGIN` does not apply to an enrollment-mode client** —
-the code is the resource-owner authentication. It does gate a `client`-mode
-connector: the flag makes `GET /authorize` bounce an unauthenticated browser to
-`/admin/login`, and that page accepts exactly one credential, the operator
-bootstrap token (a magic link minted by whoever holds it grants a 7-day ADMIN
-session). Memrain has no per-user login, so with the flag on a teammate can only
-finish a `client`-mode flow by holding an operator session for the whole brain.
-Keep it on for a brain that serves one operator; turn it off before handing a
-`client`-mode connector to anyone else.
+**`MEMRAIN_OAUTH_REQUIRE_LOGIN`** (on by default) makes `GET /authorize`
+bounce an unauthenticated browser to `/admin/login`, and that page accepts
+exactly one credential, the operator bootstrap token (a magic link minted by
+whoever holds it grants a 7-day ADMIN session). It does not apply to an
+enrollment-mode client (`--tenant-mode enrollment`), where a one-time code from
+`memrain auth enroll` is the authentication and binds the grant to a source;
+`memrain auth enrollments`, `revoke-enrollment` and `revoke-grant` manage
+those codes and grants.
 
 With the flag off, `/authorize` is still not a free-for-all:
 
@@ -771,7 +434,7 @@ With the flag off, `/authorize` is still not a free-for-all:
   `unauthorized_client` while `/authorize` auto-approves;
 - Dynamic Client Registration stays off, so nobody can mint a client.
 
-Register the callback the person's account actually uses. `claude.ai` and
+Register the callback your account actually uses. `claude.ai` and
 `claude.com` are different origins to the allow-list; a connector on the origin
 you did not register fails with `redirect_uri is not registered for this
 client`. Replace a client's list without rotating its secret:
@@ -779,7 +442,7 @@ client`. Replace a client's list without rotating its secret:
 ```bash
 memrain auth set-redirect-uris <client_id> \
   https://claude.ai/api/mcp/auth_callback https://claude.com/api/mcp/auth_callback
-memrain auth rescope-client <client_id> --source alice --federated-read alice
+memrain auth rescope-client <client_id> --source laptop --federated-read laptop
 ```
 
 Every rescope is revisioned and audited. Preview it with `--dry-run` (prints
@@ -789,13 +452,12 @@ the before/after diff and the current revision), then apply it with
 shows who changed the grant and when; the admin API exposes the same through
 `POST /admin/api/rescope-client` (`dry_run`, `expected_revision`) and
 `GET /admin/api/grant-audit?client_id=`. A client's daily budget
-(`auth set-budget`) and read floor (`auth min-trust`) are part of the same
-revision and audit trail.
+(`auth set-budget`) is part of the same revision and audit trail.
 
 The admin panel's grant editor (Agents → Credentials → Permissions) edits a
-client's sources, write fence, scopes, tool surface, daily budget and trust
-floor. **Preview changes** sends `dry_run: true` and shows the changed rows,
-what the change does to issued tokens, and which fields it widens; it also
+client's sources, write fence, scopes, tool surface and daily budget.
+**Preview changes** sends `dry_run: true` and shows the changed rows, what the
+change does to issued tokens, and which fields it widens; it also
 returns a `plan_hash`, an HMAC over the client id, revision and resulting
 grant, keyed from the admin secret. **Apply reviewed changes** resends the same
 partial change with `expected_revision` and that `plan_hash`; the server
@@ -803,8 +465,7 @@ recomputes the plan under the row lock and refuses with `409 grant_conflict` if
 the revision moved (the response carries the current grant) or
 `409 plan_changed` if the plan differs. A change that widens authority (a new
 scope, source or read source, a looser fence, a tenant-mode change, a wider
-tool surface, a higher or removed budget, a lower or removed trust floor) needs
-a passkey confirmation from the last five minutes (`403 reauth_required`); a
+tool surface, a higher or removed budget) needs a passkey confirmation from the last five minutes (`403 reauth_required`); a
 narrowing does not, and a brain with no passkey enrolled needs none. The same
 step-up guards registering a client, minting an API key, issuing an enrollment,
 changing a client's redirect URIs and setting its token TTL. On an
@@ -824,135 +485,90 @@ Two things to know before you rely on this:
 
 - **Set `MEMRAIN_TENANT_FAIL_CLOSED=1`** once a real scoped client exists. Without
   it an authenticated public principal that carries NO grant falls back to the
-  redacted whole brain instead of to nothing. Every scoping rule in the table
-  above binds on the caller's grant, so a grantless principal is the one caller
-  they do not constrain — this flag is what removes that hole, not an
+  redacted whole brain instead of to nothing. Every scoping rule above binds
+  on the caller's grant, so a grantless principal is the one caller they do
+  not constrain — this flag is what removes that hole, not an
   optimisation.
 - **Dynamic Client Registration hands every self-registered client the same
-  `default` tenant.** If you enable `MEMRAIN_ENABLE_DCR`, two people who each
-  register through it share one tenant and read each other's notes. Register
+  `default` tenant.** If you enable `MEMRAIN_ENABLE_DCR`, every client that
+  registers through it writes to and reads that same source. Register
   clients yourself (`memrain auth register-client --source …`), or rescope one
   afterwards with `memrain auth rescope-client <client_id> --source SRC
   --federated-read SRC`.
 
-## 6. Maintenance cycle & ingest / ops
+## 5. Housekeeping, ingest & ops
 
-Knobs for the 13-phase maintenance cycle, the file/code sweeps, migrations, and
-job timeouts. The compose-allowlisted ones carry explicit defaults in
+`memrain serve` runs one housekeeping pass an hour, in process (the first one
+five minutes after start). Its steps, in order: `purge` (soft-deleted pages and
+documents past their TTL), `mirror_pages` (rebuild missing or stale search
+mirrors), `embed_gaps` (embed chunks stored without a vector), `tokens`
+(expired OAuth tokens and codes), `reservations` (spend holds a crashed call
+never settled) and `retention` (request log, write receipts, 2.x chat
+history). One process runs it at a time, under the `memrain-cycle` lock a 2.x
+maintenance cycle took. No model is called; the embed step pays for Titan
+embeds under the daily cap. `MEMRAIN_CYCLE=0` or maintenance mode stops it.
+
+The steps that delete or rebuild (`purge`, `mirror_pages`, `embed_gaps`,
+`retention`) also obey the off-switches a 2.x cycle obeyed, so an install
+that had its cycle switched off keeps its rows after the upgrade: a
+`MEMRAIN_DAEMONS_DISABLED` list naming `cycle`, a paused `daemon_controls` row
+for every daemon or for the cycle, and `MEMRAIN_CYCLE_SKIP_PHASES`. The token
+sweep and reservation expiry ignore them.
+
+The rest of this section covers ingest gates, migrations and the database.
+The compose-allowlisted knobs carry explicit defaults in
 `deploy/docker-compose.yml`; the rest are code-only.
 
 | Variable | Default | What it does | Cost |
 |---|---|---|---|
-| `MEMRAIN_CYCLE_PHASE_TIMEOUT_MS` | `900000` (15m) | Per-cycle-phase wall-clock cap so a hung phase can't wedge the tick and strand the cycle lock. | free |
-| `MEMRAIN_CYCLE_SKIP_PHASES` | none | CSV of cycle phase names to skip every tick — operator escape hatch to isolate a phase with a live defect. | free |
-| `MEMRAIN_CYCLE_FIRST_TICK_DELAY_MS` | built-in | Delay before the first cycle tick after boot (lower on a tiny instance). | free |
-| `MEMRAIN_CYCLE_FRESHNESS_ENFORCE` | off (`=1` on) | Enforce (vs warn) the cycle-freshness staleness gate. | free |
-| `MEMRAIN_CYCLE_FRESHNESS_WARN_HOURS` | `6` | Hours of cycle staleness before a WARN. Clamped ≤ the fail threshold. | free |
-| `MEMRAIN_CYCLE_FRESHNESS_FAIL_HOURS` | `24` | Hours of cycle staleness before a failure. | free |
-| `MEMRAIN_CYCLE_GC` | on (`=0` off) | Run the manual GC step each cycle. | free |
-| `MEMRAIN_CYCLE_RSS_LOG` | on (`=0` off) | Log per-phase RSS memory during the cycle. | free |
-| `MEMRAIN_CODE_SWEEP_DELAY_MS` | `20` (compose) / `0` | Delay between files during the code-index sweep. | free |
-| `MEMRAIN_PARSE_TIMEOUT_MS` | `5000` (5s) | Per-file chunker parse cap; `0` disables the cap. | free |
-| `MEMRAIN_JOB_TIMEOUT_MS` | off | Per-job wall-clock cap. Off unless set. | free |
+| `MEMRAIN_CYCLE_SKIP_PHASES` | none | CSV of 2.x cycle phase names. A housekeeping step whose 2.x phase is listed is skipped: `purge` (which covers the purge and retention steps), `mirror-pages`, `embed-gaps`. | free |
 | `MEMRAIN_EVENT_LOOP_WATCHDOG_MS` | off (unset or blank) | Process event-loop stall threshold in milliseconds. Must be a digits-only safe integer of at least `15000`; invalid values, including `0`, abort startup. Environment-only, read at `serve` startup; restart required. Code-only, not compose-allowlisted. | free |
-| `MEMRAIN_JOB_STALL_GRACE_MS` | `30000` | How long past a job's lease the stall sweep waits before requeueing it. Digits only. Allowlisted. | free |
-| `MEMRAIN_JOB_LLM_HALT` | on | A Bedrock outage, throttle or missing model defers jobs (without spending a retry) for a cooling-off period. `0`, `false` or `off` restores plain retries. Allowlisted. | free |
-| `MEMRAIN_EMBED_GAPS` | on | Cycle phase that embeds chunks stored without a vector (after an outage or spend refusal). `0` turns it off. Allowlisted. | **paid (Titan)** |
-| `MEMRAIN_EMBED_GAPS_MAX_PER_CYCLE` | `200` | Most chunks the embed-gaps phase embeds per cycle. Allowlisted. | — |
-| `MEMRAIN_LINKS_STALE_MAX_PER_CYCLE` | `200` | Most pages the links-stale cycle phase re-extracts per cycle when the link extractor version or the link switches (gazetteer, typed links, verb inference) changed. `0` turns the phase off. Allowlisted. | free |
-| `MEMRAIN_CONTEXT_CORE_SLUGS` | off (unset) | Comma-separated page slugs whose text `context_pack` puts in a `core` block ahead of the entity cards, inside the token budget. The text is the page body without its `## Timeline` section; the title is its own field. Each caller sees only the live, unquarantined pages its grant can read; a remote caller never gets a diary page, and the redacted public shape has no block. Set with `memrain config set`; not compose-allowlisted. | free |
-| `MEMRAIN_CONTEXT_CORE_MAX_CHARS` | `2000` | Characters of core page text per pack, across all core pages. Values above `2000` are capped at `2000`; `core.truncated` says when text was cut. Set with `memrain config set`; not compose-allowlisted. | free |
-| `MEMRAIN_CONTEXT_NEWER_MENTIONS` | on (`=0` off) | `context_pack` entity cards list up to 8 pages that mention the entity after its page was last written; trimmed first under the token budget. Allowlisted. | free |
-| `MEMRAIN_SYNTHESIS_ONCE_PER_DAY` | on | Runs each synthesis phase at most once per UTC day. `0` turns it off. Allowlisted. | free |
-| `MEMRAIN_WORKER_DRAIN_MS` | `8000` (8s) | On shutdown, how long the jobs worker lets a running job finish. A job still running after it is aborted and handed back to `pending` (`last_error = 'worker_shutdown'`) without spending its retry or stall budget, and the worker lock is released at once. `0` hands back immediately. Keep it under the compose `stop_grace_period` (30s). | free |
-| `MEMRAIN_JOB_CONCURRENCY` | `1` | Jobs the worker runs at once, 1-8 (anything else is 1). At 2 or more, long kinds (remediation, the agent loop, long daemons) hold at most all slots but one, so a short job always has a slot. Set with `memrain config set`; not compose-allowlisted. | free |
-| `MEMRAIN_DAEMONS` | off (`=1` on) | Starts the in-process daemon scheduler next to the jobs worker (never in maintenance). One process leads through a `cycle_locks` row; each daemon window is queued once under `daemon:<name>:<source>:<window>`, and only the latest window, while it is younger than the catch-up age. Read at boot, so a change needs a restart; to stop daemons without one, use `memrain daemons pause all`. `/health` then carries a `daemons` block (`leader`, `tick_age_s`). Set with `memrain config set`; not compose-allowlisted. | free |
-| `MEMRAIN_DAEMONS_DISABLED` | empty | CSV of daemon names the environment switches off, `cycle` included (the maintenance cycle then skips its ticks). Pauses that need no restart live in the database: `memrain daemons pause <name\|all>` / `resume`. Five failed runs of a daemon in a row pause it until resumed. Set with `memrain config set`; not compose-allowlisted. | free |
-| `MEMRAIN_DAEMON_CATCHUP_MAX_AGE_S` | `21600` (6h) | Oldest window the scheduler still queues after downtime; an older window is skipped, so a brain that was down for days runs each daemon once, not once per missed window. Set with `memrain config set`; not compose-allowlisted. | free |
-| `MEMRAIN_PROVIDER_LEASES` | off (unset) | Caps parallel model calls per provider family across every process on the database, e.g. `bedrock:haiku=2,bedrock:sonnet=1` (families: `haiku`, `sonnet`, `opus`, `embed`, `nova`). A call takes a `provider_leases` row for its family first; with none free it waits, then is refused before it is held, sent or booked, and a queued job is deferred 30s without spending a retry. Unset, no lease query runs. Set with `memrain config set`; not compose-allowlisted. | free |
-| `MEMRAIN_PROVIDER_LEASE_WAIT_MS` | `10000` (10s) | How long a call waits for a free provider lease before it is refused. Set with `memrain config set`; not compose-allowlisted. | free |
-| `MEMRAIN_PROVIDER_LEASE_TTL_S` | `300` (5m) | Lease lifetime; a holder that died frees its slot after this. A call running longer than it can let one extra call in. Set with `memrain config set`; not compose-allowlisted. | free |
-| `MEMRAIN_NOTIFY_WEBHOOK_URL` | unset | Owner notifications (needs a reconnect, held deletions or items, a paused spend path, an auto-paused daemon, write-gate holds, an OAuth app its provider refused) always show in the admin (`GET /admin/api/notifications`, badge counts at `/admin/api/notifications/summary`) and in `memrain doctor` (`notifications`). Set this https URL to also receive one signed POST per new notification: `{"version":1,"id","kind","link","created_at"}`, a pointer into the admin and never the problem's text. Refused (doctor says why) unless https to a host that is not loopback, private, link-local or `localhost`, without credentials in the URL; a host name is resolved again before each POST and refused when any address it resolves to is one of those; redirects are not followed. Delivery needs the `notifications` daemon (`memrain daemons enable notifications`, with `MEMRAIN_DAEMONS=1`); a failed POST is retried after 5, 15, 60 and 240 minutes, then marked failed. | free |
-| `MEMRAIN_NOTIFY_WEBHOOK_SECRET` | unset | HMAC-SHA256 key for the webhook, at least 32 characters. Each POST carries `x-memrain-timestamp`, `x-memrain-notification-id` and `x-memrain-signature: sha256=<hex>` over `<timestamp>.<raw body>`; the receiver should refuse a stale timestamp and dedupe on the id, since delivery is at least once. Environment only: `memrain config set` refuses it, so a database dump cannot sign notifications. On the compose stack put it in `.secrets/memrain.env`, which the service reads through `env_file`; do not add it under `environment:`, where an empty entry would blank it. | free |
-| `MEMRAIN_NOTIFY_WEBHOOK_SECRET_FILE` | unset | Path to a file holding the same secret. Refused unless only its owner can read it (`chmod 0400`). Set this or `MEMRAIN_NOTIFY_WEBHOOK_SECRET`, not both. Environment only. | free |
-| `MEMRAIN_NOTIFICATIONS_RETENTION_DAYS` | `30` | Days a resolved notification is kept before the `notifications` daemon deletes it; open ones are always kept. | free |
+| `MEMRAIN_EMBED_GAPS` | on | The housekeeping step that embeds chunks stored without a vector (after an outage or a spend refusal). `0` turns it off. A chunk whose embed failed three times for a lasting reason is left to `memrain embed`. Allowlisted. | **paid (Titan)** |
+| `MEMRAIN_EMBED_GAPS_MAX_PER_RUN` | `200` | Most chunks that step embeds in one run. A non-positive or malformed value uses the default. Code-only. | **paid (Titan)** |
+| `MEMRAIN_MIRROR_PAGES_MAX_PER_RUN` | `200` | Most pages the `mirror_pages` step rebuilds in one run. A non-positive or malformed value uses the default. Code-only. | free |
+| `MEMRAIN_DAEMONS_DISABLED` | empty | Lite has no daemons. A CSV that names `cycle` stops the housekeeping steps that delete or rebuild (see above); other names do nothing. Not compose-allowlisted. | free |
+| `MEMRAIN_NOTIFY_WEBHOOK_SECRET` | unset | Lite sends no notifications. The name is kept environment-only: `memrain config set` refuses to store it and a stored row is ignored, so a database dump never holds it. `fetch-secrets.sh` still writes it to `.secrets/memrain.env` when the optional secret exists. | free |
+| `MEMRAIN_NOTIFY_WEBHOOK_SECRET_FILE` | unset | As `MEMRAIN_NOTIFY_WEBHOOK_SECRET`: never stored, otherwise unused. | free |
 | `MEMRAIN_MAX_BODY_BYTES` | `1048576` (1 MiB) | HTTP request-body size cap; over-cap requests get 413. | free |
 | `MEMRAIN_NO_SANITY` | off (`=1` on) | Kill switch for the content-sanity ingest gate. Set truthy to skip junk/oversize/markup assessment entirely. The gate runs unless this is set. | free |
 | `MEMRAIN_SANITY_DISPOSITION` | `quarantine` | How a junk-flagged doc is handled: default quarantines + stamps `content_flag` (still stored, embed-skipped); `reject` hard-rejects it at ingest. | free |
-| `MEMRAIN_WRITE_GATE_EXTERNAL` | `flag` | Write gate for text from outside sources (kinds `mailbox`, `calendar`, `chat`, `meeting`, `webhook`, `github`). A deterministic check, no model call, looks for text that reads as instructions to an AI: directives that try to replace the reader's instructions, chat-template role markers, tool-call shaped text, requests to send data out (including standing rules that route mail or files to an address), directives to the memory itself, standing rules addressed to an agent ("from now on, when asked about X, say Y") and requests to hand over passwords or keys. Hidden Unicode tag characters are read as the text they mirror. `flag` stores it with `content_flag: instruction_like` and reads it back inside a stronger frame; `quarantine` hides it from search and queues it for `memrain write-gate approve\|reject`; `reject` refuses the write; `off` skips the check. A detector error quarantines. Mail, calendars and other sources the owner connected (a source with a connector account that is the owner's, as `memrain identity` works it out) are flagged, never held or refused for their content: there `quarantine` and `reject` act as `flag`, and so does `MEMRAIN_WRITE_GATE_QUARANTINE_SOURCES`. An agent's text that is only shaped like a tool call is flagged, never held. `memrain write-gate scan --documents` counts, without writing anything, what the gate would do to stored documents on their next index. Existing `github` sources count as outside sources, so their issue and PR text is flagged by default from this release; `off` restores the old behaviour. Set with `memrain config set`; not compose-allowlisted. | free |
-| `MEMRAIN_WRITE_GATE_AGENT` | `off` | The same write gate for remote (MCP, `/ingest`) writes into any other source: `off`, `flag` or `quarantine`. Off by default because agents write notes that quote instructions. A held document keeps its verdict when a sweep re-indexes the same content; a local rewrite clears it. It also caps the row gate for that origin (as does `MEMRAIN_WRITE_GATE_EXTERNAL` for outside rows): `off` turns it off, and `flag` keeps that origin's rows out of quarantine, so `MEMRAIN_WRITE_GATE_ROWS=quarantine` with `MEMRAIN_WRITE_GATE_AGENT=flag` holds outside rows and only flags agent rows (see `MEMRAIN_WRITE_GATE_ROWS`). Set with `memrain config set`; not compose-allowlisted. | free |
-| `MEMRAIN_WRITE_GATE_ROWS` | `flag` | The write gate on facts, takes and timeline entries an agent writes (MCP tools, page fences, `think`, ontology observations) or that are drawn from an outside source (extraction, chronicle, proposed takes, connector enrichment). The owner's own rows are never gated, but a row a model wrote (a proposed or `think` take) counts as an agent's whoever ran it. Rows drawn from the owner's own mail and calendars are held like any outside text: other people write most of what lands there. `MEMRAIN_WRITE_GATE_AGENT` and `MEMRAIN_WRITE_GATE_EXTERNAL` set to `off` or `flag` cap this mode for their origin. `flag`: the row is stored and read as before, and a match writes a receipt to `write_gate_receipts` (row, source, families, detector version, a hash of the text, never the text). `quarantine`: a matching row is not stored; it waits in `write_gate_row_holds` as the row its writer would have inserted, invisible to every reader, until the owner runs `memrain write-gate release\|drop <id>` (or decides on the admin Approvals page). Released rows are stored as written, keep the tier the gate held them at (an insert never raises it) and stay flagged, and the same content is stored when it arrives again; dropped content stays dropped. A detector error holds the row. `off`: no check. `memrain write-gate scan` flags rows stored before the gate ran on them and never holds one. Set with `memrain config set`; not compose-allowlisted. | free |
-| `MEMRAIN_WRITE_GATE_QUARANTINE_SOURCES` | empty | CSV of source ids whose `flag` verdicts become `quarantine` (held for owner approval). Never loosens `reject` or turns on a gate that is `off`, and never holds the owner's own connector sources. Set with `memrain config set`; not compose-allowlisted. | free |
+| `MEMRAIN_WRITE_GATE_EXTERNAL` | `flag` | Write gate for documents in outside sources (kinds `mailbox`, `calendar`, `chat`, `meeting`, `webhook`, `github`). A deterministic check, no model call, looks for text that reads as instructions to an AI: directives that try to replace the reader's instructions, chat-template role markers, tool-call shaped text, requests to send data out (including standing rules that route mail or files to an address), directives to the memory itself, standing rules addressed to an agent ("from now on, when asked about X, say Y") and requests to hand over passwords or keys. Hidden Unicode tag characters are read as the text they mirror. `flag` stores it with `content_flag: instruction_like` and reads it back inside a stronger frame; `quarantine` hides it from search and queues it for `memrain write-gate approve\|reject`; `reject` refuses the write; `off` skips the check. A detector error quarantines. A source the owner connected on a 2.x brain (it has a connector account and belongs to the owner member) is flagged, never held or refused: there `quarantine` and `reject` act as `flag`. An agent's text that is only shaped like a tool call is flagged, never held. `memrain write-gate scan --documents` counts, without writing anything, what the gate would do to stored documents on their next index. Set with `memrain config set`; not compose-allowlisted. | free |
+| `MEMRAIN_WRITE_GATE_AGENT` | `off` | The same write gate for remote (MCP) writes into any other source: `off`, `flag` or `quarantine`. Off by default because agents write notes that quote instructions. A held document keeps its verdict when a re-index sees the same content; a local rewrite clears it. It also caps the row gate for that origin, as `MEMRAIN_WRITE_GATE_EXTERNAL` does for outside rows (see `MEMRAIN_WRITE_GATE_ROWS`). Set with `memrain config set`; not compose-allowlisted. | free |
+| `MEMRAIN_WRITE_GATE_ROWS` | `flag` | The write gate on facts, takes and timeline entries. Lite writes none of these, so no new row reaches it. It still sets the mode `memrain write-gate scan` uses on rows a 2.x brain stored: the scan writes a receipt to `write_gate_receipts` for a matching row and never holds one, and `off` skips the check. `memrain write-gate rows\|release\|drop` act on rows a 2.x gate held in `write_gate_row_holds`. `MEMRAIN_WRITE_GATE_AGENT` and `MEMRAIN_WRITE_GATE_EXTERNAL` set to `off` or `flag` cap the mode for their origin. Set with `memrain config set`; not compose-allowlisted. | free |
+| `MEMRAIN_WRITE_GATE_QUARANTINE_SOURCES` | empty | CSV of source ids whose `flag` verdicts become `quarantine` (held for owner approval). Never loosens `reject` or turns on a gate that is `off`. Set with `memrain config set`; not compose-allowlisted. | free |
 | `MEMRAIN_CONTENT_SANITY_DISABLE` | empty | CSV of content-sanity pattern names to switch off (e.g. `access_denied,operator_literal_2`), so one pattern that keeps hiding legitimate pages can be silenced without dropping the whole gate. Unknown names are ignored. Each quarantine trip writes an audit row naming the patterns that fired, and `memrain doctor` warns with the count of quarantined pages and the top patterns; disable the culprit, then `memrain quarantine clear`. Allowlisted. | free |
 | `MEMRAIN_SANITY_LITERALS_FILE` | unset | Path to an operator literals file (one case-insensitive literal per line, blanks/`#` ignored) so site-specific boilerplate the built-in patterns miss is quarantined. Fail-open. | free |
 | `MEMRAIN_PAGE_WARN_BYTES` | `50000` | Byte size above which a page crosses into the markup prose-check window. | free |
 | `MEMRAIN_PAGE_BLOCK_BYTES` | `500000` | Byte size above which an oversize page is soft-blocked (no junk match required). | free |
 | `MEMRAIN_MAX_MARKUP_RATIO` | `0.85` | Markup-to-prose ratio above which a page is flagged `markup_heavy` (flagged, not hidden). | free |
-| `MEMRAIN_SECRET_SCAN_DISPOSITION` | `redact` | What happens to a credential found in content being stored — `page_put` / `page_append`, indexed files, facts, timeline entries, hot memory, chronicle entries, `put_raw_data`, `/ingest` and `capture`. `redact` (default) replaces each with `[REDACTED:<kind>:<fingerprint>]` before storage or embedding; `flag` stores it unchanged but still records the finding; `reject` refuses the write. Findings are recorded in the ingest log by kind and a 16-hex SHA-256 fingerprint only, never the value. Allowlisted. | free |
+| `MEMRAIN_SECRET_SCAN_DISPOSITION` | `redact` | What happens to a credential found in content being stored: page writes, indexed files and transcript imports. `redact` (default) replaces each with `[REDACTED:<kind>:<fingerprint>]` before storage or embedding, and keeps the original in the secret store when a key is set (`MEMRAIN_CONNECTOR_KEK`); `flag` stores it unchanged but still records the finding; `reject` refuses the write. Findings are recorded in the ingest log by kind and a 16-hex SHA-256 fingerprint only, never the value. Allowlisted. | free |
 | `MEMRAIN_SECRET_SCAN_ALLOW` | empty | CSV of 16-hex fingerprints (as printed in a redaction marker; 12-hex entries are ignored) to leave in place — for a string that matches a credential pattern but is not one. Allowlisted. | free |
-| `MEMRAIN_GITHUB_TOKEN` | unset | Token for `memrain connectors github sync` when `--token-file` is not given. A fine-grained, read-only token for the repositories you mirror is enough. Sent only to `api.github.com`; never stored, logged or put in an MCP payload. Allowlisted. | free |
-| `MEMRAIN_CONNECTOR_GAP_HEAL_MINUTES` | `15` | Minutes a connector re-reads behind its watermark on each run, so an item whose update became visible late is not skipped. Allowlisted. | free |
-| `MEMRAIN_CONNECTORS_ENABLED` | off (`=1` on) | The one switch for OAuth connectors: accounts, the connect flow, `/admin/api/connectors` and the `connector_sync` daemon. Takes effect only with a usable connector key below; without one connectors stay closed and `memrain doctor` (`connector-accounts`) says why. Off, no account is synced or queued and no credential is opened, whatever each account's own setting. On, `connector_sync` is registered but stays disabled until the operator enables it: enable it with `memrain daemons enable connector_sync [--source ID]` (or `POST /admin/api/daemons/control`). It runs every 15 minutes per source with an enabled, active account, needs `MEMRAIN_DAEMONS=1` and, being paid, `MEMRAIN_DAILY_BUDGET_USD`. The GitHub connector command does not read it. Code-only. | free |
-| `MEMRAIN_CONNECTOR_KEK` | unset | Base64 of the 32-byte key that seals connector tokens and bring-your-own OAuth client secrets (AES-256-GCM). Never stored in the database; each sealed row records only the key's id. Comes in through `.secrets/memrain.env`. To replace it, run `memrain connectors rotate-kek --old-file F --new-file F` with connectors off, switch the key, then rerun the command if doctor reports rows sealed by another key (it only touches those). Code-only. | free |
+| `MEMRAIN_CONNECTORS_ENABLED` | off | Lite has no connectors, and no code path acts on this switch. | free |
+| `MEMRAIN_CONNECTOR_KEK` | unset | Base64 of the 32-byte key (AES-256-GCM) that seals the secret store: the original of each credential the secret scan redacts from a page write, so `memrain secrets originals\|reveal\|restore` can act on it later. Unset, a write still redacts but keeps no original, and `memrain doctor` says so. Never stored in the database; each sealed row records only the key's id. Comes in through `.secrets/memrain.env`. Code-only. | free |
 | `MEMRAIN_CONNECTOR_KEK_FILE` | unset | Path to a file holding the same base64 key, for self-hosting. Refused unless only its owner can read it (`chmod 0400`). Set this or `MEMRAIN_CONNECTOR_KEK`, not both. Code-only. | free |
-| `MEMRAIN_GOOGLE_OAUTH_CLIENT_ID` | unset | Client id of the operator's own Google OAuth client (type "Web application", authorized redirect URI `https://<host>/admin/connectors/callback/google`), used to connect Google Calendar. A bring-your-own client saved in the admin connectors page takes precedence. Connecting asks only for `openid email calendar.readonly` and refuses any grant that differs. While the client's consent screen is in "Testing" with an External user type, Google expires its refresh tokens after 7 days, so the account drops to `needs_reconnect` weekly until the app is published (or the user type is Internal). Comes in through `.secrets/memrain.env`. Code-only. | free |
-| `MEMRAIN_GOOGLE_OAUTH_CLIENT_SECRET` | unset | The secret of that client. Read from the real environment only: `memrain config set` refuses to store it, since a `runtime_config` row would hold it in the clear. Never logged or returned by any route. Code-only. | free |
-| `MEMRAIN_MICROSOFT_OAUTH_CLIENT_ID` | unset | Application (client) id of the operator's own Microsoft Entra app (platform "Web", redirect URI `https://<host>/admin/connectors/callback/microsoft`), used to connect Outlook mail and calendar. A bring-your-own app saved on the admin Connections page takes precedence, with its own tenant. Connecting asks only for `openid email offline_access User.Read` plus `Mail.Read` or `Calendars.Read` and refuses a grant with any other scope. For a deployment that sets the container environment itself: `fetch-secrets.sh` rewrites `.secrets/memrain.env` and drops hand-added lines, so the stock deployment uses the admin form instead. See [connectors/MICROSOFT.md](./connectors/MICROSOFT.md). Code-only. | free |
-| `MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET` | unset | The secret value of that app. Read from the real environment only: `memrain config set` refuses to store it, since a `runtime_config` row would hold it in the clear. Never logged or returned by any route. Code-only. | free |
-| `MEMRAIN_MICROSOFT_OAUTH_TENANT` | `common` | Who may sign in to that environment app: `common`, `organizations`, `consumers`, a directory id or a verified domain. It goes into the sign-in and token addresses, so it must match the app's supported account types (a single-tenant app needs its directory id). A value that is none of these makes connecting fail with `invalid_tenant`. Code-only. | free |
-| `MEMRAIN_SLACK_OAUTH_CLIENT_ID` | unset | Client ID of the operator's own Slack app (Basic Information, App Credentials; redirect URL `https://<host>/admin/connectors/callback/slack`), used to connect Slack channels with the Connect button. A bring-your-own app saved on the admin Connections page takes precedence; a pasted bot token needs neither. Connecting asks only for the bot scopes `channels:history channels:read users:read` (plus `groups:history groups:read` when private channels are ticked) and refuses a grant with any other scope. See [connectors/SLACK.md](./connectors/SLACK.md). Code-only. | free |
-| `MEMRAIN_SLACK_OAUTH_CLIENT_SECRET` | unset | The client secret of that app. Read from the real environment only: `memrain config set` refuses to store it, since a `runtime_config` row would hold it in the clear. Never logged or returned by any route. Code-only. | free |
-| `MEMRAIN_CONNECTOR_MAX_ITEMS_PER_RUN` | `500` | Items one `connector_sync` run processes before it stops `partial` (`item_cap_reached`); the stream's cursor stays before the unfinished page, so the next run resumes there. Each account's daily item cap applies on top. | bounds the embeddings one run can pay for |
-| `MEMRAIN_CONNECTOR_MASS_DELETE_ITEMS` | `200` | Mass-delete guard, shared by upstream deletions and the retention sweep: deletions past it are held for the owner instead of deleting anything (doctor, the notifications and the account's notices say so; the Connections page confirms or keeps them). A run deleting more than this many items is held. An item deleted upstream (reported deleted or cancelled, missing from a full relisting or a resync, or answered "not found") is soft-deleted with its parts whatever anyone wrote on it, as `page_delete` leaves a page: a tombstone version, history kept, out of search, its fence facts gone, and a text-free `connector-delete` receipt. What was derived from it is removed with its search documents: its chronicle rows, facts and chronicle rows drawn from its chunks, and what synthesis distilled (atoms, takes, concepts narrated over its atoms, contradiction rows quoting its claims); and the atom and concept pages synthesis published from it are soft-deleted alongside unless someone edited them. `page_restore` brings it back until the purge removes it for good after the 30-day page soft-delete window, retiring the facts written on it; parts a shrunk item no longer has go the same way. | free |
-| `MEMRAIN_CONNECTOR_MASS_DELETE_PCT` | `5` | The same hold when a run deletes at least `MEMRAIN_CONNECTOR_MASS_DELETE_MIN` items that are more than this percentage of the account's stored items. | free |
-| `MEMRAIN_CONNECTOR_MASS_DELETE_MIN` | `10` | Floor of the percentage rule, so one deletion on a small account is not held every run. | free |
-| `MEMRAIN_CONNECTOR_RETENTION_DAYS_MAIL` | `180` | Days a connector page of mail threads is kept after its last activity. After each sync run that did not stop for a reconnect, the run hard-deletes that account's pages past the window (at most 500 per run across every kind) with everything derived from them, leaving a text-free receipt in the ingest log. The pages newly past their window go through the mass-delete guard as one run: past it, none is deleted and they wait for the owner, who confirms (the next run deletes them) or keeps them (left alone until the item changes upstream). A page edited by hand since the connector last wrote it (a version an authenticated caller wrote, under any writer name; the brain's own writers that carry no credential, such as a secrets-audit redaction or an enrichment pass, do not count) is never deleted by retention: it is detached instead, with its parts, keeping its text, history and untrusted provenance but losing the connector's ownership and expiry (`origin: connector_detached`), so no later sweep, upstream deletion or disconnect removes it and no later version of the item writes over it; a text-free `connector-detach` receipt records it. A page no sync record maps to (its sync state was forgotten) counts toward the guard like the rest and, past it, is held for the owner the same way. A page soft-deleted upstream is left to the purge, and one restored after its item was deleted upstream is not swept. `0` or `off` keeps them indefinitely; a value under 30, read as a typo, or a malformed one fails the run instead of deleting. | free |
-| `MEMRAIN_CONNECTOR_RETENTION_DAYS_CALENDAR` | `365` | Days a connector page of calendar events (a series counts from its latest listed occurrence) is kept after its last activity. After each sync run that did not stop for a reconnect, the run hard-deletes that account's pages past the window (at most 500 per run across every kind) with everything derived from them, leaving a text-free receipt in the ingest log. The pages newly past their window go through the mass-delete guard as one run: past it, none is deleted and they wait for the owner, who confirms (the next run deletes them) or keeps them (left alone until the item changes upstream). A page edited by hand since the connector last wrote it (a version an authenticated caller wrote, under any writer name; the brain's own writers that carry no credential, such as a secrets-audit redaction or an enrichment pass, do not count) is never deleted by retention: it is detached instead, with its parts, keeping its text, history and untrusted provenance but losing the connector's ownership and expiry (`origin: connector_detached`), so no later sweep, upstream deletion or disconnect removes it and no later version of the item writes over it; a text-free `connector-detach` receipt records it. A page no sync record maps to (its sync state was forgotten) counts toward the guard like the rest and, past it, is held for the owner the same way. A page soft-deleted upstream is left to the purge, and one restored after its item was deleted upstream is not swept. `0` or `off` keeps them indefinitely; a value under 30, read as a typo, or a malformed one fails the run instead of deleting. | free |
-| `MEMRAIN_CONNECTOR_RETENTION_DAYS_CHAT` | `180` | Days a connector page of chat days is kept after its last activity. After each sync run that did not stop for a reconnect, the run hard-deletes that account's pages past the window (at most 500 per run across every kind) with everything derived from them, leaving a text-free receipt in the ingest log. The pages newly past their window go through the mass-delete guard as one run: past it, none is deleted and they wait for the owner, who confirms (the next run deletes them) or keeps them (left alone until the item changes upstream). A page edited by hand since the connector last wrote it (a version an authenticated caller wrote, under any writer name; the brain's own writers that carry no credential, such as a secrets-audit redaction or an enrichment pass, do not count) is never deleted by retention: it is detached instead, with its parts, keeping its text, history and untrusted provenance but losing the connector's ownership and expiry (`origin: connector_detached`), so no later sweep, upstream deletion or disconnect removes it and no later version of the item writes over it; a text-free `connector-detach` receipt records it. A page no sync record maps to (its sync state was forgotten) counts toward the guard like the rest and, past it, is held for the owner the same way. A page soft-deleted upstream is left to the purge, and one restored after its item was deleted upstream is not swept. `0` or `off` keeps them indefinitely; a value under 30, read as a typo, or a malformed one fails the run instead of deleting. | free |
-| `MEMRAIN_CONNECTOR_RETENTION_DAYS_MEETING` | `365` | Days a connector page of meeting transcripts is kept after its last activity. After each sync run that did not stop for a reconnect, the run hard-deletes that account's pages past the window (at most 500 per run across every kind) with everything derived from them, leaving a text-free receipt in the ingest log. The pages newly past their window go through the mass-delete guard as one run: past it, none is deleted and they wait for the owner, who confirms (the next run deletes them) or keeps them (left alone until the item changes upstream). A page edited by hand since the connector last wrote it (a version an authenticated caller wrote, under any writer name; the brain's own writers that carry no credential, such as a secrets-audit redaction or an enrichment pass, do not count) is never deleted by retention: it is detached instead, with its parts, keeping its text, history and untrusted provenance but losing the connector's ownership and expiry (`origin: connector_detached`), so no later sweep, upstream deletion or disconnect removes it and no later version of the item writes over it; a text-free `connector-detach` receipt records it. A page no sync record maps to (its sync state was forgotten) counts toward the guard like the rest and, past it, is held for the owner the same way. A page soft-deleted upstream is left to the purge, and one restored after its item was deleted upstream is not swept. `0` or `off` keeps them indefinitely; a value under 30, read as a typo, or a malformed one fails the run instead of deleting. | free |
-| `MEMRAIN_CONNECTOR_STALL_DAYS` | `7` | `memrain doctor` warns on a connector whose last clean run is older than this many days (it also warns when the last run was `auth_required` or `forbidden`). Allowlisted. | free |
+| `MEMRAIN_GOOGLE_OAUTH_CLIENT_SECRET` | unset | Lite has no connectors. The name is kept environment-only: `memrain config set` refuses to store it and a stored row is ignored. Nothing else reads it. | free |
+| `MEMRAIN_MICROSOFT_OAUTH_CLIENT_SECRET` | unset | Lite has no connectors. The name is kept environment-only: `memrain config set` refuses to store it and a stored row is ignored. Nothing else reads it. | free |
+| `MEMRAIN_SLACK_OAUTH_CLIENT_SECRET` | unset | Lite has no connectors. The name is kept environment-only: `memrain config set` refuses to store it and a stored row is ignored. Nothing else reads it. | free |
 | `MEMRAIN_MIGRATION_LOCK_TIMEOUT` | `10s` | Per-migration advisory-lock timeout (e.g. `10s`, `500ms`, `5min`). Fail-loud on a malformed value. | free |
-| `MEMRAIN_LOCK_STEAL_GRACE_SECONDS` | derived: 2 × (TTL in seconds ÷ 6), min `60` s | Grace before a stale cycle-lock holder can be taken over. Auto-derived from TTL when unset. | free |
-| `MEMRAIN_EXTRACT_STALE_BATCH` | `50` | Batch size for the stale-links re-extract sweep. | free |
-| `MEMRAIN_EXTRACT_TIME_BUDGET_MS` | `1800000` (30m) | Wall-clock budget for one stale-extract invocation. `--catch-up` removes the cap. | free |
+| `MEMRAIN_LOCK_STEAL_GRACE_SECONDS` | derived: 2 × (TTL in seconds ÷ 6), min `60` s | Grace before a stale holder of a database lock (the housekeeping lock among them) can be taken over. Auto-derived from TTL when unset. | free |
 | `MEMRAIN_EMBED_CONCURRENCY` | `8` | Max in-flight embed calls in the backfill fan-out pool; a full backfill is ~pool-size faster than serial. | free |
 | `MEMRAIN_REEMBED_ON_SIGNATURE_CHANGE` | off (`=1` on) | Re-embed a chunk when the embed signature (model/dim/wrapper) changes, not just when its text changes. Opt-in by design — a bare toggle can trigger a large re-embed. | free (Bedrock embed) |
-| `MEMRAIN_FACT_DECAY` | off (`=1` on) | Apply confidence decay to aging facts. | free |
-| `MEMRAIN_FACTS_DEDUP` | off (`=1` on) | Insert-time fact dedup/supersede: a cosine-0.95 fast-path collapses near-identical tuples; off means exact-tuple dedup only. | free |
-| `MEMRAIN_FACTS_DEDUP_LLM` | off (`=1` on) | Adds a paid classifier step to `MEMRAIN_FACTS_DEDUP` for the ambiguous near-duplicates the cosine fast-path can't decide. Inert unless `MEMRAIN_FACTS_DEDUP` is also on. | **paid (LLM)** |
-| `MEMRAIN_FACTS_FENCE` | on (`=0` off) | Fence guard: a dedup supersede never suppresses an operator's fenced fact claim. Kill switch — leave on. | free |
-| `MEMRAIN_TYPED_LINKS` | off (`=1` on) | Infer typed relations on links (opt-in; a wrong inferred relation is worse than none). | free |
-| `MEMRAIN_LINK_VERB_INFER` | off (`=1` on) | Infer link verbs from surrounding text. | free |
-| `MEMRAIN_GAZETTEER` | off (`=1` on) | Gazetteer-based auto-linking of known entities. | free |
-| `MEMRAIN_MEETING_TIMELINE` | off (`=1` on) | Extract meeting entries into the timeline during the cycle. | free |
 | `MEMRAIN_WIKILINK_CANONICALIZE` | built-in | Canonicalize wikilink slugs to their target pages. | free |
 | `MEMRAIN_WIKILINK_TRGM` | built-in | Use trigram similarity to resolve fuzzy wikilink slugs. | free |
-| `MEMRAIN_SALIENCE_HIGH_TAGS` | built-in | CSV of tags treated as high-emotion/high-salience in salience recompute. | free |
 | `MEMRAIN_CONFIG_PATH` | built-in | Override path to the on-disk config file. | free |
 | `MEMRAIN_AUDIT_DIR` | built-in | Directory for the weekly audit file. | free |
-| `MEMRAIN_WASM_DIR` | built-in | Override path to the tree-sitter WASM parser directory. | free |
-| `MEMRAIN_INGEST_MAX_BYTES` | `1048576` (1 MiB) | Payload cap for `POST /ingest`, counted as the body streams. Allowlisted. | free |
 | `MEMRAIN_PAGE_MAX_BYTES` | unset (off) | Upper bound, in UTF-8 bytes, on a page body written through `page_put` / `page_append` / `page_edit`, the CLI and importers. Unset: no limit beyond the HTTP request cap. Set (for example `2097152` for 2 MiB): a write whose resulting body exceeds it fails with `page_too_large`; a page already over the limit can still change its title or truth. A malformed value fails the write rather than running uncapped. | free |
 | `MEMRAIN_REQUIRE_WRITE_PRECONDITION` | `off` | What MCP `page_put` does when it would overwrite an existing page without `expected_version` (and without `force`): `off` writes as before, `warn` writes and adds a warning, `refuse` (also `1`/`true`) fails with `precondition_required` and the current version. Creates always pass. With `warn`/`refuse`, a replacement under half of a live body larger than 32 KiB is also refused (`page_shrink_refused`, byte counts); use `page_edit` or explicit `allow_shrink:true`. The existing `force:true` and `off` bypasses remain. Allowlisted. | free |
 | `MEMRAIN_SECRET_SCAN_HIGH_ENTROPY` | on | Redacts high-entropy values assigned to secret-looking keys (`password=`, `api_key:` …). `0`, `false`, `off` or `no` disables it. Allowlisted. | free |
 | `MEMRAIN_SECRET_SCAN_ECHO` | on | Also redacts bare repeats of a value already caught in the same write. `0`, `false`, `off` or `no` disables it. Allowlisted. | free |
-| `MEMRAIN_CODE_SECRET_SCAN` | on | Scans source files for credentials before the code indexer chunks them (line numbers are kept). `0` turns it off. Allowlisted. | free |
 | `MEMRAIN_OUTPUT_REDACTION` | on | Scans what retrieval tools return to non-operator callers and replaces credentials with `[REDACTED:<kind>:<fp>]`; ids, slugs and hashes pass unchanged. Honours `MEMRAIN_SECRET_SCAN_ALLOW`. `0`, `false`, `off` or `no` disables it. Allowlisted. | free |
-| `MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES` | `8388608` (8 MiB) | Largest session log `POST /ingest` accepts from `memrain transcripts push` (and the CLI reads); a bigger log is refused whole, never truncated. Allowlisted. | free |
 | `MEMRAIN_TRANSCRIPT_MAX_FILE_BYTES` | `104857600` (100 MiB) | Largest export `memrain transcripts ingest` accepts; a bigger file is refused whole, never truncated. Allowlisted. | free |
-| `MEMRAIN_MAX_FENCES_PER_PAGE` | `100` | Fenced code blocks per markdown page that are chunked as code. | free |
-| `MEMRAIN_BODY_TIMELINE` | on (`=0` off) | Turns `## Timeline` bullets, `### YYYY-MM-DD` headers and `[Source: X, YYYY-MM-DD]` citations in a written page into timeline events. Allowlisted. | free |
-| `MEMRAIN_TIMELINE_ANCHOR` | off (`=1` on) | Writes one anchor timeline event per dated page, a capped batch per run. | free |
-| `MEMRAIN_RECHUNK_SWEEP` | off (`=1` on) | Cycle phase that re-chunks and re-embeds documents written by an older chunker version, a bounded batch per tick. | Titan embeds |
-| `MEMRAIN_RECHUNK_SWEEP_MAX` | `25` | Max documents per tick. | — |
-| `MEMRAIN_RECHUNK_SWEEP_MAX_CHARS` | `1000000` | Character budget per tick; at least one document always runs. | — |
-| `MEMRAIN_DOCTOR_JOB_WEDGE_SEC` | `3600` | Seconds a running job may go without progress before `doctor` calls it wedged. | free |
 | `MEMRAIN_HNSW_ZOMBIE_SWEEP` | off (`=1` on) | Drops invalid (half-built) vector indexes at boot. Postgres only, best-effort. `doctor` reports them either way. Allowlisted. | free |
 | `MEMRAIN_PG_POOL_MAX` | `10` | Postgres connection pool size. | free |
-| `MEMRAIN_PG_POOL_RESERVE` | off (`=1` on) | Keeps one pool connection free: the maintenance cycle, the embed backfill and the contextual re-embed share at most `MEMRAIN_PG_POOL_MAX` − 1 slots, so `/health`, job claims and lock renewals never queue behind them. A job started inside another takes no second slot. | free |
+| `MEMRAIN_PG_POOL_RESERVE` | off (`=1` on) | Keeps one pool connection free: the embed backfill shares at most `MEMRAIN_PG_POOL_MAX` − 1 slots, so `/health` and lock renewals never queue behind it. A long holder started inside another takes no second slot. | free |
 | `MEMRAIN_SEARCH_MAX_CONCURRENT` | unset (unbounded) | Upper bound on searches running at once in one process; further searches wait their turn. A malformed value is ignored. | free |
 | `MEMRAIN_PG_APPLICATION_NAME` | unset | `application_name` on every Postgres connection, shown in `pg_stat_activity` (for example `memrain:<tenant>:serve`). Characters outside `A-Z a-z 0-9 : . _ -` are dropped; at most 63. No personal data belongs here. | free |
-| `MEMRAIN_PG_POOL_PROCESSES` | `1` | How many processes open a `MEMRAIN_PG_POOL_MAX` pool against this database (serve, worker, other containers). Read only by doctor `db-connection-budget`, which warns when the planned pools or the open connections pass 80% of `max_connections` minus the superuser reserve. | free |
+| `MEMRAIN_PG_POOL_PROCESSES` | `1` | How many processes open a `MEMRAIN_PG_POOL_MAX` pool against this database (serve, other containers). Read only by doctor `db-connection-budget`, which warns when the planned pools or the open connections pass 80% of `max_connections` minus the superuser reserve. | free |
 | `MEMRAIN_PG_STATEMENT_TIMEOUT_MS` | `30000` | `statement_timeout` for the engine's sessions. Migrations use their own. Not sent in pooler mode: there the database role's `statement_timeout` applies. | free |
 | `MEMRAIN_PG_POOLER` | unset | `pgbouncer` when `MEMRAIN_POSTGRES_URL` points at a PgBouncer in transaction mode (1.21 or newer, `max_prepared_statements` above 0). The engine then sends no session startup parameter except `application_name`, so the role must carry `statement_timeout` and `idle_in_transaction_session_timeout`, and doctor `db-connection-budget` fails when either reads `0` through the pool. A login role is refused. Migrations and DDL (`hnsw sweep|rebuild`, the boot zombie sweep, `apply-migrations`) go over `MEMRAIN_POSTGRES_DIRECT_URL`. Any other value stops the process. Env-only. | free |
 | `MEMRAIN_POSTGRES_DIRECT_URL` | unset | The database itself, bypassing the pooler. Read only in pooler mode, where migrations and DDL require it: without it they are refused with `pooler_migration_refused` before any statement is sent, and the server does not start. Env-only. | free |
@@ -961,7 +577,7 @@ job timeouts. The compose-allowlisted ones carry explicit defaults in
 | `MEMRAIN_MIGRATE_BACKOFF_MS` | unset (5s/15s/45s) | Replaces the migration retry backoff with one fixed delay. For tests. | free |
 | `MEMRAIN_BULK_MAX_RETRIES` | built-in | Retries for a transient database error in bulk work. `0` disables retries. | free |
 | `MEMRAIN_NO_DB_CONFIG` | off (`=1` on) | Skips the `memrain config set` overlay: stored `MEMRAIN_*` values are normally applied at boot where the real environment leaves a key unset. | free |
-| `MEMRAIN_PGLITE_AUTO_ANALYZE` | off (`=1` on) | PGLite only (it has no autovacuum). After each maintenance cycle and each `memrain import --apply`, runs `ANALYZE` on the hot tables (`pages`, `chunks`, `embeddings`, `entity_facts`, `links`) whose live row count has drifted from the planner estimate by more than max(500, 10%). Postgres is left to autovacuum; doctor `planner-stats` reports stale statistics on both engines. | free |
+| `MEMRAIN_PGLITE_AUTO_ANALYZE` | off (`=1` on) | PGLite only (it has no autovacuum). After each `memrain import --apply`, runs `ANALYZE` on the hot tables (`pages`, `chunks`, `embeddings`, `entity_facts`, `links`) whose live row count has drifted from the planner estimate by more than max(500, 10%). Postgres is left to autovacuum; doctor `planner-stats` reports stale statistics on both engines. | free |
 | `MEMRAIN_PGLITE_NO_LOCK` | off (`=1` on) | Skips the lock file that stops two processes opening one PGLite directory. Only for a filesystem that cannot hold it. | free |
 | `MEMRAIN_TEST_PGLITE_TEMPLATE` | unset | Test-only. A new PGLite directory starts as a copy of this already-migrated one; `scripts/test-sharded.sh` sets it. Never set it in `.env` or compose. | free |
 
@@ -978,17 +594,19 @@ environment variable and restart; `0` is not an off value.
 
 ### Maintenance mode
 
-Four switches control the work `serve` starts on its own at boot. They are
-read from the environment only: a `runtime_config` row can never set them, so
-a leftover row cannot stop the worker for good or restart work during
-maintenance. All four are in the compose allowlist with an empty default.
+Four switches control the work `serve` starts on its own. They are read from
+the environment only: a `runtime_config` row can never set them, so a leftover
+row cannot stop housekeeping for good or restart it during maintenance. Two of
+them only matter to a 2.x install: Lite has no code sweep and no jobs worker,
+so it only reports them and counts them in `memrain status --quiescent`. All four are in
+the compose allowlist with an empty default.
 
 | Variable | Default | What it does | Cost |
 |---|---|---|---|
-| `MEMRAIN_MAINTENANCE` | off (`=1` on) | Maintenance mode. Forces the three switches below off, whatever they say, and skips the boot sweep of expired OAuth tokens, so a server in maintenance writes nothing by itself. `/health` then carries `"maintenance":true` and `deploy/deploy.sh` does not start the ingress. | free |
-| `MEMRAIN_BOOT_CODE_SWEEP` | on (`=0` off) | Registers the code roots and sweeps them at boot. | free |
-| `MEMRAIN_JOBS_WORKER` | on (`=0` off) | Starts the jobs worker. Off, a submitted job stays `pending` and nothing claims it. | free |
-| `MEMRAIN_CYCLE` | on (`=0` off) | Starts the maintenance cycle loop, whatever `MEMRAIN_DREAM_INTERVAL_S` says. | free |
+| `MEMRAIN_MAINTENANCE` | off (`=1` on) | Maintenance mode. Forces the three switches below off, whatever they say, so the hourly housekeeping does not start, and skips the boot sweep of expired OAuth tokens: a server in maintenance writes nothing by itself. `/health` then carries `"maintenance":true` and `deploy/deploy.sh` does not start the ingress. | free |
+| `MEMRAIN_BOOT_CODE_SWEEP` | on (`=0` off) | 2.x only. Lite has no code sweep; the value shows in the boot line and in `memrain status`, and `--quiescent` counts it as a switch that is on. | free |
+| `MEMRAIN_JOBS_WORKER` | on (`=0` off) | 2.x only. Lite has no jobs worker; the value shows in the boot line and in `memrain status`, and `--quiescent` counts it as a switch that is on. | free |
+| `MEMRAIN_CYCLE` | on (`=0` off) | Starts the hourly housekeeping. `0` turns it off. | free |
 
 An empty value counts as unset. Any value other than `0` or `1` fails closed:
 it turns maintenance on, or turns a switch off, and the boot log names the
@@ -996,10 +614,10 @@ invalid switch. When anything is off, `serve` prints one line such as
 `[memrain] maintenance=on code_sweep=off jobs_worker=off cycle=off`.
 
 `memrain status` reports a `quiescence` block: the running state of the
-switches, plus counts of running and leased jobs and of live cycle and worker
-locks. `memrain status --quiescent` exits 0 only when maintenance is on (or
-all three switches are off) and no job, cycle or worker is active; otherwise
-it exits 3 and prints what failed.
+switches, plus counts of running and leased 2.x jobs and of live cycle
+(housekeeping) and worker locks. `memrain status --quiescent` exits 0 only
+when maintenance is on (or all three switches are off) and no job, lock or
+worker is active; otherwise it exits 3 and prints what failed.
 
 To prove that nothing changed across a maintenance step, compare two outputs
 of `deploy/memrain/scripts/sql/data-manifest.sql`. It is a read-only psql
@@ -1026,26 +644,13 @@ and do not invoke models. The syntax below uses placeholders; review the actual
 preview before choosing an apply operation.
 
 ```text
-memrain atoms-retire --source-ref DOC --completed-hash HASH16
-memrain atoms-retire --source-ref DOC --completed-hash HASH16 --apply --plan-hash HASH64
-```
-
-`DOC` is the exact source document ID. `HASH16` is its authoritative completed
-atom hash; `HASH64` is the exact hash returned by the preview. The preview lists
-eligible and held pages plus `truncated`. Apply rechecks the source and each
-page and soft-deletes only proven stale automatic pages. Manual edits and
-ambiguous legacy pages are held, not guessed from titles or footers. Page
-history remains intact. Apply exits 1 when any targets are held or the plan is
-truncated; a stale plan requires a fresh preview.
-
-```text
 memrain purge-leftovers
 memrain purge-leftovers --apply --plan-hash HASH64 --export FILE
 memrain purge-leftovers restore --from FILE
 ```
 
-`purge-leftovers` previews what purges that ran before synthesis cleanup left
-behind: atoms, atom pages, takes and contradiction rows whose source document
+`purge-leftovers` previews what 2.x purges that ran before synthesis cleanup
+left behind: atoms, atom pages, takes and contradiction rows whose source document
 no longer exists (page slugs are left to the page purge, since a rename moves a
 page without its takes), the concepts narrated over them (rebuilt or retired as a purge does
 now), and live facts written on a page that is gone. Facts that only name a
@@ -1060,8 +665,8 @@ when a page or concept it touched changed since the apply, and works only
 while the pages it hid are still soft-deleted (the 30-day page TTL). Apply and
 restore drop the search mirrors of the pages they rewrite and rebuild them
 from the new text right after the commit; a page whose mirror could not be
-rebuilt is listed under `mirrors.failed` with `next: memrain cycle --phases
-mirror-pages`, which retries it.
+rebuilt is listed under `mirrors.failed`, and the next hourly housekeeping
+rebuilds it.
 
 ```text
 memrain erase forgotten --source SOURCE [--fact-ids ID1,ID2] [--deleted-pages SLUG1,SLUG2]
@@ -1078,7 +683,7 @@ preview hash and rechecks the complete dependency snapshot under locks;
 stale, busy or blocked operations delete nothing. Withdrawal guards retain
 non-text claim keys to prevent reinserting erased facts.
 
-Run erasure in a planned quiet period with jobs and cycle workers stopped.
+Run erasure in a planned quiet period with housekeeping stopped (`MEMRAIN_CYCLE=0` or maintenance mode).
 Active jobs or worker/cycle locks, replay receipts, unselected references or
 copies, unknown dependencies, and unproven ownership block the operation.
 The command does not stop workers itself. Its census is capped at 50,000 rows
@@ -1092,7 +697,7 @@ including selected deleted-page history and mirrors. It does **not** erase
 PostgreSQL dead tuples or WAL, backups, external files, exports, client copies,
 external logs, paraphrases or unlinked fragments. Reverting the program cannot
 restore erased rows. It creates no automatic backup and is never applied
-automatically by deployment, a maintenance cycle or an MCP tool.
+automatically by deployment, housekeeping or an MCP tool.
 
 ### CLI exit codes
 
@@ -1106,14 +711,13 @@ kind of failure it was, so a cron job or CI step can decide whether to retry:
 | `2` | Usage error or invalid input (`error_class: invalid_request`). Fix the command before running it again. |
 | `75` | Retryable failure (`retryable: true`, such as a busy or timed-out database). The same command may succeed later. |
 
-Commands that document their own codes keep them: `memrain eval` exits `2`
-before scoring when the qrels are stale, and `memrain status --quiescent`
+Commands that document their own codes keep them: `memrain status --quiescent`
 exits `3` while maintenance is not quiescent. Argument checks inside a command
 return their documented code directly.
 
 ---
 
-## 7. Terraform infrastructure variables
+## 6. Terraform infrastructure variables
 
 Set in `terraform/terraform.tfvars` (generated by `scripts/init.sh`). Full
 schema in `terraform/variables.tf`.
@@ -1144,8 +748,8 @@ schema in `terraform/variables.tf`.
 | `public_subnet_cidr` | `10.0.1.0/24` | Public subnet CIDR for the primary AZ. |
 | `availability_zone` | `eu-west-1b` | AZ for the primary subnet. |
 | `multi_az_subnet_cidrs` | `{eu-west-1a=10.0.2.0/24, eu-west-1c=10.0.3.0/24}` | Extra subnets to satisfy the RDS multi-AZ subnet group. |
-| `bedrock_allowed_regions` | EU family + `us-east-1` | Regions where the instance role may invoke the expensive Claude models; an IAM Deny blocks `anthropic.claude-*` elsewhere. |
-| `bedrock_model_id` | `eu.anthropic.claude-haiku-5-5` | Bedrock CRIS inference-profile id for the primary model, validated against an allowed list. The **runtime** utility tier is the built-in Claude Haiku default (overridable per feature with the `MEMRAIN_<FEATURE>_MODEL` keys, or with `MEMRAIN_UTILITY_MODEL`); this terraform var is informational: it feeds only the `bedrock_model` output, and IAM does not reference it. |
+| `bedrock_allowed_regions` | EU family + `us-east-1` | Regions listed for Claude model invocation. Lite calls no Claude model; its IAM allows Titan text embeddings only. |
+| `bedrock_model_id` | `eu.anthropic.claude-haiku-5-5` | Informational: feeds only the `bedrock_model` output, and IAM does not reference it. Lite calls no Claude model. |
 | `alarm_email` | `""` | Email for the EC2 status-check CloudWatch alarm. Empty skips email (alarm still fires). |
 | `ssh_allowed_cidr` | `""` | CIDR allowed inbound SSH. Empty disables SSH — use SSM Session Manager. |
 | `enable_vpc_endpoints` | `false` | Enable interface VPC endpoints (Bedrock, SM, SSM, Logs). ~$43/mo — off for personal use. |
@@ -1155,11 +759,8 @@ schema in `terraform/variables.tf`.
 | `caddy_manage_dns` | `true` | `caddy` ingress only: create the `<subdomain>.<domain>` A record in the domain's Route53 hosted zone. Set false when DNS lives elsewhere and create the record to the instance EIP yourself. |
 | `efs_backup` | `true` | AWS Backup's daily EFS backups (35-day retention). Set false only if another backup covers the mount. |
 
-> The `bedrock_model_id` var does not change what runs:
-> the **retrieval brain calls only Anthropic models via Bedrock at runtime** —
-> Claude Haiku for the utility tier (built-in default, overridden by
-> `MEMRAIN_UTILITY_MODEL`) and Claude Sonnet for the paid slices
-> (`MEMRAIN_FACTS_MODEL`). Amazon Nova was removed from the request path.
+> Lite's only model call at runtime is Amazon Titan Text Embeddings v2 through
+> Bedrock, and its IAM allows Titan embeddings only.
 
 ### Resource name variables
 
