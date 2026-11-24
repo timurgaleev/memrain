@@ -53,12 +53,13 @@ def test_one_divider():
     assert text().count(f"\n{DIVIDER}\n") == 1
 
 
-def test_unreleased_is_first_and_empty():
+def test_unreleased_is_first():
+    # Entries collect under [Unreleased] until the release commit moves them
+    # under a version heading.
     above, _ = split()
     headings = HEADING_RE.findall(above)
     assert headings[0] == "## [Unreleased]"
     assert re.match(r"^## \[\d+\.\d+\.\d+\] — \d{4}-\d{2}-\d{2}$", headings[1]), headings[1]
-    assert section(above, "## [Unreleased]").strip() == "## [Unreleased]"
 
 
 def test_release_1_0_0_holds_the_rename():

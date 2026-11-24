@@ -6,6 +6,39 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Memrain Lite: one person's brain with 29 MCP tools. Pages, links, tags, hybrid search, the safety checks and the credentials stay; everything else goes. The schema does not change, and rows of the removed features stay in the database untouched. Read [UPGRADING.md](UPGRADING.md#300) before deploying, and stay on 2.7.x if you use facts, connectors, Ask or team members.
+
+### Removed
+
+- 79 MCP tools. The kept 29 are the page, link, tag, search, source and brain tools; a call to any other answers `not_found` with `unknown tool: <name>`.
+- Facts and fact extraction, takes, synthesis, `think` and the admin Ask chat with its share links.
+- Connectors (Gmail, Google Calendar, Outlook, Teams, Slack, Fireflies, GitHub), open loops and owner notifications.
+- Members and groups. A credential bound to a member other than the enabled owner, or carrying a trust floor (`min_trust`), is refused with `credential_unsupported`.
+- The code index and `code_*` tools, entities, the graph tools, timelines and chronicle, `context_pack` and `volunteer_context`.
+- The jobs worker, the daemons and the maintenance cycle; the agent and skill-optimisation jobs; eval and bench.
+- LLM query expansion, intent classification and rerank. Search no longer calls a chat model.
+- `POST /ingest` and `memrain transcripts push` with its session hooks. `memrain transcripts ingest` stays.
+- MCP prompts, `list_skills`, `get_skill` and `deploy/skills/`. The plugin ships three skills (`connect-client`, `query`, `ingest`), rewritten for the kept tools.
+- Admin pages other than sign-in, Health, Pages, page view, Search, Agents and Security.
+- The CLI commands of the removed features, the `memrain-eval-probe` timer, `web-tree-sitter` with the grammar packages and their wasm, and every compose variable of a removed feature.
+- Docs for chat, team setup, connectors and evaluation.
+
+### Changed
+
+- One hourly in-process housekeeping pass replaces the worker and daemons: purge past the soft-delete window, rebuild missing search mirrors, embed chunks without a vector, sweep expired tokens, expire unsettled spend holds, and trim the request log and 2.x chat history. Its deleting and rebuilding steps obey the off-switches a 2.x cycle obeyed.
+- Search is one path: keyword and vector arms fused with RRF, page fusion, dedup, filters, source scope, visibility and the owner-only fence.
+- Page writes sync wikilinks and mirror the page inline; they no longer refresh 2.x facts, timeline events or takes.
+- The instance role may invoke Bedrock Titan text embeddings only (an in-place change to its inline policy).
+- `memrain doctor` checks only the subsystems this build runs and reports how many 2.x feature rows it leaves unused.
+- `memrain config set` knows only the keys this build reads; a removed key is an unknown key.
+- The client editor in the admin panel no longer sets a trust floor. It shows one a 2.x client carries and offers to remove it; the rescope route refuses a non-null `min_trust`.
+- `/health` reports `edition: "lite"`.
+- The server refuses to start when `MEMRAIN_TENANT_ID` or `MEMRAIN_CONTROL_URL` is set.
+
+### Fixed
+
+- Viewing an old version of a page in the admin panel showed the current text: the panel's argument allowlist dropped `version` from `page_get`.
+
 ## [2.7.0] — 2026-11-23
 
 A release about the surface agents see. The admin panel gets a grant editor with signed previews and a passkey step-up, open loops can be closed and muted over MCP, an incident switch can narrow every client's tools, and the Claude Code and Codex plugin ships 31 skills.
