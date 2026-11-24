@@ -11,9 +11,17 @@ brain your Claude Code (or any MCP client) can query at
 `https://<subdomain>.<domain>/mcp`.
 
 The stack is one small EC2 instance running Docker Compose (the `memrain`
-container + a `cloudflared` sidecar), an RDS Postgres index, an EFS data tree,
-and Secrets Manager for credentials. Public ingress is a **Cloudflare Tunnel**,
-not an ALB — the instance opens no inbound web ports.
+container + an ingress container), an RDS Postgres index, an EFS data tree,
+and Secrets Manager for credentials. Public ingress is one of two, chosen with
+`ingress_mode` in `terraform.tfvars`, never an ALB:
+
+- `cloudflare` (default): a **Cloudflare Tunnel** through a `cloudflared`
+  sidecar; the instance opens no inbound web ports.
+- `caddy`: **Caddy** with Let's Encrypt on the instance's own public IP,
+  inbound 80/443 open, no Cloudflare account needed (see
+  [Alternative: Caddy ingress](#alternative-caddy-ingress-no-cloudflare)).
+
+Steps marked *Cloudflare only* or *Caddy only* apply to that mode.
 
 Throughout, replace placeholders: `example.com` (your domain), `<subdomain>`
 (default `brain`), `<account-id>`, `<instance-id>`, `<your-profile>`,
@@ -34,8 +42,12 @@ Throughout, replace placeholders: `example.com` (your domain), `<subdomain>`
   [model access](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)
   if your account restricts it.
 - **Terraform ≥ 1.6**.
-- **A domain** you control, plus a **Cloudflare account** (free tier is fine) —
-  the public MCP ingress runs over a Cloudflare Tunnel.
+- **A domain** you control, and for the ingress you pick:
+  - *Cloudflare only:* a **Cloudflare account** (free tier is fine) with the
+    domain's DNS on Cloudflare.
+  - *Caddy only:* the domain's public hosted zone in **Route53** in the same
+    account (with the default `caddy_manage_dns = true`), or a DNS record you
+    point at the instance's Elastic IP yourself.
 
   > **Running behind a different reverse proxy (Caddy, nginx, an ALB)?**
   > Public-request detection keys on the `Cf-Connecting-Ip` header the
@@ -276,13 +288,16 @@ Terraform creates most secrets fully populated:
 - `<prefix>/memrain-public-bearer` — **auto-generated** 48-char token.
 - `<prefix>/memrain-internal-token` — **auto-generated** 48-char token.
 
-In the default install exactly one secret is created as an **empty
-placeholder** you must fill by hand:
+*Cloudflare only:* exactly one secret is created as an **empty placeholder**
+you must fill by hand:
 
 - `<prefix>/cloudflared-tunnel-token` — empty until you create the tunnel
   (step 5). The host has already booted by then, so step 5 ends with a secrets
   refetch on the host. Until that runs, the `cloudflared` container loops
   forever trying to authenticate and the public ingress never comes up.
+
+*Caddy only:* terraform creates no tunnel-token secret, so there is nothing to
+fill here (except the deploy key below, if you use one).
 
 With `use_ssh_deploy_key = true` terraform creates a second empty placeholder,
 `<prefix>/github-deploy-key`. First boot needs it to clone the repo, and that
@@ -301,6 +316,9 @@ aws secretsmanager get-secret-value \
 ---
 
 ## 5. Create the Cloudflare Tunnel
+
+*Cloudflare only.* With `ingress_mode = "caddy"`, skip to
+[Alternative: Caddy ingress](#alternative-caddy-ingress-no-cloudflare).
 
 1. In the Cloudflare **Zero Trust** dashboard → **Networks → Tunnels**, create a
    tunnel (connector type: *Cloudflared*).
@@ -359,11 +377,12 @@ step entirely. Then:
 
 In this mode terraform creates no cloudflared tunnel-token secret at all
 (`aws_secretsmanager_secret.cloudflared_tunnel_token` is `count`-gated on
-`ingress_mode`). Upgrading an existing caddy install that already has the
-empty placeholder will plan a destroy of it — expected. If that secret was
-previously deleted by hand it sits in scheduled-deletion limbo and AWS
-rejects the destroy; run `aws secretsmanager restore-secret --secret-id
-<prefix>/cloudflared-tunnel-token` first, then apply.
+`ingress_mode`). An existing install that still holds the placeholder in
+state fails at plan when it switches to caddy, because the secret is
+`prevent_destroy`: drop it from state first with
+`terraform state rm 'aws_secretsmanager_secret.cloudflared_tunnel_token[0]'`
+(the secret itself stays in AWS), then delete it by hand only if nothing
+reads it.
 
 ### Admin surface and OAuth consent
 
@@ -484,9 +503,10 @@ refreshed). On that boot it:
   `deploy/.secrets/`,
 - `docker compose … up -d --build`.
 
-Memrain runs its DB migrations at container start — no manual migrate step. The
-tunnel token is filled after this boot, so the ingress comes up only after the
-refetch at the end of step 5.
+Memrain runs its DB migrations at container start — no manual migrate step.
+*Cloudflare only:* the tunnel token is filled after this boot, so the ingress
+comes up only after the refetch at the end of step 5. *Caddy only:* the
+ingress comes up on this boot, once Let's Encrypt issues the certificate.
 
 Connect to the host with SSM (no SSH needed; `terraform output -raw
 ssm_command` prints this with the instance id filled in):
