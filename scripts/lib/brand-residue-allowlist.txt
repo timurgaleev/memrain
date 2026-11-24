@@ -31,7 +31,7 @@ deploy/lib/legacy-guard.sh|COMPAT|15|refuses to run beside a pre-rename install
 deploy/memrain/.gitignore|COMPAT|1|the legacy local data dir
 deploy/memrain/docs/ARCHITECTURE.md|COMPAT-DOC|3|legacy config dir and yml fallback
 deploy/memrain/entrypoint.sh|COMPAT|5|MEMEX_ fallbacks and the legacy config path warning
-deploy/memrain/package.json|COMPAT|1|the memex bin alias (removed in 1.1.0)
+deploy/memrain/package.json|COMPAT|1|the memex bin alias (removed in 0.2.0)
 deploy/memrain/src/cli-alias.ts|COMPAT|1|the memex command alias
 deploy/memrain/src/commands/config.ts|COMPAT|7|config keys under either prefix
 deploy/memrain/src/commands/doctor.ts|COMPAT|6|legacy env, config dir and runtime_config warnings

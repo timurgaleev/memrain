@@ -11,18 +11,18 @@
  *   reservations   spend reservations a crashed call never settled
  *   retention      request-log rows past MEMRAIN_REQUEST_LOG_RETENTION_DAYS,
  *                  write receipts past their replay window, and chat history
- *                  a 2.x brain kept, past MEMRAIN_CHAT_RETENTION_DAYS
+ *                  a pre-Lite brain kept, past MEMRAIN_CHAT_RETENTION_DAYS
  *
  * The steps that delete or rebuild (purge, mirror_pages, embed_gaps,
- * retention) obey the off-switches a 2.x maintenance cycle obeyed, so an
+ * retention) obey the off-switches a pre-Lite maintenance cycle obeyed, so an
  * install that had switched its cycle off keeps its rows after the upgrade:
  * MEMRAIN_DAEMONS_DISABLED naming `cycle`, a paused `daemon_controls` row for
  * every daemon or for the cycle, and MEMRAIN_CYCLE_SKIP_PHASES naming the
- * step's 2.x phase (`purge` covers purge and retention, as its phase did).
+ * step's pre-Lite phase (`purge` covers purge and retention, as its phase did).
  * The token sweep and reservation expiry ran outside that cycle and still do.
  *
  * One process does it at a time: the run holds the `memrain-cycle` row in
- * `cycle_locks`, the lock a 2.x maintenance cycle takes, so the two never
+ * `cycle_locks`, the lock a pre-Lite maintenance cycle takes, so the two never
  * overlap on a shared database. A step that fails is recorded and the next
  * one runs; a lost lock stops the run before its next step. No model is
  * called; the only paid calls are the Titan embeds of the two embed steps,
@@ -53,9 +53,9 @@ const CHAT_DEFAULT_RETENTION_DAYS = 90;
 const CHAT_PURGE_BATCH = 5_000;
 const CHAT_PURGE_MAX_BATCHES = 100;
 const CHAT_THREAD_TITLE_MAX = 80;
-/** The daemon name a 2.x build paused or disabled its maintenance cycle under. */
+/** The daemon name a pre-Lite build paused or disabled its maintenance cycle under. */
 const CYCLE_DAEMON = "cycle";
-/** The 2.x cycle phase each switchable step was part of. */
+/** The pre-Lite cycle phase each switchable step was part of. */
 const STEP_PHASE: Readonly<Record<string, string>> = {
   purge: "purge",
   mirror_pages: "mirror-pages",
@@ -98,7 +98,7 @@ export function chatRetentionDays(env: NodeJS.ProcessEnv = process.env): number 
 }
 
 /**
- * Why the steps a 2.x cycle ran must not run now, or null when they may.
+ * Why the steps a pre-Lite cycle ran must not run now, or null when they may.
  * Fails closed: a control table that cannot be read holds them back.
  */
 export async function cycleHold(engine: Pick<Engine, "query">, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
@@ -119,7 +119,7 @@ export async function cycleHold(engine: Pick<Engine, "query">, env: NodeJS.Proce
   }
 }
 
-/** MEMRAIN_CYCLE_SKIP_PHASES as a set of 2.x phase names. */
+/** MEMRAIN_CYCLE_SKIP_PHASES as a set of pre-Lite phase names. */
 export function skippedPhases(env: NodeJS.ProcessEnv = process.env): Set<string> {
   return new Set((env.MEMRAIN_CYCLE_SKIP_PHASES ?? "").split(",").map((p) => p.trim()).filter(Boolean));
 }

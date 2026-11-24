@@ -67,7 +67,7 @@ export function legacyEnvCheck(report: LegacyEnvReport): Check {
     name: "legacy-env-names",
     ok: true,
     status: "warn",
-    detail: `${names.length} legacy env name(s) in use; rename to MEMRAIN_* before 1.1.0: ${names.join(", ")}`,
+    detail: `${names.length} legacy env name(s) in use; rename to MEMRAIN_* before 0.2.0: ${names.join(", ")}`,
   };
 }
 

@@ -89,7 +89,7 @@ async function housekeepingCheck(engine: Engine, now: Date): Promise<CheckVerdic
   };
 }
 
-/** Informational: rows a 2.x brain holds for features this build does not have. */
+/** Informational: rows a pre-Lite brain holds for features this build does not have. */
 async function unusedFeatureDataCheck(engine: Engine): Promise<CheckVerdict> {
   const counts = await Promise.all(UNUSED_FEATURE_TABLES.map(async (table) => {
     try {
@@ -106,8 +106,8 @@ async function unusedFeatureDataCheck(engine: Engine): Promise<CheckVerdict> {
     ok: true,
     status: "ok",
     detail: total === 0
-      ? "no 2.x feature data"
-      : `2.x feature data present, unused by Lite: ${total} rows (kept as is)`,
+      ? "no pre-Lite feature data"
+      : `pre-Lite feature data present, unused by Lite: ${total} rows (kept as is)`,
   };
 }
 

@@ -30,7 +30,7 @@ Re-fetched on every `bootstrap.sh` run; existing files are overwritten.
 The default prefix is `<var.secrets_prefix>` (configured in
 `terraform.tfvars`; default `memrain`).
 
-In 1.0.x a stack created before the rename keeps its secret names:
+In 0.1.x a stack created before the rename keeps its secret names:
 `fetch-secrets.sh` tries `<prefix>/memrain-<name>` first and falls back to
 `<prefix>/memex-<name>` when the new name is missing or empty. When both hold a
 value the values must match, or the fetch exits 1 and changes nothing. A `.env`

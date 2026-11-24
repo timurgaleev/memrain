@@ -189,10 +189,10 @@ Releases follow SemVer + Keep a Changelog and ship only after the
 change is live and verified:
 
 1. Roll the `[Unreleased]` changelog entries into a dated
-   `## [X.Y.Z] — <date>` section, leaving an empty `[Unreleased]`.
-2. `git tag vX.Y.Z && git push origin vX.Y.Z` — the tag must point at a
+   `## [0.X.Y] — <date>` section, leaving an empty `[Unreleased]`.
+2. `git tag v0.X.Y && git push origin v0.X.Y` — the tag must point at a
    CI-green commit that is already deployed to the EC2.
-3. `gh release create vX.Y.Z --title vX.Y.Z --notes "<changelog
+3. `gh release create v0.X.Y --title v0.X.Y --notes "<changelog
    section>"`.
 
 `package.json` versions are intentionally decoupled from the release

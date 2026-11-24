@@ -60,7 +60,7 @@ describe("the kept tool surface", () => {
     expect(body.result.tools.map((t) => t.name).sort()).toEqual(KEEP);
   });
 
-  // Value: protects=a client calling a 2.7-only tool gets a clean unknown-tool error, not a
+  // Value: protects=a client calling a 0.25-only tool gets a clean unknown-tool error, not a
   // half-working handler; fails_when=a dropped handler still answers; why_new=same; seam=none
   it("tools/call on a dropped tool answers unknown tool", async () => {
     for (const name of ["think", "add_fact", "query", "jobs_list"]) {

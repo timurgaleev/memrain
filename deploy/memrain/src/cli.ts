@@ -48,12 +48,12 @@ function printUsage(): void {
   console.log("  backup status [--rds-instance ID] [--efs-id ID] [--copy-report FILE]  inspect backup evidence");
   console.log("  export [--dir DIR] [--source ID]  export live pages as markdown");
   console.log("  import --dir DIR --source ID [--apply --plan-hash HASH]  preview create-only page import; indexing deferred");
-  console.log("  purge-leftovers [--apply --plan-hash HASH64 --export FILE]  preview derived 2.x rows that purged sources left behind");
+  console.log("  purge-leftovers [--apply --plan-hash HASH64 --export FILE]  preview derived pre-Lite rows that purged sources left behind");
   console.log("  purge-leftovers restore --from FILE  undo an apply from its export");
   console.log("  unpurge <slug> [--source ID]  clear a purged page's tombstones so its text can be written again");
   console.log("  erase forgotten --source ID [--fact-ids CSV] [--deleted-pages CSV] [--apply --plan-hash HASH]");
-  console.log("                               preview explicit database erasure of forgotten 2.x rows and deleted pages");
-  console.log("  erase chat --owner KEY [--apply]  preview, then delete one owner's history a 2.x brain kept");
+  console.log("                               preview explicit database erasure of forgotten pre-Lite rows and deleted pages");
+  console.log("  erase chat --owner KEY [--apply]  preview, then delete one owner's history a pre-Lite brain kept");
   console.log("  engine status [--probe] [--json]  inspect engine config; optionally test one connection");
   console.log("  init --pglite                initialize ~/.memrain/ + PGLite db");
   console.log("  serve --http --host H --port N");

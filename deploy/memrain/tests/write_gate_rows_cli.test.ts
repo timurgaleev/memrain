@@ -1,6 +1,6 @@
 /**
  * `memrain write-gate rows|release|drop|scan` — the operator's surface over
- * rows a 2.x brain held: rows lists the held rows (JSON keeps the payload, the
+ * rows a pre-Lite brain held: rows lists the held rows (JSON keeps the payload, the
  * human listing quotes it), release stores a row held as written but refuses
  * a fact held from a page fence (this build has no facts writer) and leaves it
  * held, drop keeps one out, both record the operator; scan reports counts only.

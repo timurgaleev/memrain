@@ -41,7 +41,7 @@ must follow when editing this codebase.
   then build.
 
 ### Compatibility code
-Memrain was called memex before 1.0.0, and the code keeps reading the old
+Memrain was called memex before 0.1.0, and the code keeps reading the old
 names on purpose: the `MEMEX_*` environment fallback, `memex:` fence markers in
 pages, `memex_` token and client id prefixes, the `x-memex-*` ingest headers,
 the legacy SQL functions (`memex_fact_claim_key` and friends), the
@@ -105,7 +105,7 @@ leaves the working tree. This repo overrides the generic skill's defaults
 to match the rules below, and where they conflict the repo rules win:
 - **Ships to `main` directly** (push to `origin main`) — NOT a feature
   branch + PR. Do not create a `VERSION` file or `package.json` bump;
-  versioning is git **tags** `vX.Y.Z` (3-digit SemVer) + a `gh release`.
+  versioning is git **tags** `v0.X.Y` (3-digit SemVer) + a `gh release`.
 - **Commits carry the operator only** — NEVER add a `Co-Authored-By:
   Claude` trailer (see the no-coauthor rule).
 - **Deploy is via SSM** to the live EC2, not platform CI. **Local tests
@@ -185,25 +185,26 @@ for this repo:
      from the operator's private working dir, not from here.
 5. **Release** (for any user-facing version bump):
    - Move the `[Unreleased]` CHANGELOG entries under a new
-     `## [X.Y.Z] — <date>` heading (SemVer), leaving an empty
+     `## [0.X.Y] — <date>` heading (SemVer), leaving an empty
      `[Unreleased]` on top.
    - In the same release commit, bump `PREVIOUS_RELEASE` in
      `deploy/memrain/tests/helpers/previous-release.ts` to the tag being
      cut and the last migration it ships.
    - In the same commit, set `version` in both
      `plugins/memrain/.claude-plugin/plugin.json` and
-     `plugins/memrain/.codex-plugin/plugin.json` to `X.Y.Z`.
+     `plugins/memrain/.codex-plugin/plugin.json` to `0.X.Y`.
    - Tag the shipped commit and push the tag:
-     `git tag vX.Y.Z && git push origin vX.Y.Z`.
+     `git tag v0.X.Y && git push origin v0.X.Y`.
    - Publish the GitHub release from that changelog section:
-     `gh release create vX.Y.Z --title vX.Y.Z --notes "<changelog section>"`.
+     `gh release create v0.X.Y --title v0.X.Y --notes "<changelog section>"`.
    - The tag MUST point at a commit whose CI is green and that is
      already live on the EC2 — never tag ahead of deploy. `package.json`
      versions are decoupled and not bumped here.
-   - Versions restart at `v1.0.0` with the rename to Memrain. The
-     `memex-v*` tags are read-only archives of the releases before it:
-     never move, delete or reuse them, and match release tags with
-     `--match 'v[0-9]*'`.
+   - The project stays on 0.x. The releases first tagged v1.x and v2.x
+     were renumbered to 0.1–0.25 (the table is at the top of CHANGELOG.md).
+     The `memex-v*` tags are read-only archives of the releases before the
+     rename to Memrain: never move, delete or reuse them, and match release
+     tags with `--match 'v[0-9]*'`.
 
 Skipping deploy because "the change is just docs" is fine; skipping
 verify is not. If a change touches anything other than `*.md`,

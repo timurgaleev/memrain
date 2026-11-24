@@ -45,8 +45,8 @@ This rule is **dashboard-side**, not in this repo:
    ~30 s.
 
 The service also answers to its pre-rename network alias `memex`, so a rule
-that still says `http://memex:18790` keeps working in 1.0.x. Point it at
-`memrain` before 1.1.0, which drops the alias.
+that still says `http://memex:18790` keeps working in 0.1.x. Point it at
+`memrain` before 0.2.0, which drops the alias.
 
 When you add an ingress to a NEW container, also expose its port on
 the `internal` Docker network in `docker-compose.yml` (`expose:`,

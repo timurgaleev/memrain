@@ -134,10 +134,10 @@ export const CONFIG_KEY_TYPES: Readonly<Record<string, ConfigValueType>> = {
 };
 
 /**
- * The keys the 2.7 config registry knew that this build dropped with their
- * features. A stored `runtime_config` row under one of them is data a 2.x
+ * The keys the 0.25 config registry knew that this build dropped with their
+ * features. A stored `runtime_config` row under one of them is data a pre-Lite
  * brain left: the doctor counts it as unused instead of calling it unknown,
- * and nothing reads it. Frozen; a key never in 2.7 is not listed here.
+ * and nothing reads it. Frozen; a key never in 0.25 is not listed here.
  */
 export const RETIRED_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "MEMRAIN_AGENT_ENABLED", "MEMRAIN_AGENT_MAX_USD", "MEMRAIN_AGENT_TENANT_ENABLED", "MEMRAIN_ALIAS_FANOUT",
@@ -246,7 +246,7 @@ export async function checkRuntimeConfigValues(engine: Engine): Promise<CheckVer
     if (!validation.ok) return [`${row.key}: ${Object.hasOwn(CONFIG_KEY_TYPES, canon) ? "invalid value" : "unknown key"}`];
     return validation.value === row.value ? [] : [`${row.key}: noncanonical value`];
   });
-  const unused = retired > 0 ? `${retired} setting(s) from 2.x features are stored but unused` : "";
+  const unused = retired > 0 ? `${retired} setting(s) from pre-Lite features are stored but unused` : "";
   if (issues.length > 0) {
     return { name: "runtime-config-values", ok: true, status: "warn",
       detail: `${issues.length} row(s) need review: ${issues.slice(0, 20).join(", ")}; nothing rewritten${unused ? `; ${unused}` : ""}` };

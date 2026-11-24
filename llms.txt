@@ -62,7 +62,7 @@ trust floor (`min_trust`), is refused with `credential_unsupported`.
 | Every error code: class, retryable, what to do (generated) | `docs/ERRORS.md` |
 | Connecting a client (Claude Code, Codex, claude.ai, ChatGPT) | `docs/clients/*.md` |
 | Install / ingress modes / upgrade | `docs/DEPLOYMENT.md` |
-| Upgrading: the rename to 1.0, each 1.x and 2.x release, the move to Lite 3.0 | `UPGRADING.md` |
+| Upgrading: the rename to 0.1, each release from 0.1 to 0.25, the move to Lite 0.26 | `UPGRADING.md` |
 | Plain-language tour of ingest, search, caps and safety checks | `docs/HOW-IT-WORKS.md` |
 | Importing ChatGPT, Claude, Codex and Claude Code transcripts | `docs/TRANSCRIPTS.md` |
 | Local checks and test commands for contributors | `CONTRIBUTING.md` |

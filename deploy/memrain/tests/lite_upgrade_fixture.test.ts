@@ -1,11 +1,11 @@
 /**
- * A 2.x brain opened by this build. The database is migrated through 196 and
- * the rows a 2.x install holds are seeded with plain SQL (members, bindings,
+ * A pre-Lite brain opened by this build. The database is migrated through 196 and
+ * the rows a pre-Lite install holds are seeded with plain SQL (members, bindings,
  * facts, timeline, takes, atoms, concepts, contradictions); pages, secrets,
- * quarantine and credentials go through the same writers a 2.x brain used.
+ * quarantine and credentials go through the same writers a pre-Lite brain used.
  * Every check reads content, not row counts alone.
  *
- * The baseline group is what 2.7 already guarantees. The lite-only group is
+ * The baseline group is what 0.25 already guarantees. The lite-only group is
  * the access rule this build adds: a credential works only unbound or bound to
  * the owner member, and a credential with a read floor (min_trust) is refused.
  */
@@ -115,7 +115,7 @@ async function seedFeatureRows(e: Engine): Promise<void> {
 }
 
 for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) {
-  describe(`a 2.x brain under this build (${name})`, () => {
+  describe(`a pre-Lite brain under this build (${name})`, () => {
     let db: Awaited<ReturnType<typeof open>>;
     let storage: Storage;
     let e: Engine;

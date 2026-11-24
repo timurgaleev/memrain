@@ -1,9 +1,9 @@
 /**
  * The command name the CLI was started under.
  *
- * `package.json` installs the entrypoint as `memrain` and, through 1.0.x, also
+ * `package.json` installs the entrypoint as `memrain` and, through 0.1.x, also
  * as the pre-rename `memex`. Starting it as `memex` still works; it only prints
- * one deprecation line on stderr. The alias goes away in 1.1.0.
+ * one deprecation line on stderr. The alias goes away in 0.2.0.
  */
 import { basename } from "node:path";
 import { LEGACY_CLI_WORD } from "./core/brand.ts";
@@ -29,5 +29,5 @@ export function invokedAs(argv: readonly string[], env: Env = {}): CliName {
 /** The stderr line for a start under the legacy name, else null. Never fatal. */
 export function aliasDeprecationLine(argv: readonly string[], env: Env = {}): string | null {
   if (invokedAs(argv, env) !== LEGACY_CLI_WORD) return null;
-  return `[memrain] the '${LEGACY_CLI_WORD}' command is deprecated; use 'memrain' (the alias is removed in 1.1.0)`;
+  return `[memrain] the '${LEGACY_CLI_WORD}' command is deprecated; use 'memrain' (the alias is removed in 0.2.0)`;
 }

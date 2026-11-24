@@ -1,16 +1,16 @@
-# Upgrading to Memrain 1.0
+# Upgrading to Memrain 0.1
 
-The first part of this page is for people who run a release from before Memrain 1.0,
-under the project's old name. It moves that install to 1.0 and keeps your
+The first part of this page is for people who run a release from before Memrain 0.1,
+under the project's old name. It moves that install to 0.1 and keeps your
 data. Installing for the first time? You do not need this page: start with
 [docs/QUICKSTART.md](./docs/QUICKSTART.md), and read
 [docs/HOW-IT-WORKS.md](./docs/HOW-IT-WORKS.md) to see how Memrain works.
-Already on 1.0 or later? Skip to the section for your release, from
-[1.0.x to 1.1](#from-10x-to-11) through [2.3 to 2.4](#from-23-to-24). Moving a
-2.x brain to Memrain Lite 3.0.0? Read [3.0.0](#300).
+Already on 0.1 or later? Skip to the section for your release, from
+[0.1.x to 0.2](#from-01x-to-02) through [0.21 to 0.22](#from-021-to-022). Moving a
+pre-Lite brain to Memrain Lite 0.26.0? Read [0.26.0](#0260).
 
-Memrain was called memex before 1.0.0. This guide takes an install of a
-pre-rename release (tags `memex-v1.x`) to Memrain 1.0.x without losing data.
+Memrain was called memex before 0.1.0. This guide takes an install of a
+pre-rename release (tags `memex-v1.x`) to Memrain 0.1.x without losing data.
 Clients need no change: the URL, the OAuth issuer, the public bearer, PATs,
 OAuth clients and refresh tokens all keep working.
 
@@ -19,7 +19,7 @@ app stopped. Steps 12 to 14 are the **upgrade window**: the new release starts
 in maintenance mode, you check it, and then you either reopen the service or
 roll back. A rollback exists **only inside that window, before the service
 reopens**. After you reopen there is no rollback to the old version, only
-fixes forward on 1.0.x.
+fixes forward on 0.1.x.
 
 The paths below assume the default project name, so the old layout is
 `/opt/memex`, `/mnt/memex-efs` and `/var/log/memex`. Substitute your own names
@@ -37,7 +37,7 @@ if you changed them. `example.com` stands for your domain.
 
 ## 0. Pin the Terraform names (before pulling the new code)
 
-Memrain 1.0 changes the Terraform defaults (`project_name`, `app_slug`,
+Memrain 0.1 changes the Terraform defaults (`project_name`, `app_slug`,
 `secrets_prefix`, `db_name`, `db_username` and the secret names). Most AWS
 names are ForceNew, so an unpinned install would plan to replace its database
 secrets and subnet group, and to rename the RDS instance in place. Pin every
@@ -76,7 +76,7 @@ destroy one of them fails before apply; an in-place rename such as a changed
 Apply this plan only while the stack is stopped (after step 3): the security
 group update revokes and re-authorizes the Postgres egress rule.
 
-The pins are the permanent supported configuration, also after 1.1.0.
+The pins are the permanent supported configuration, also after 0.2.0.
 
 - **Secret names cannot be changed by editing tfvars.** A new secret name is a
   replacement, which `prevent_destroy` refuses. Keep legacy-named secrets with
@@ -99,7 +99,7 @@ These backups are a disaster net. No planned step restores from them.
 - A tar of `$EFS_MOUNT/memex`, the config directory the app mounts
   (`EFS_MOUNT` as set in the old `.env`), plus any `caddy-*` directories.
 - `.env`, `deploy/.secrets/` (the old release reads `.secrets/memex.env`;
-  1.0.x never writes that file), `/etc/stack-env`, `/etc/fstab`,
+  0.1.x never writes that file), `/etc/stack-env`, `/etc/fstab`,
   `/etc/systemd/system/memex-*` and `/etc/<project>/`.
 
 A tar of a running PGLite directory is not consistent. A PGLite install takes
@@ -186,9 +186,9 @@ unchanged.
 4. On a Postgres install, add `MEMRAIN_REQUIRE_POSTGRES=1`.
 5. Leave `SECRETS_PREFIX`, `AWS_*` and `DOMAIN` unchanged.
 
-Do not re-run bootstrap over a `.env` you edited by hand. On 1.0.x renaming the
+Do not re-run bootstrap over a `.env` you edited by hand. On 0.1.x renaming the
 keys is optional, because the old names are still read. It is **mandatory
-before 1.1.0** (step 17).
+before 0.2.0** (step 17).
 
 ## 8. Check out the new release
 
@@ -196,7 +196,7 @@ List your local-only tags first (the prune deletes them), then:
 
 ```bash
 git fetch --prune --prune-tags --force origin
-git checkout <release>          # e.g. v1.0.0
+git checkout <release>          # e.g. v0.1.0
 ```
 
 Do this in `/opt/memrain` **and** in the code-index clone
@@ -208,7 +208,7 @@ Do this in `/opt/memrain` **and** in the code-index clone
 Edit `/etc/memrain/compose.caddy.yml`: update the paths, and change
 `memex:` to `memrain:` under `depends_on`. `deploy.sh` refuses an overlay that
 still names the old service and prints the `sed` to fix it. The Caddyfile's
-`memex:18790` keeps working in 1.0.x through the network alias.
+`memex:18790` keeps working in 0.1.x through the network alias.
 
 ## 10. Fetch the secrets
 
@@ -308,7 +308,7 @@ Decide once, inside the window.
 4. `docker rm deploy-memex-1` if it still exists (keep its image).
 
 From here on there is **no rollback to the old version**. Problems are fixed
-forward on 1.0.x; the step 1 backups are for a disaster restore only.
+forward on 0.1.x; the step 1 backups are for a disaster restore only.
 
 **B. Roll back** (a gate is red and the manifest diff is clean; only before A):
 
@@ -354,11 +354,11 @@ database master user, and existing `MEMEX_*` rows in `runtime_config`.
 
 Nothing is required. Renaming a connector's display name is optional.
 
-## 17. Before taking 1.1.0
+## 17. Before taking 0.2.0
 
-1.1.0 removes the old configuration names and **refuses to start** while any
+0.2.0 removes the old configuration names and **refuses to start** while any
 of them is still in use; it never ignores one. Upgrading straight from a
-pre-rename release to 1.1.0 is not supported: pass through 1.0.x. On 1.0.x,
+pre-rename release to 0.2.0 is not supported: pass through 0.1.x. On 0.1.x,
 `memrain doctor` must show no legacy-name warning, which means:
 
 - `.env` uses `MEMRAIN_*` keys only;
@@ -371,15 +371,15 @@ pre-rename release to 1.1.0 is not supported: pass through 1.0.x. On 1.0.x,
 - the secrets exist under `<prefix>/memrain-*`, **or** the four `.env` keys
   `POSTGRES_URL_SECRET_NAME`, `PUBLIC_BEARER_SECRET_NAME`,
   `INTERNAL_TOKEN_SECRET_NAME` and `TUNNEL_TOKEN_SECRET_NAME` name the ids you
-  keep (these keys stay supported in 1.1.0);
+  keep (these keys stay supported in 0.2.0);
 - tunnel and proxy origins point at `memrain:18790`;
 - scripts call `memrain`, not `memex`;
 - `/etc/stack-env` has `STACK_SUBDOMAIN`, and Terraform uses `subdomain`
   and the new output names.
 
-## From 1.0.x to 1.1
+## From 0.1.x to 0.2
 
-1.1 is a normal deploy: `bash deploy/deploy.sh` applies migrations 122 to 132
+0.2 is a normal deploy: `bash deploy/deploy.sh` applies migrations 122 to 132
 and 134 on start. Things to know:
 
 - **Secret allowlist format.** `MEMRAIN_SECRET_SCAN_ALLOW` entries are now
@@ -395,22 +395,22 @@ and 134 on start. Things to know:
   caps (`MEMRAIN_DAILY_BUDGET_USD`, `MEMRAIN_CYCLE_MAX_USD_PER_DAY`),
   `MEMRAIN_OWNER_ENTITY`, `MEMRAIN_REQUIRE_WRITE_PRECONDITION`. See
   docs/CONFIGURATION.md.
-- **Rolling the image back past 1.1** needs the new migrations reverted first. Migration 132 replaces the `(entity_slug, fact,
+- **Rolling the image back past 0.2** needs the new migrations reverted first. Migration 132 replaces the `(entity_slug, fact,
   source_chunk_id)` unique index with a speaker-aware one, so an older image
   against a migrated database fails every chunk-sourced fact insert.
 - **After deploying,** run `memrain secrets audit` once and read the dry run
   before deciding on `--apply --yes`, then `memrain reindex --source code
   --all` if code sources are indexed.
 
-## From 1.1 to 1.2
+## From 0.2 to 0.3
 
-1.2 is a normal deploy: `bash deploy/deploy.sh` applies migrations 135 to 138
+0.3 is a normal deploy: `bash deploy/deploy.sh` applies migrations 135 to 138
 and 140 on start. Things to know:
 
 - **Ranking is unchanged.** The six `MEMRAIN_RANK_*` flags are off. Turn one
   on only after a paired A/B on your own corpus (`memrain eval qrels build`,
   then `memrain eval --config-a … --config-b …`; the evaluation guide that
-  held the decision rule was removed in 3.0.0).
+  held the decision rule was removed in 0.26.0).
 - **Links re-extract once.** The link extractor version moved, so every page
   is stale for links after the deploy. The `links-stale` cycle phase works
   through them, 200 pages per cycle (`MEMRAIN_LINKS_STALE_MAX_PER_CYCLE`), with
@@ -421,14 +421,14 @@ and 140 on start. Things to know:
   (CPU only, no embeddings).
 - **Graph reads hide deleted, archived and quarantined pages.** Edges to
   names with no page at all, such as vault notes, are unchanged.
-- **Rolling the image back past 1.2.** Migrations 135 to 140 only add a
-  column, a table and indexes, so a 1.1 image runs against them (`/health`
+- **Rolling the image back past 0.3.** Migrations 135 to 140 only add a
+  column, a table and indexes, so a 0.2 image runs against them (`/health`
   reports `schema_ahead`). Links pointing at pages created after the rollback
-  are not reconnected until 1.2 runs again.
+  are not reconnected until 0.3 runs again.
 
-## From 1.7 to 1.8
+## From 0.8 to 0.9
 
-1.8 is a normal deploy: `bash deploy/deploy.sh` applies migration 142 on
+0.9 is a normal deploy: `bash deploy/deploy.sh` applies migration 142 on
 start. Things to know:
 
 - **Scripts that call the passkey API without `Origin`.** Only
@@ -447,14 +447,14 @@ start. Things to know:
   the same browser within 15 minutes does not. A burned link is replaced by
   minting a new one; a burned recovery code is one of ten, and the Security
   page says so.
-- **Rolling the image back past 1.8.** Migration 142 only adds two columns
-  with a default, so a 1.7 image runs against it (`/health` reports
+- **Rolling the image back past 0.9.** Migration 142 only adds two columns
+  with a default, so a 0.8 image runs against it (`/health` reports
   `schema_ahead`); `migrations-down/142_admin_reservation_cap.down.sql`
   removes them.
 
-## From 1.8 to 1.9
+## From 0.9 to 0.10
 
-1.9 is a normal deploy with no migration. One thing to know:
+0.10 is a normal deploy with no migration. One thing to know:
 
 - **Request-log rows older than 180 days are deleted.** The cycle's purge
   phase now prunes `mcp_request_log`, at most 500,000 rows per cycle, so a
@@ -464,11 +464,11 @@ start. Things to know:
   run will remove:
   `SELECT count(*) FROM mcp_request_log WHERE created_at < now() - interval '180 days'`.
 
-## From 1.16 to 2.0
+## From 0.17 to 0.18
 
-2.0 is a normal deploy: `bash deploy/deploy.sh` applies migrations 151 to 175
+0.18 is a normal deploy: `bash deploy/deploy.sh` applies migrations 151 to 175
 on start. They add tables, columns, indexes and triggers, and widen the list
-of allowed source kinds (`chat`, `meeting`); no existing row is rewritten. Rows written before 2.0 get no stored trust tier: it is derived
+of allowed source kinds (`chat`, `meeting`); no existing row is rewritten. Rows written before 0.18 get no stored trust tier: it is derived
 when they are read. Each of these migrations has a down file in
 `deploy/memrain/src/core/migrations-down/`.
 
@@ -484,7 +484,7 @@ those of kind `mailbox`, `calendar`, `chat`, `meeting`, `webhook` and
 instructions to an AI is stored with `content_flag: instruction_like` and read
 back inside a stronger frame. Nothing is deleted or hidden in `flag` mode. The
 gate runs each time an outside document is indexed, so existing GitHub pages
-pick up a verdict on their next sync or sweep. To keep the 1.16 behaviour:
+pick up a verdict on their next sync or sweep. To keep the 0.17 behaviour:
 
 ```bash
 memrain config set MEMRAIN_WRITE_GATE_EXTERNAL off
@@ -494,7 +494,7 @@ memrain config set MEMRAIN_WRITE_GATE_EXTERNAL off
 
 - **Deep synthesis reads no outside text.** With `MEMRAIN_DEEP_SYNTH` on, it
   now gathers only pages at trust tier `agent` or above, so GitHub and webhook
-  pages no longer reach its prompt. (Connector pages, new in 2.0, are also
+  pages no longer reach its prompt. (Connector pages, new in 0.18, are also
   left out of facts extraction and the contextual-LLM tier.)
 - **Paid daemons need a brain-wide cap.** A paid daemon does not start while
   `MEMRAIN_DAILY_BUDGET_USD` is unset.
@@ -507,17 +507,17 @@ memrain config set MEMRAIN_WRITE_GATE_EXTERNAL off
 | Feature | Switch | Guide |
 |---|---|---|
 | Brain-wide daily cap (needed by Ask and every paid daemon) | `MEMRAIN_DAILY_BUDGET_USD` in the host `.env`, then `bash deploy/deploy.sh` | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
-| Ask, the admin chat | `MEMRAIN_CHAT=1` in the host `.env` | removed in 3.0.0 |
-| Connectors (Gmail, calendars, Outlook, Teams, Slack, Fireflies) | the connector key, `memrain config set MEMRAIN_CONNECTORS_ENABLED 1`, `memrain config set MEMRAIN_DAEMONS 1`, `memrain daemons enable connector_sync` | removed in 3.0.0 |
-| Open loops | `memrain daemons enable loops_sweep` (with connectors syncing) | removed in 3.0.0 |
+| Ask, the admin chat | `MEMRAIN_CHAT=1` in the host `.env` | removed in 0.26.0 |
+| Connectors (Gmail, calendars, Outlook, Teams, Slack, Fireflies) | the connector key, `memrain config set MEMRAIN_CONNECTORS_ENABLED 1`, `memrain config set MEMRAIN_DAEMONS 1`, `memrain daemons enable connector_sync` | removed in 0.26.0 |
+| Open loops | `memrain daemons enable loops_sweep` (with connectors syncing) | removed in 0.26.0 |
 | Owner notifications by webhook | `MEMRAIN_NOTIFY_WEBHOOK_URL` and its secret, `memrain daemons enable notifications` | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
-| Members, groups, offboarding | `memrain member add`, `memrain group add`, `memrain member remove <id> --erase-personal-source`; `MEMRAIN_REQUIRE_MEMBER=1` | removed in 3.0.0 |
+| Members, groups, offboarding | `memrain member add`, `memrain group add`, `memrain member remove <id> --erase-personal-source`; `MEMRAIN_REQUIRE_MEMBER=1` | removed in 0.26.0 |
 | Stricter write gate | `memrain config set MEMRAIN_WRITE_GATE_EXTERNAL quarantine` (or `reject`); `memrain config set MEMRAIN_WRITE_GATE_AGENT flag` | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
 | PgBouncer | `MEMRAIN_PG_POOLER=pgbouncer` and `MEMRAIN_POSTGRES_DIRECT_URL` | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
 
-## From 2.0 to 2.1
+## From 0.18 to 0.19
 
-2.1 is a normal deploy: `bash deploy/deploy.sh` applies migrations 176 and 177
+0.19 is a normal deploy: `bash deploy/deploy.sh` applies migrations 176 and 177
 on start. Both have a down file in `deploy/memrain/src/core/migrations-down/`.
 
 - **Migration 176** adds two partial indexes on `hot_memory` (`source_slug`
@@ -537,9 +537,9 @@ on start. Both have a down file in `deploy/memrain/src/core/migrations-down/`.
   again. It is a dry run; `memrain secrets audit --apply --yes` redacts what it
   finds.
 
-## From 2.1 to 2.2
+## From 0.19 to 0.20
 
-2.2 is a normal deploy: `bash deploy/deploy.sh` applies migrations 178 and 179
+0.20 is a normal deploy: `bash deploy/deploy.sh` applies migrations 178 and 179
 on start. Both have a down file in `deploy/memrain/src/core/migrations-down/`.
 
 - **New agent sign-ins wait for your approval.** `MEMRAIN_OAUTH_REQUIRE_LOGIN`
@@ -561,9 +561,9 @@ on start. Both have a down file in `deploy/memrain/src/core/migrations-down/`.
   `MEMRAIN_WRITE_GATE_AGENT=off` or `MEMRAIN_WRITE_GATE_EXTERNAL=off` to skip
   an origin.
 
-## From 2.2 to 2.3
+## From 0.20 to 0.21
 
-2.3 is a normal deploy: `bash deploy/deploy.sh` applies migration 180 on
+0.21 is a normal deploy: `bash deploy/deploy.sh` applies migration 180 on
 start. It has a down file in `deploy/memrain/src/core/migrations-down/`.
 
 - **Migration 180** adds `secret_store` and `secret_store_occurrences`. From
@@ -582,9 +582,9 @@ start. It has a down file in `deploy/memrain/src/core/migrations-down/`.
   secrets audit used an older scanner until you run `memrain secrets audit`
   again.
 
-## From 2.3 to 2.4
+## From 0.21 to 0.22
 
-2.4 is a normal deploy: `bash deploy/deploy.sh` applies migrations 181 to 186
+0.22 is a normal deploy: `bash deploy/deploy.sh` applies migrations 181 to 186
 on start. Each has a down file in `deploy/memrain/src/core/migrations-down/`.
 
 - **Requester scope on a shared brain.** Once a brain serves several people
@@ -621,22 +621,22 @@ on start. Each has a down file in `deploy/memrain/src/core/migrations-down/`.
   content. A row hold the owner released or dropped under v1 keeps that
   decision.
 
-## 3.0.0
+## 0.26.0
 
-3.0.0 is Memrain Lite: one person's brain with 29 MCP tools. It keeps pages,
+0.26.0 is Memrain Lite: one person's brain with 29 MCP tools. It keeps pages,
 links, tags, hybrid search, the safety checks and the credentials, and drops
 everything else. It is a major release because existing clients and
 credentials can stop working. Read this section before you deploy.
 
-### Stay on 2.7.x if you use any of these
+### Stay on 0.25.x if you use any of these
 
 Facts and fact extraction, takes and synthesis, `think` and the admin Ask chat,
 connectors (Gmail, calendars, Outlook, Teams, Slack, Fireflies, GitHub), open
 loops, owner notifications, members and groups, the code index and `code_*`
 tools, entities, graph, timelines and chronicle, the agent and skill jobs,
-automatic session capture through `/ingest`, or share links. 3.0.0 has none of
-them. Pin the `v2.7.0` tag and keep deploying it; nothing in 3.0.0 is needed
-to keep a 2.7 brain running.
+automatic session capture through `/ingest`, or share links. 0.26.0 has none of
+them. Pin the `v0.25.0` tag and keep deploying it; nothing in 0.26.0 is needed
+to keep a 0.25 brain running.
 
 ### What is removed
 
@@ -662,7 +662,7 @@ to keep a 2.7 brain running.
   deterministic upkeep: purge pages past their soft-delete window, rebuild
   missing search mirrors, embed chunks that have no vector, sweep expired
   OAuth tokens, expire unsettled spend holds, and trim the request log and
-  2.x chat history past their retention.
+  pre-Lite chat history past their retention.
 - **CLI commands** of the removed features (`think`, `extract*`, `jobs`,
   `daemons`, `connectors`, `member`, `group`, `trust`, `cycle`, `eval*`,
   `bench`, `code`, `skill*` and others). `memrain --help` lists what is left;
@@ -681,19 +681,19 @@ to keep a 2.7 brain running.
 
 ### Your data stays where it is
 
-3.0.0 adds no migration and changes no stored row on its own: the schema
+0.26.0 adds no migration and changes no stored row on its own: the schema
 stays at migration 196. Rows of the removed features (facts, timeline events,
 takes, chat threads, connector accounts and their sealed credentials, jobs,
 loops, notifications, members and groups) stay in the database untouched, and
-a brain moved back to 2.7.x finds them as it left them. What does change:
+a brain moved back to 0.25.x finds them as it left them. What does change:
 
-- Page writes no longer refresh what 2.x derived from a page (facts, timeline
-  events, takes), so those rows go stale. A put of the page on 2.7.x refreshes
+- Page writes no longer refresh what earlier releases derived from a page (facts, timeline
+  events, takes), so those rows go stale. A put of the page on 0.25.x refreshes
   them.
-- Purging a page still removes what was derived from it, as it did on 2.x.
+- Purging a page still removes what was derived from it, as it did on 0.25.
 - A rename still moves the page's timeline and fact rows to the new slug.
-- Hourly housekeeping trims 2.x chat history older than
-  `MEMRAIN_CHAT_RETENTION_DAYS` (default 90; `0` keeps all), as the 2.x cycle
+- Hourly housekeeping trims pre-Lite chat history older than
+  `MEMRAIN_CHAT_RETENTION_DAYS` (default 90; `0` keeps all), as the pre-Lite cycle
   did.
 
 ### Credentials that stop working
@@ -722,7 +722,7 @@ and bind each credential you use to the owner (`memrain auth create <name>
 
 ### Housekeeping off-switches
 
-An install that had switched its 2.x cycle off keeps its rows: the purge,
+An install that had switched its pre-Lite cycle off keeps its rows: the purge,
 mirror, embed and retention steps obey the switches the cycle obeyed.
 
 - `MEMRAIN_CYCLE=0` (environment only) turns housekeeping off entirely.
@@ -735,7 +735,7 @@ mirror, embed and retention steps obey the switches the cycle obeyed.
 - `MEMRAIN_EMBED_GAPS=0` turns off the embed step alone.
 
 While housekeeping runs, its token-sweep and spend-hold steps run every hour
-whatever the switches above say, as they ran outside the 2.x cycle.
+whatever the switches above say, as they ran outside the pre-Lite cycle.
 `MEMRAIN_CYCLE=0` and `MEMRAIN_MAINTENANCE=1` stop the whole pass, those two
 steps included. The boot token sweep still runs on every start unless
 maintenance is on. A spend hold past its expiry stops counting against the
@@ -748,7 +748,7 @@ daily caps on its own; only its row waits for the next pass.
    `sudo systemctl disable --now memrain-eval-probe.timer`, then remove its two
    unit files from `/etc/systemd/system/` and run `sudo systemctl daemon-reload`.
 3. Check out the release and run `bash deploy/deploy.sh`. No migration runs.
-4. Run `memrain doctor`. One informational line counts the 2.x feature rows
+4. Run `memrain doctor`. One informational line counts the pre-Lite feature rows
    this build leaves unused.
 5. From your ops directory, run `terraform plan`. Expect one in-place update
    of the instance role's inline policy (the Bedrock statement) and nothing
@@ -758,10 +758,10 @@ daily caps on its own; only its row waits for the next pass.
 `/health` now carries `"edition": "lite"`, so a check can tell this build
 apart.
 
-### Going back to 2.7.x
+### Going back to 0.25.x
 
-The schema is unchanged, so going back is a checkout of `v2.7.0` and
-`bash deploy/deploy.sh`, with no down migration. Put a plan of the 2.7
+The schema is unchanged, so going back is a checkout of `v0.25.0` and
+`bash deploy/deploy.sh`, with no down migration. Put a plan of the 0.25
 Terraform back the same way if you applied the narrower policy, and re-enable
 the eval probe timer if you used it.
 

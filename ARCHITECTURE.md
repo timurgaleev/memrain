@@ -243,7 +243,7 @@ tables this build reads and writes:
   with `MEMRAIN_REQUEST_LOG_DB=1`), trimmed by housekeeping.
 - The spend ledger and its reservations, and `cycle_locks`.
 
-The schema is the same one the 2.x line ended on. Tables that hold the data of
+The schema is the same one 0.25 ended on. Tables that hold the data of
 features this build does not have stay in place, untouched: nothing reads or
 deletes them, except that purging a page also removes rows keyed to it and
 housekeeping trims old chat history. See [UPGRADING.md](./UPGRADING.md).

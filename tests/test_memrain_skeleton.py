@@ -33,7 +33,7 @@ def test_package_declares_bun_bin_and_legacy_alias() -> None:
         pytest.skip("package.json missing — see test_package_json_exists")
     data = json.loads(pkg.read_text())
     bins = data.get("bin", {})
-    # `memex` stays as an alias through 1.0.x so existing shells keep working.
+    # `memex` stays as an alias through 0.1.x so existing shells keep working.
     assert bins.get("memrain") == "./src/cli.ts", "package.json must declare bin.memrain"
     assert bins.get("memex") == "./src/cli.ts", "package.json must keep the bin.memex alias"
 

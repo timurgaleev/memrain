@@ -1,5 +1,5 @@
 """
-UPGRADING.md takes a pre-rename install to Memrain 1.0 in the one order that
+UPGRADING.md takes a pre-rename install to Memrain 0.1 in the one order that
 loses nothing: pin the Terraform names before pulling, stop with the old
 checkout, move directories on one filesystem, start the new release in
 maintenance, prove with the data manifest that only migration 120 changed, and
@@ -158,7 +158,7 @@ def test_no_manifest_cli():
     assert "memrain manifest" not in text()
 
 
-def test_before_1_1_0_lists_every_legacy_name():
+def test_before_0_2_0_lists_every_legacy_name():
     before = " ".join(step(17).split())
     assert "refuses to start" in before
     for item in ("`MEMRAIN_*` keys only", "legacy-only `runtime_config` row",

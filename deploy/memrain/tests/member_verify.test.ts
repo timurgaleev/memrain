@@ -1,7 +1,7 @@
 /**
  * A credential bound to a member works only while that member is the brain's
  * enabled owner (config access.owner_member). Any other binding is refused,
- * so a 2.x team key never turns back on as an unbound one, and disabling the
+ * so a pre-Lite team key never turns back on as an unbound one, and disabling the
  * owner stops the owner's keys too. An unbound credential verifies as before.
  *
  * Driven through the real paths a request takes: verifyAccessToken (what /mcp
@@ -82,7 +82,7 @@ describe("personal access tokens", () => {
     expect(info).toMatchObject({ clientId: "ora-laptop", memberId: "ora", allowedSources: ["team"] });
   });
 
-  // Value: protects=a 2.x team key never verifies; fails_when=a non-owner binding is treated as
+  // Value: protects=a pre-Lite team key never verifies; fails_when=a non-owner binding is treated as
   // unbound; why_new=members are gone, so the binding can no longer be checked; seam=none
   it("a token bound to another member is refused, enabled or not", async () => {
     const bob = await mintPat("bob-key", "bob");

@@ -15,7 +15,7 @@ EC2 port. Single-purpose container running the upstream
   `<secrets_prefix>/cloudflared-tunnel-token` AWS secret).
 - Routes traffic per the **dashboard-side ingress rule** (NOT this
   repo): `brain.<domain>` → `http://memrain:18790`. The old origin
-  `http://memex:18790` still resolves through a network alias in 1.0.x.
+  `http://memex:18790` still resolves through a network alias in 0.1.x.
 
 ## Why this directory exists
 

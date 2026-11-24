@@ -1,6 +1,6 @@
 /**
  * The doctor on a brain an earlier build filled: `memrain doctor` and the
- * `run_doctor` tool both pass, report the 2.x feature rows as one
+ * `run_doctor` tool both pass, report the pre-Lite feature rows as one
  * informational line, and name no subsystem this build no longer has.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
@@ -61,7 +61,7 @@ afterAll(() => {
 
 interface Check { name: string; ok: boolean; status: string; detail?: string }
 
-describe("doctor on a 2.x brain", () => {
+describe("doctor on a pre-Lite brain", () => {
   // Value: protects=an upgraded brain reads healthy and the report speaks only of what this
   // build runs; fails_when=a check probes a dropped subsystem or fails on its leftover rows;
   // why_new=the doctor was rewritten for the cut; seam=none
@@ -88,7 +88,7 @@ describe("doctor on a 2.x brain", () => {
     expect(text.match(RETIRED)).toBeNull();
     const unused = report.checks.find((c) => c.name === "unused-feature-data")!;
     expect(unused.status).toBe("ok");
-    expect(unused.detail).toBe("2.x feature data present, unused by Lite: 4 rows (kept as is)");
+    expect(unused.detail).toBe("pre-Lite feature data present, unused by Lite: 4 rows (kept as is)");
   });
 
   // Value: protects=the MCP doctor agrees with the CLI one; fails_when=run_doctor still
@@ -102,7 +102,7 @@ describe("doctor on a 2.x brain", () => {
       const report = JSON.parse(r.content[0]!.text) as { ok: boolean; checks: Check[] };
       expect(report.ok).toBe(true);
       expect(JSON.stringify(report.checks).match(RETIRED)).toBeNull();
-      expect(report.checks.some((c) => c.detail?.startsWith("2.x feature data present, unused by Lite: 4 rows"))).toBe(true);
+      expect(report.checks.some((c) => c.detail?.startsWith("pre-Lite feature data present, unused by Lite: 4 rows"))).toBe(true);
     } finally {
       await storage.close();
     }

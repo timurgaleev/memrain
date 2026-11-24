@@ -51,7 +51,7 @@ The migrations are engine-agnostic SQL — `vector(1024)` (or `halfvec(1024)`
 where pgvector has it), `tsvector GENERATED ALWAYS AS`, `jsonb`, HNSW,
 `TIMESTAMPTZ DEFAULT NOW()` — so new schema needs only a new
 `migrations/NNN_*.sql` file. Append-only convention: never edit a shipped
-migration; ship a new one. 3.0 ships no new migration; tables of 2.x
+migration; ship a new one. 0.26 ships no new migration; tables of pre-Lite
 features stay in the schema, unused.
 
 ## Schema
@@ -111,10 +111,10 @@ minutes after boot), one process at a time under a database lock. Steps:
 purge pages soft-deleted past their window, rebuild missing or stale search
 mirrors, embed chunks written without a vector, sweep expired OAuth tokens,
 expire spend reservations a crashed call never settled, and trim the request
-log and 2.x chat history past their retention. A failing step is recorded and
+log and pre-Lite chat history past their retention. A failing step is recorded and
 the next one runs. No model is called; the only paid calls are the Titan
 embeds, under the brain's daily cap. `MEMRAIN_CYCLE=0` turns it off; the other
-switches are in [UPGRADING.md](../../../UPGRADING.md#300).
+switches are in [UPGRADING.md](../../../UPGRADING.md#0260).
 
 ## MCP JSON-RPC transport
 

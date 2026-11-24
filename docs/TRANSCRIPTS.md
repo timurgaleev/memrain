@@ -12,7 +12,7 @@ under a password column of a Markdown table, and a key, token or password
 label whose value sits alone on the next line or opens the next message. With the secret-store key set, every value a
 redaction removes is kept in the secret store (see SECURITY.md, "Kept
 originals"); `memrain secrets audit --transcripts` rescans transcripts already
-stored. Re-import keeps the fenced blocks a 2.x brain wrote into a page while
+stored. Re-import keeps the fenced blocks a pre-Lite brain wrote into a page while
 replacing the imported text outside them. If an older page's fence provenance
 cannot be proven, the importer reports `unproven_fences` and leaves its body
 and versions intact for review.

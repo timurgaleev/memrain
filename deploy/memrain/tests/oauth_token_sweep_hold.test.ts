@@ -1,6 +1,6 @@
 /**
  * The OAuth token sweep keeps an expired token that a pending or running
- * ingest job a 2.x build queued still names: a build that runs jobs re-reads
+ * ingest job a pre-Lite build queued still names: a build that runs jobs re-reads
  * those rows when it resumes the job, and reaching the TTL is not a
  * revocation. This build never runs the jobs; it only must not orphan them.
  */
@@ -33,9 +33,9 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       (await db.storage.engine().query<{ token_hash: string }>(`SELECT token_hash FROM oauth_tokens ORDER BY token_hash`)).rows.map(r => r.token_hash);
     const sweep = () => new OAuthProvider({ engine: db.storage.engine() }).sweepExpiredTokens();
 
-    // Value: protects=a queued 2.x capture or push can still resolve its principal after the
+    // Value: protects=a queued pre-Lite capture or push can still resolve its principal after the
     // upgrade; fails_when=the sweep drops a token or family a live job names; why_new=the hold was
-    // removed with the job queue; seam=jobs rows as 2.x wrote them
+    // removed with the job queue; seam=jobs rows as pre-Lite builds wrote them
     it("keeps a family-less token and a whole family that live ingest jobs name", async () => {
       await token("tok-capture", null);
       await token("fam-access", "fam-1");

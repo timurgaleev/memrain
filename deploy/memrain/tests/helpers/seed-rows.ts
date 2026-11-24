@@ -1,6 +1,6 @@
 /**
  * Rows an earlier build wrote for features this one does not have, seeded with
- * plain SQL: facts and timeline events stay in a 2.x database, and the tests
+ * plain SQL: facts and timeline events stay in a pre-Lite database, and the tests
  * that check no kept path exposes them need some on file.
  */
 import type { Storage } from "../../src/core/storage.ts";

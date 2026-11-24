@@ -36,7 +36,7 @@ import {
   RETIRED_SCOPES,
 } from "./scope.ts";
 
-/** Job kinds a 2.x build queued with a credential's principal in the payload. */
+/** Job kinds a pre-Lite build queued with a credential's principal in the payload. */
 const QUEUED_INGEST_JOB_KINDS = ["ingest_capture", "transcripts_ingest"];
 
 // ---------------------------------------------------------------------------
@@ -3456,7 +3456,7 @@ export class OAuthProvider {
   // -------------------------------------------------------------------------
 
   /** Delete expired access/refresh tokens and authorization codes. Returns
-   *  the total row count swept. A pending or running ingest job a 2.x build
+   *  the total row count swept. A pending or running ingest job a pre-Lite build
    *  queued re-reads the token rows it names (one family-less token, or every
    *  row of a refresh family) when a build that runs jobs resumes it, so rows
    *  still named by such a job stay: reaching the TTL is not a revocation. */

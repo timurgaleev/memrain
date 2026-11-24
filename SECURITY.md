@@ -65,7 +65,7 @@ scope. Examples:
 ## The secret-store key
 
 Redacted originals are sealed with AES-256-GCM under one key, the secret-store
-key (KEK). It keeps its 2.x name, the connector key: `MEMRAIN_CONNECTOR_KEK`,
+key (KEK). It keeps its pre-Lite name, the connector key: `MEMRAIN_CONNECTOR_KEK`,
 `MEMRAIN_CONNECTOR_KEK_FILE`, the Secrets Manager secret
 `<prefix>/memrain-connector-kek` and the Terraform resource `connector_kek`.
 
@@ -95,12 +95,12 @@ key (KEK). It keeps its 2.x name, the connector key: `MEMRAIN_CONNECTOR_KEK`,
 - Losing the key loses the kept originals, not the pages: every page keeps its
   markers.
 
-A 2.x brain's sealed connector credentials stay in the database under the
+A pre-Lite brain's sealed connector credentials stay in the database under the
 same key; this build never opens them.
 
 ## Software bill of materials
 
-Every GitHub release from v1.9.1 on carries two CycloneDX 1.7 JSON files,
+Every GitHub release from v0.10.1 on carries two CycloneDX 1.7 JSON files,
 built by `.github/workflows/sbom.yml` from the release tag:
 
 - `memrain-vX.Y.Z-server.cdx.json`: the server's production Bun dependencies
@@ -155,7 +155,7 @@ keeps what it carried. If you find a live credential in the brain:
    ```
 
    It rescans pages, page versions, chunks, and the facts, timeline events,
-   synthesis rows and raw data a 2.x brain left, with the current rules and lists each hit by store,
+   synthesis rows and raw data a pre-Lite brain left, with the current rules and lists each hit by store,
    row, field, kind, fingerprint and line. It never prints the value. The
    fingerprint is the one in the `[REDACTED:<kind>:<fingerprint>]` marker.
    Jobs are also scanned, including JSON keys, but reported only as aggregate

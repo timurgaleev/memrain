@@ -9,7 +9,7 @@ started: begin with [QUICKSTART.md](./QUICKSTART.md), and read
 Most runtime knobs are environment variables prefixed `MEMRAIN_`; deploy-level
 keys (secret names, `COMPOSE_FILE`) and Terraform variables are listed in their
 own sections below.
-An install from before the rename keeps working with its old names in 1.0.x;
+An install from before the rename keeps working with its old names in 0.1.x;
 see [Legacy names](#legacy-names).
 This page is the authoritative list: each row gives the variable, its default,
 what it does, and whether it costs money.
@@ -149,7 +149,7 @@ is used exactly as written: no prefix is added and no other name is tried.
 Unset or empty means the default name above. A value outside the Secrets
 Manager name alphabet stops the script before any AWS call. The bearer
 rotation script and `scripts/mcp-refresh.sh` read `PUBLIC_BEARER_SECRET_NAME`
-too. These keys are not part of the rename and stay in 1.1.0.
+too. These keys are not part of the rename and stay in 0.2.0.
 `scripts/mcp-refresh.sh` runs on the operator's machine and does not read
 `.env`: it needs `MEMRAIN_MCP_URL` (the `https://<host>/mcp` endpoint) and
 `AWS_REGION`, and takes `MEMRAIN_SECRETS_PREFIX` (its default is the legacy
@@ -194,14 +194,14 @@ to `environment:` before overriding.
 ## 3. Spend and Bedrock calls
 
 The only model Memrain calls is Bedrock Titan text embeddings. These knobs cap
-that spend and bound the calls. A few names below come from 2.x, which also
+that spend and bound the calls. A few names below come from pre-Lite releases, which also
 called chat models; their rows say what Lite does with them.
 
 | Variable | Default | What it does | Cost |
 |---|---|---|---|
 | `MEMRAIN_DAILY_BUDGET_USD` | off | Brain-wide daily USD cap over every paid call (all clients, the housekeeping embeds and the CLI) in a UTC day, holds included. Blank, malformed or negative is off; `0` refuses everything. Refusals carry reason `daily_cap`. Suggested `1.00`. Allowlisted. | — |
-| `MEMRAIN_CYCLE_MAX_USD_PER_DAY` | off | Daily USD cap over calls made under a 2.x cycle phase. Lite tags no call with a phase, so the spend it sums is only what a 2.x cycle booked today; every paid call is still checked against it, and `0` refuses them all. Same parsing as `MEMRAIN_DAILY_BUDGET_USD`, which is the cap to use. Code-only. | — |
-| `MEMRAIN_CHAT_RETENTION_DAYS` | `90` (`0` = keep forever) | Lite has no chat. The housekeeping retention step deletes chat messages a 2.x brain kept once they are older than this, and the threads they leave empty. `memrain erase chat --owner KEY` counts one owner's threads and messages; add `--apply` to delete them. Allowlisted. | free |
+| `MEMRAIN_CYCLE_MAX_USD_PER_DAY` | off | Daily USD cap over calls made under a pre-Lite cycle phase. Lite tags no call with a phase, so the spend it sums is only what a pre-Lite cycle booked today; every paid call is still checked against it, and `0` refuses them all. Same parsing as `MEMRAIN_DAILY_BUDGET_USD`, which is the cap to use. Code-only. | — |
+| `MEMRAIN_CHAT_RETENTION_DAYS` | `90` (`0` = keep forever) | Lite has no chat. The housekeeping retention step deletes chat messages a pre-Lite brain kept once they are older than this, and the threads they leave empty. `memrain erase chat --owner KEY` counts one owner's threads and messages; add `--apply` to delete them. Allowlisted. | free |
 | `MEMRAIN_EMBED_MAX_INFLIGHT` | `4` | How many chunks an interactive write (`page_put`, `page_append`, `page_revert`, `page_restore`) embeds at once, shared by every concurrent write in the process. `1` embeds one chunk at a time. Not the backfill's pool width (`MEMRAIN_EMBED_CONCURRENCY`), and not applied to query embeds. | — |
 | `MEMRAIN_EMBED_TIMEOUT_MS` | `10000` | Timeout for Titan embedding calls. | — |
 | `MEMRAIN_LLM_TIMEOUT_MS` | unset | Fallback for `MEMRAIN_EMBED_TIMEOUT_MS` when that is unset. A timeout ends the request. | — |
@@ -394,7 +394,7 @@ documents, which can be re-read from their files, keep a 72-hour window.
 reports the cutoff it applied as `ttl_hours`; pass `older_than_hours` to purge
 sooner, for example after a leaked secret.
 
-A brain upgraded from 2.x may still hold facts and synthesis rows derived from
+A brain upgraded from a pre-Lite release may still hold facts and synthesis rows derived from
 a page. The purge removes those with the page: it retires the page's facts
 (reported as `facts_retired`; each page that retired facts leaves a row in
 `fact_purge_receipts`)
@@ -503,13 +503,13 @@ five minutes after start). Its steps, in order: `purge` (soft-deleted pages and
 documents past their TTL), `mirror_pages` (rebuild missing or stale search
 mirrors), `embed_gaps` (embed chunks stored without a vector), `tokens`
 (expired OAuth tokens and codes), `reservations` (spend holds a crashed call
-never settled) and `retention` (request log, write receipts, 2.x chat
-history). One process runs it at a time, under the `memrain-cycle` lock a 2.x
+never settled) and `retention` (request log, write receipts, pre-Lite chat
+history). One process runs it at a time, under the `memrain-cycle` lock a pre-Lite
 maintenance cycle took. No model is called; the embed step pays for Titan
 embeds under the daily cap. `MEMRAIN_CYCLE=0` or maintenance mode stops it.
 
 The steps that delete or rebuild (`purge`, `mirror_pages`, `embed_gaps`,
-`retention`) also obey the off-switches a 2.x cycle obeyed, so an install
+`retention`) also obey the off-switches a pre-Lite cycle obeyed, so an install
 that had its cycle switched off keeps its rows after the upgrade: a
 `MEMRAIN_DAEMONS_DISABLED` list naming `cycle`, a paused `daemon_controls` row
 for every daemon or for the cycle, and `MEMRAIN_CYCLE_SKIP_PHASES`. The token
@@ -521,7 +521,7 @@ The compose-allowlisted knobs carry explicit defaults in
 
 | Variable | Default | What it does | Cost |
 |---|---|---|---|
-| `MEMRAIN_CYCLE_SKIP_PHASES` | none | CSV of 2.x cycle phase names. A housekeeping step whose 2.x phase is listed is skipped: `purge` (which covers the purge and retention steps), `mirror-pages`, `embed-gaps`. | free |
+| `MEMRAIN_CYCLE_SKIP_PHASES` | none | CSV of pre-Lite cycle phase names. A housekeeping step whose pre-Lite phase is listed is skipped: `purge` (which covers the purge and retention steps), `mirror-pages`, `embed-gaps`. | free |
 | `MEMRAIN_EVENT_LOOP_WATCHDOG_MS` | off (unset or blank) | Process event-loop stall threshold in milliseconds. Must be a digits-only safe integer of at least `15000`; invalid values, including `0`, abort startup. Environment-only, read at `serve` startup; restart required. Code-only, not compose-allowlisted. | free |
 | `MEMRAIN_EMBED_GAPS` | on | The housekeeping step that embeds chunks stored without a vector (after an outage or a spend refusal). `0` turns it off. A chunk whose embed failed three times for a lasting reason is left to `memrain embed`. Allowlisted. | **paid (Titan)** |
 | `MEMRAIN_EMBED_GAPS_MAX_PER_RUN` | `200` | Most chunks that step embeds in one run. A non-positive or malformed value uses the default. Code-only. | **paid (Titan)** |
@@ -532,9 +532,9 @@ The compose-allowlisted knobs carry explicit defaults in
 | `MEMRAIN_MAX_BODY_BYTES` | `1048576` (1 MiB) | HTTP request-body size cap; over-cap requests get 413. | free |
 | `MEMRAIN_NO_SANITY` | off (`=1` on) | Kill switch for the content-sanity ingest gate. Set truthy to skip junk/oversize/markup assessment entirely. The gate runs unless this is set. | free |
 | `MEMRAIN_SANITY_DISPOSITION` | `quarantine` | How a junk-flagged doc is handled: default quarantines + stamps `content_flag` (still stored, embed-skipped); `reject` hard-rejects it at ingest. | free |
-| `MEMRAIN_WRITE_GATE_EXTERNAL` | `flag` | Write gate for documents in outside sources (kinds `mailbox`, `calendar`, `chat`, `meeting`, `webhook`, `github`). A deterministic check, no model call, looks for text that reads as instructions to an AI: directives that try to replace the reader's instructions, chat-template role markers, tool-call shaped text, requests to send data out (including standing rules that route mail or files to an address), directives to the memory itself, standing rules addressed to an agent ("from now on, when asked about X, say Y") and requests to hand over passwords or keys. Hidden Unicode tag characters are read as the text they mirror. `flag` stores it with `content_flag: instruction_like` and reads it back inside a stronger frame; `quarantine` hides it from search and queues it for `memrain write-gate approve\|reject`; `reject` refuses the write; `off` skips the check. A detector error quarantines. A source the owner connected on a 2.x brain (it has a connector account and belongs to the owner member) is flagged, never held or refused: there `quarantine` and `reject` act as `flag`. An agent's text that is only shaped like a tool call is flagged, never held. `memrain write-gate scan --documents` counts, without writing anything, what the gate would do to stored documents on their next index. Set with `memrain config set`; not compose-allowlisted. | free |
+| `MEMRAIN_WRITE_GATE_EXTERNAL` | `flag` | Write gate for documents in outside sources (kinds `mailbox`, `calendar`, `chat`, `meeting`, `webhook`, `github`). A deterministic check, no model call, looks for text that reads as instructions to an AI: directives that try to replace the reader's instructions, chat-template role markers, tool-call shaped text, requests to send data out (including standing rules that route mail or files to an address), directives to the memory itself, standing rules addressed to an agent ("from now on, when asked about X, say Y") and requests to hand over passwords or keys. Hidden Unicode tag characters are read as the text they mirror. `flag` stores it with `content_flag: instruction_like` and reads it back inside a stronger frame; `quarantine` hides it from search and queues it for `memrain write-gate approve\|reject`; `reject` refuses the write; `off` skips the check. A detector error quarantines. A source the owner connected on a pre-Lite brain (it has a connector account and belongs to the owner member) is flagged, never held or refused: there `quarantine` and `reject` act as `flag`. An agent's text that is only shaped like a tool call is flagged, never held. `memrain write-gate scan --documents` counts, without writing anything, what the gate would do to stored documents on their next index. Set with `memrain config set`; not compose-allowlisted. | free |
 | `MEMRAIN_WRITE_GATE_AGENT` | `off` | The same write gate for remote (MCP) writes into any other source: `off`, `flag` or `quarantine`. Off by default because agents write notes that quote instructions. A held document keeps its verdict when a re-index sees the same content; a local rewrite clears it. It also caps the row gate for that origin, as `MEMRAIN_WRITE_GATE_EXTERNAL` does for outside rows (see `MEMRAIN_WRITE_GATE_ROWS`). Set with `memrain config set`; not compose-allowlisted. | free |
-| `MEMRAIN_WRITE_GATE_ROWS` | `flag` | The write gate on facts, takes and timeline entries. Lite writes none of these, so no new row reaches it. It still sets the mode `memrain write-gate scan` uses on rows a 2.x brain stored: the scan writes a receipt to `write_gate_receipts` for a matching row and never holds one, and `off` skips the check. `memrain write-gate rows\|release\|drop` act on rows a 2.x gate held in `write_gate_row_holds`. `MEMRAIN_WRITE_GATE_AGENT` and `MEMRAIN_WRITE_GATE_EXTERNAL` set to `off` or `flag` cap the mode for their origin. Set with `memrain config set`; not compose-allowlisted. | free |
+| `MEMRAIN_WRITE_GATE_ROWS` | `flag` | The write gate on facts, takes and timeline entries. Lite writes none of these, so no new row reaches it. It still sets the mode `memrain write-gate scan` uses on rows a pre-Lite brain stored: the scan writes a receipt to `write_gate_receipts` for a matching row and never holds one, and `off` skips the check. `memrain write-gate rows\|release\|drop` act on rows a pre-Lite gate held in `write_gate_row_holds`. `MEMRAIN_WRITE_GATE_AGENT` and `MEMRAIN_WRITE_GATE_EXTERNAL` set to `off` or `flag` cap the mode for their origin. Set with `memrain config set`; not compose-allowlisted. | free |
 | `MEMRAIN_WRITE_GATE_QUARANTINE_SOURCES` | empty | CSV of source ids whose `flag` verdicts become `quarantine` (held for owner approval). Never loosens `reject` or turns on a gate that is `off`. Set with `memrain config set`; not compose-allowlisted. | free |
 | `MEMRAIN_CONTENT_SANITY_DISABLE` | empty | CSV of content-sanity pattern names to switch off (e.g. `access_denied,operator_literal_2`), so one pattern that keeps hiding legitimate pages can be silenced without dropping the whole gate. Unknown names are ignored. Each quarantine trip writes an audit row naming the patterns that fired, and `memrain doctor` warns with the count of quarantined pages and the top patterns; disable the culprit, then `memrain quarantine clear`. Allowlisted. | free |
 | `MEMRAIN_SANITY_LITERALS_FILE` | unset | Path to an operator literals file (one case-insensitive literal per line, blanks/`#` ignored) so site-specific boilerplate the built-in patterns miss is quarantined. Fail-open. | free |
@@ -597,15 +597,15 @@ environment variable and restart; `0` is not an off value.
 Four switches control the work `serve` starts on its own. They are read from
 the environment only: a `runtime_config` row can never set them, so a leftover
 row cannot stop housekeeping for good or restart it during maintenance. Two of
-them only matter to a 2.x install: Lite has no code sweep and no jobs worker,
+them only matter to a pre-Lite install: Lite has no code sweep and no jobs worker,
 so it only reports them and counts them in `memrain status --quiescent`. All four are in
 the compose allowlist with an empty default.
 
 | Variable | Default | What it does | Cost |
 |---|---|---|---|
 | `MEMRAIN_MAINTENANCE` | off (`=1` on) | Maintenance mode. Forces the three switches below off, whatever they say, so the hourly housekeeping does not start, and skips the boot sweep of expired OAuth tokens: a server in maintenance writes nothing by itself. `/health` then carries `"maintenance":true` and `deploy/deploy.sh` does not start the ingress. | free |
-| `MEMRAIN_BOOT_CODE_SWEEP` | on (`=0` off) | 2.x only. Lite has no code sweep; the value shows in the boot line and in `memrain status`, and `--quiescent` counts it as a switch that is on. | free |
-| `MEMRAIN_JOBS_WORKER` | on (`=0` off) | 2.x only. Lite has no jobs worker; the value shows in the boot line and in `memrain status`, and `--quiescent` counts it as a switch that is on. | free |
+| `MEMRAIN_BOOT_CODE_SWEEP` | on (`=0` off) | Pre-Lite only. Lite has no code sweep; the value shows in the boot line and in `memrain status`, and `--quiescent` counts it as a switch that is on. | free |
+| `MEMRAIN_JOBS_WORKER` | on (`=0` off) | Pre-Lite only. Lite has no jobs worker; the value shows in the boot line and in `memrain status`, and `--quiescent` counts it as a switch that is on. | free |
 | `MEMRAIN_CYCLE` | on (`=0` off) | Starts the hourly housekeeping. `0` turns it off. | free |
 
 An empty value counts as unset. Any value other than `0` or `1` fails closed:
@@ -614,7 +614,7 @@ invalid switch. When anything is off, `serve` prints one line such as
 `[memrain] maintenance=on code_sweep=off jobs_worker=off cycle=off`.
 
 `memrain status` reports a `quiescence` block: the running state of the
-switches, plus counts of running and leased 2.x jobs and of live cycle
+switches, plus counts of running and leased pre-Lite jobs and of live cycle
 (housekeeping) and worker locks. `memrain status --quiescent` exits 0 only
 when maintenance is on (or all three switches are off) and no job, lock or
 worker is active; otherwise it exits 3 and prints what failed.
@@ -649,7 +649,7 @@ memrain purge-leftovers --apply --plan-hash HASH64 --export FILE
 memrain purge-leftovers restore --from FILE
 ```
 
-`purge-leftovers` previews what 2.x purges that ran before synthesis cleanup
+`purge-leftovers` previews what purges on a pre-Lite release that ran before synthesis cleanup
 left behind: atoms, atom pages, takes and contradiction rows whose source document
 no longer exists (page slugs are left to the page purge, since a rename moves a
 page without its takes), the concepts narrated over them (rebuilt or retired as a purge does
@@ -729,7 +729,7 @@ schema in `terraform/variables.tf`.
 | `tfstate_region` | `eu-central-1` | Region of the S3 bucket holding terraform state (often differs from `aws_region`). |
 | `domain` | `""` | Public root domain (e.g. `example.com`). Used by the Cloudflare Tunnel and OAuth flows. |
 | `subdomain` | `brain` | Subdomain serving the public MCP (e.g. `brain` → `brain.example.com`). |
-| `memex_subdomain` | `null` | DEPRECATED alias of `subdomain`; when set it still wins, and a `check` warns. Removed in 1.1.0. |
+| `memex_subdomain` | `null` | DEPRECATED alias of `subdomain`; when set it still wins, and a `check` warns. Removed in 0.2.0. |
 | `github_owner` | `""` | GitHub username/org owning the public repo. |
 | `repo_name` | `memrain` | Public repo name; used for tags, S3 keys, tfstate prefix. |
 | `secrets_prefix` | `memrain` | Secrets Manager namespace — every secret is `<secrets_prefix>/<name>`. |
@@ -799,10 +799,10 @@ names are ForceNew, and the data-bearing resources carry `prevent_destroy`.
 
 ## Legacy names
 
-Installs from before the rename to Memrain keep working in 1.0.x without
+Installs from before the rename to Memrain keep working in 0.1.x without
 changes. The old names below are read as a fallback. **All of them are removed
-in 1.1.0, which refuses to start while a legacy name is still in use**, so
-move to the new names (UPGRADING.md) before taking 1.1.0. Data written by
+in 0.2.0, which refuses to start while a legacy name is still in use**, so
+move to the new names (UPGRADING.md) before taking 0.2.0. Data written by
 older versions stays readable for good: fence markers, token and client ids
 and stored values need no migration.
 
@@ -831,7 +831,7 @@ leaves an older `MEMEX_X` row in place, where the new row shadows it.
 row cannot come back. `MEMEX_NO_DB_CONFIG=1` still switches the overlay off
 like `MEMRAIN_NO_DB_CONFIG=1`. `memrain doctor` warns about each stored
 `MEMEX_X` row that has no `MEMRAIN_X` row (re-set it with `memrain config set`
-before 1.1.0) and lists shadowed rows as information only.
+before 0.2.0) and lists shadowed rows as information only.
 
 **Other names.**
 

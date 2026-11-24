@@ -27,7 +27,7 @@ Every user-facing document, one line each. New here? Read
 | [TRANSCRIPTS.md](./TRANSCRIPTS.md) | Importing ChatGPT, Claude, Codex and Claude Code history |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Every install and update step, ingress modes |
 | [CONFIGURATION.md](./CONFIGURATION.md) | Every setting with its default, budgets, Terraform variables |
-| [../UPGRADING.md](../UPGRADING.md) | Upgrading: the rename to 1.0, each 1.x and 2.x release, and the move to Lite 3.0 |
+| [../UPGRADING.md](../UPGRADING.md) | Upgrading: the rename to 0.1, each release from 0.1 to 0.25, and the move to Lite 0.26 |
 | [../ARCHITECTURE.md](../ARCHITECTURE.md) | What runs where, storage, secrets, the security model |
 
 ## Reference

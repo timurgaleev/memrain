@@ -3,7 +3,7 @@
 This page explains what Memrain does with your notes, how it answers a
 question, and what it costs to run. The first sections need no setup
 knowledge; the last ones are reference. For the setup itself, see
-[QUICKSTART.md](./QUICKSTART.md). What 3.0 removed from the 2.x line is listed
+[QUICKSTART.md](./QUICKSTART.md). What 0.26 removed from earlier releases is listed
 in [UPGRADING.md](../UPGRADING.md).
 
 ## In one minute

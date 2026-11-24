@@ -231,7 +231,7 @@ credential you are using. Step-by-step guides, each with a troubleshooting table
 - **Access.** Reach the host through SSM (`aws ssm start-session --target <instance-id>`). No SSH.
 - **Update.** `cd /opt/<project> && sudo git pull --ff-only && sudo bash deploy/deploy.sh`. It
   stamps the build, and `/health` must report the new stamp.
-- **Upgrading from 2.x.** Read [UPGRADING.md](../UPGRADING.md#300) first;
+- **Upgrading from 0.25 or earlier.** Read [UPGRADING.md](../UPGRADING.md#0260) first;
   from before the rename, follow the rest of that guide, since a plain pull and
   deploy is not enough.
 - **Operate.** `memrain doctor`, `memrain status` and the `/admin` panel.

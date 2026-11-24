@@ -28,7 +28,7 @@ import { LEGACY_CYCLE_LOCK_ID, LEGACY_WORKER_LOCK_ID } from "../core/brand.ts";
 
 /**
  * Cycle-lock namespaces and worker-lock ids of both brands. The worker ids are
- * the ones a 2.x job worker heartbeats under, and the legacy ones are only read
+ * the ones a pre-Lite job worker heartbeats under, and the legacy ones are only read
  * here, so a live older process still blocks `--quiescent`.
  */
 const CYCLE_LOCK_NAMESPACES = [CYCLE_LOCK_ID, LEGACY_CYCLE_LOCK_ID];

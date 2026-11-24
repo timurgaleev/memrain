@@ -1,5 +1,5 @@
 /**
- * The facts and takes fences a 2.x brain wrote into page bodies. Their tables
+ * The facts and takes fences a pre-Lite brain wrote into page bodies. Their tables
  * are kept out of the search mirror, so neither is indexed as body text: the
  * takes text in particular must not become readable to every read scope.
  */

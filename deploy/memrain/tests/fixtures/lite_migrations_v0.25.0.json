@@ -1,5 +1,5 @@
 {
-  "tag": "v2.7.0",
+  "tag": "v0.25.0",
   "files": {
     "migrations/001_initial.sql": "610bb290437c2d8b97087bdebe4b64671366fa156f4cdc1ec5f990ec6b0adda0",
     "migrations/002_entities.sql": "edf63a3cdaae551203ae0dd80112be404eb629e0c67a12c2f48f5c1a082aaab5",

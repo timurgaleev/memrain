@@ -34,7 +34,7 @@ import { pageSourcePath, pageTruthSourcePath } from "./page-index.ts";
 import { bumpClock, bumpDocumentClock, bumpPageGeneration } from "./generation.ts";
 import { OperationError } from "./operation-error.ts";
 
-// The atom and concept shapes the synthesis phases of a 2.x brain wrote;
+// The atom and concept shapes the synthesis phases of a pre-Lite brain wrote;
 // cleanup rebuilds a concept with the same deterministic text they used.
 
 /** Kebab page-slug segment from a free-text title. */

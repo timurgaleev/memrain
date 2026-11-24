@@ -29,7 +29,7 @@ afterEach(async () => {
 });
 
 describe("housekeeping", () => {
-  // Value: protects=two processes never run housekeeping (or a 2.x cycle) at once;
+  // Value: protects=two processes never run housekeeping (or a pre-Lite cycle) at once;
   // fails_when=the run ignores a held memrain-cycle lock; why_new=housekeeping replaces the cycle; seam=none
   it("does nothing while another holder has the lock", async () => {
     const held = await tryAcquireDbLock(storage.engine(), CYCLE_LOCK_ID, 30);
@@ -94,11 +94,11 @@ describe("housekeeping", () => {
   });
 });
 
-describe("housekeeping obeys the off-switches a 2.x cycle obeyed", () => {
+describe("housekeeping obeys the off-switches a pre-Lite cycle obeyed", () => {
   const SLUG = "notes/expired";
   const THREAD = "00000000-0000-4000-8000-0000000000d1";
 
-  // A 2.x brain: a page soft-deleted far past its TTL and chat past its window.
+  // A pre-Lite brain: a page soft-deleted far past its TTL and chat past its window.
   async function seedExpired(): Promise<void> {
     const e = storage.engine();
     await putPage(storage, { slug: SLUG, markdown_body: "gone a long time" });
@@ -124,9 +124,9 @@ describe("housekeeping obeys the off-switches a 2.x cycle obeyed", () => {
     expect(await chatRows()).toBe(0);
   });
 
-  // Value: protects=an install that switched its 2.x cycle off keeps its expired rows after the
+  // Value: protects=an install that switched its pre-Lite cycle off keeps its expired rows after the
   // upgrade; fails_when=any one switch is ignored by a deleting step; why_new=housekeeping took
-  // over the cycle's deletes; seam=env and daemon_controls rows as 2.x wrote them
+  // over the cycle's deletes; seam=env and daemon_controls rows as pre-Lite builds wrote them
   for (const [label, env, row] of [
     ["MEMRAIN_DAEMONS_DISABLED naming cycle", { MEMRAIN_DAEMONS_DISABLED: "notifications, cycle" }, null],
     ["MEMRAIN_CYCLE_SKIP_PHASES=purge", { MEMRAIN_CYCLE_SKIP_PHASES: "extract,purge" }, null],
@@ -143,13 +143,13 @@ describe("housekeeping obeys the off-switches a 2.x cycle obeyed", () => {
       expect(r.steps["retention"]).toMatchObject({ skipped: expect.any(String) });
       expect(await pageRows()).toBe(1);
       expect(await chatRows()).toBe(1);
-      // The token sweep ran outside the 2.x cycle and still runs.
+      // The token sweep ran outside the pre-Lite cycle and still runs.
       expect(swept).toBe(1);
     });
   }
 
   // Value: protects=a paused row for another daemon or one source leaves the cycle running, as in
-  // 2.x; fails_when=the hold matches too broadly; why_new=same; seam=daemon_controls rows
+  // pre-Lite; fails_when=the hold matches too broadly; why_new=same; seam=daemon_controls rows
   it("ignores a pause for another daemon", async () => {
     await seedExpired();
     await pause("connector_sync");
@@ -181,7 +181,7 @@ describe("housekeeping obeys the off-switches a 2.x cycle obeyed", () => {
 
 describe("chat retention", () => {
   // Value: protects=an expired first question does not outlive itself as the thread title;
-  // fails_when=retention deletes messages without retitling their thread; why_new=2.x retitled
+  // fails_when=retention deletes messages without retitling their thread; why_new=pre-Lite retitled
   // in the same transaction; seam=none
   it("retitles a thread from its oldest remaining question, or clears the title", async () => {
     const e = storage.engine();

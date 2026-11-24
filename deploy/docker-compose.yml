@@ -99,7 +99,7 @@ services:
       # Quiescence switches, env-only. Empty = unset = today's behaviour.
       # MEMRAIN_MAINTENANCE=1 turns off the hourly housekeeping and the boot
       # OAuth token sweep, and makes deploy.sh hold ingress. MEMRAIN_CYCLE=0
-      # turns off housekeeping alone. The other two are the 2.x worker and
+      # turns off housekeeping alone. The other two are the pre-Lite worker and
       # code-sweep switches, still accepted so an existing .env parses the same.
       - MEMRAIN_MAINTENANCE=${MEMRAIN_MAINTENANCE:-${MEMEX_MAINTENANCE:-}}
       - MEMRAIN_BOOT_CODE_SWEEP=${MEMRAIN_BOOT_CODE_SWEEP:-${MEMEX_BOOT_CODE_SWEEP:-}}
@@ -109,7 +109,7 @@ services:
       # read-only operator content mounted above; `/repo-source` the checkout.
       - MEMRAIN_VAULT_PATHS=/memory
       - MEMRAIN_CODE_PATHS=/repo-source
-      # CSV of 2.x cycle phase names whose housekeeping steps stay off
+      # CSV of pre-Lite cycle phase names whose housekeeping steps stay off
       # (`purge` also covers retention), set in the host .env; default none.
       - MEMRAIN_CYCLE_SKIP_PHASES=${MEMRAIN_CYCLE_SKIP_PHASES:-${MEMEX_CYCLE_SKIP_PHASES:-}}
       # Opt-in multi-tenant fail-closed read/write floor (default OFF). =1 makes an
@@ -135,7 +135,7 @@ services:
       # The brain's daily dollar cap on embedding spend. Per-client caps are
       # set on the client (admin panel or `memrain auth set-budget`).
       - MEMRAIN_DAILY_BUDGET_USD=${MEMRAIN_DAILY_BUDGET_USD:-${MEMEX_DAILY_BUDGET_USD:-}}
-      # Days of 2.x chat history housekeeping keeps (default 90; 0 = keep all).
+      # Days of pre-Lite chat history housekeeping keeps (default 90; 0 = keep all).
       - MEMRAIN_CHAT_RETENTION_DAYS=${MEMRAIN_CHAT_RETENTION_DAYS:-${MEMEX_CHAT_RETENTION_DAYS:-}}
       # How many chunks a write embeds at once, shared by every concurrent
       # write (default 4; empty = default). 1 restores serial embedding.

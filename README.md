@@ -66,8 +66,8 @@ A client sees up to these 29 ([docs/TOOLS.md](./docs/TOOLS.md)); its scopes, its
 | Brain and access | `get_brain_identity`, `whoami`, `stats`, `sources_list`, `sources_status`, `run_doctor` |
 
 Memrain Lite is the single-person edition; a fuller edition with team and
-connector features exists separately. Coming from 2.x? Read
-[UPGRADING.md](./UPGRADING.md#300) first.
+connector features exists separately. Coming from 0.25 or earlier? Read
+[UPGRADING.md](./UPGRADING.md#0260) first.
 
 ## See it work
 

@@ -64,7 +64,7 @@ export [--dir DIR] [--source ID]     # dump every live page to a markdown tree (
                                       #   slug dirs); --source scopes to one tenant. Backup / portability
                                       #   escape hatch for the DB-only substrate.
 doctor [--json]                      # health of the subsystems this build runs; one line counts the
-                                      #   2.x feature rows it leaves unused
+                                      #   pre-Lite feature rows it leaves unused
 transcripts ingest <path>            # import ChatGPT, Claude, Codex or Claude Code history as pages
 write-gate … / quarantine …          # work the review queues (there is no admin Approvals page)
 secrets audit|originals|reveal|restore|backup  # find stored credentials; work the kept originals
@@ -103,11 +103,11 @@ Never:
 
 For a user-facing version bump, after deploy + verify are green:
 
-1. Roll `[Unreleased]` in `CHANGELOG.md` into `## [X.Y.Z] — <date>`
+1. Roll `[Unreleased]` in `CHANGELOG.md` into `## [0.X.Y] — <date>`
    (SemVer), leaving an empty `[Unreleased]` on top.
-2. Tag the shipped commit and push it: `git tag vX.Y.Z && git push
-   origin vX.Y.Z`.
-3. Publish the release: `gh release create vX.Y.Z --title vX.Y.Z
+2. Tag the shipped commit and push it: `git tag v0.X.Y && git push
+   origin v0.X.Y`.
+3. Publish the release: `gh release create v0.X.Y --title v0.X.Y
    --notes "<the changelog section>"`.
 
 The tag must point at a CI-green commit that is already live on the
@@ -159,13 +159,13 @@ TUNNEL_TOKEN=<cloudflared>        # NOT CLOUDFLARE_TUNNEL_TOKEN — that's a dif
 | Cloudflared retries forever, no traffic | `--protocol http2` not set; SG blocks UDP |
 | Memrain `EACCES` reading `/memory` | Container running as uid 1000 (alpine `bun`); needs root or correct EFS chown |
 | SSM `ConnectionLost`, healthz down | Likely OOM on too-small instance during a large import or re-embed |
-| A client gets `credential_unsupported` | Its credential is bound to a member other than the owner, or carries a trust floor; issue an unbound one (UPGRADING.md "3.0.0") |
-| A client gets `unknown tool: <name>` | It calls a 2.x tool this build does not serve; update the client or its plugin |
+| A client gets `credential_unsupported` | Its credential is bound to a member other than the owner, or carries a trust floor; issue an unbound one (UPGRADING.md "0.26.0") |
+| A client gets `unknown tool: <name>` | It calls a pre-Lite tool this build does not serve; update the client or its plugin |
 | MCP tool returns `insufficient_scope` or `permission_denied` | The credential lacks the scope, or the tool is operator-only; `whoami` shows what it carries |
 
 ## Compatibility code
 
-Memrain was called memex before 1.0.0, and the code keeps reading the old
+Memrain was called memex before 0.1.0, and the code keeps reading the old
 names on purpose: the `MEMEX_*` environment fallback, `memex:` fence markers in
 pages, `memex_` token and client id prefixes, the `x-memex-*` ingest headers,
 the legacy SQL functions (`memex_fact_claim_key` and friends), the

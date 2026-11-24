@@ -90,7 +90,7 @@ def test_doc_only_entries_are_still_documented():
 
 def test_legacy_section_states_removal_and_fail_closed():
     legacy = " ".join(split_at_legacy_section()[1].split())
-    assert "removed in 1.1.0" in legacy
+    assert "removed in 0.2.0" in legacy
     assert "refuses to start while a legacy name is still in use" in legacy
     assert "MEMEX_NO_DB_CONFIG" in legacy
 

@@ -28,7 +28,7 @@ are behind the admin panel).
 {
   "ok": true,
   "db": "postgres",        // or "pglite"
-  "version": "v3.0.0-0-gabc1234",  // build stamp from git describe ("dev" when unstamped)
+  "version": "v0.26.0-0-gabc1234",  // build stamp from git describe ("dev" when unstamped)
   "edition": "lite",
   "schema_ahead": false,
   "keyword_only": true     // present only with MEMRAIN_KEYWORD_ONLY=1

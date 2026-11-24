@@ -40,22 +40,22 @@ for (const engine of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_URL)) desc
     expect((await checkRuntimeConfigValues(e)).status).toBe("ok");
   });
 
-  // Value: protects=a 2.x brain's rows for removed features read as one informational count,
-  // while a key 2.7 never had still warns; fails_when=retired keys warn as unknown again, or the
+  // Value: protects=a pre-Lite brain's rows for removed features read as one informational count,
+  // while a key 0.25 never had still warns; fails_when=retired keys warn as unknown again, or the
   // retired list swallows a key that never existed; why_new=the cut retired 199 keys; seam=none
-  it("counts 2.x feature settings as unused and still warns on a key that never existed", async () => {
+  it("counts pre-Lite feature settings as unused and still warns on a key that never existed", async () => {
     const e = db.storage.engine();
     await setRuntimeConfig(e, "MEMRAIN_THINK", "1");
     await setRuntimeConfig(e, "MEMEX_CHAT", "1");
     const retiredOnly = await checkRuntimeConfigValues(e);
     expect(retiredOnly.status).toBe("ok");
-    expect(retiredOnly.detail).toBe("2 setting(s) from 2.x features are stored but unused (kept as is)");
+    expect(retiredOnly.detail).toBe("2 setting(s) from pre-Lite features are stored but unused (kept as is)");
 
     await setRuntimeConfig(e, "MEMRAIN_NEVER_A_SETTING", "1");
     const mixed = await checkRuntimeConfigValues(e);
     expect(mixed.status).toBe("warn");
     expect(mixed.detail).toContain("MEMRAIN_NEVER_A_SETTING: unknown key");
-    expect(mixed.detail).toContain("2 setting(s) from 2.x features are stored but unused");
+    expect(mixed.detail).toContain("2 setting(s) from pre-Lite features are stored but unused");
     expect(mixed.detail).not.toContain("MEMRAIN_THINK");
     await e.exec("DELETE FROM runtime_config");
   });

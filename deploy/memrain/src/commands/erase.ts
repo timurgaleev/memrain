@@ -6,7 +6,7 @@ import type { Engine } from "../core/engine/interface.ts";
 
 export interface EraseOptions extends ErasureTargets { sub: string; apply?: boolean; planHash?: string; storage?: Storage; owner?: string }
 
-/** Count, and with `apply` delete, every chat thread and message of one owner a 2.x brain kept. */
+/** Count, and with `apply` delete, every chat thread and message of one owner a pre-Lite brain kept. */
 async function eraseOwnerChat(engine: Engine, ownerKey: string, apply: boolean): Promise<{ threads: number; messages: number }> {
   return engine.transaction(async (tx) => {
     // scope: operator-only the operator's erase command, keyed by the owner it names

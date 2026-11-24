@@ -26,10 +26,10 @@ written are cut out before it is stored; the originals are kept encrypted with
 AES-256-GCM under the secret-store key, which lives in AWS Secrets Manager or a
 file only its owner can read, never in the database (see SECURITY.md).
 
-A 2.x brain moved to this build keeps the rows its removed features wrote
+A pre-Lite brain moved to this build keeps the rows its removed features wrote
 (facts, timelines, synced connector pages and their sealed credentials, chat
 history). Lite does not read them, except that its hourly housekeeping trims
-2.x chat history past `MEMRAIN_CHAT_RETENTION_DAYS` (default 90 days) and
+pre-Lite chat history past `MEMRAIN_CHAT_RETENTION_DAYS` (default 90 days) and
 purges a deleted page together with what was derived from it.
 
 ## Where the data goes

@@ -24,7 +24,7 @@ sudo docker compose --env-file .env logs --tail 25 memrain
 ```
 
 First boot pulls + builds; subsequent rebuilds are ~30 s warm. Coming from
-2.x, read [UPGRADING.md](../../../UPGRADING.md#300) before the first deploy.
+0.25 or earlier, read [UPGRADING.md](../../../UPGRADING.md#0260) before the first deploy.
 
 Migration 146 pins six existing SQL functions to
 `search_path = pg_catalog, public, pg_temp`. A missing function or insufficient
@@ -101,7 +101,7 @@ docker exec deploy-memrain-1 bun run src/cli.ts embed --limit 500
 ```
 
 `MEMRAIN_CYCLE=0` turns housekeeping off; the other switches are listed in
-[UPGRADING.md](../../../UPGRADING.md#300).
+[UPGRADING.md](../../../UPGRADING.md#0260).
 
 ## Re-build the index from scratch
 

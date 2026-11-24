@@ -1,6 +1,6 @@
 /**
  * The owner and owner-only commands, run as the operator runs them on a brain
- * whose owner member was named under 2.x: bind a new key to the owner, refuse
+ * whose owner member was named before Lite: bind a new key to the owner, refuse
  * an unbound key once the brain serves several people, flag a personal mailbox
  * owner-only and dry-run the provenance backfill.
  */

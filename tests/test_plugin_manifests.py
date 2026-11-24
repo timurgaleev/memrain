@@ -31,7 +31,7 @@ ALL = (CLAUDE_PLUGIN, CLAUDE_MARKET, CODEX_PLUGIN, CODEX_MCP, CODEX_MARKET)
 PLUGIN_SKILLS = PLUGIN / "skills"
 SHIPPED_SKILLS = {"connect-client", "ingest", "query"}
 OPERATIONS = REPO / "deploy" / "memrain" / "src" / "mcp" / "operations.ts"
-# Tools a 2.x skill named that this build no longer serves. A skill that
+# Tools a pre-Lite skill named that this build no longer serves. A skill that
 # mentions one in a code span is telling the agent to call a tool that is gone.
 RETIRED_TOOLS = {
     "query", "think", "recall", "add_fact", "extract_facts", "forget_fact", "entity_facts",
