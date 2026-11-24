@@ -1,9 +1,8 @@
 /**
- * MEMRAIN_REQUIRE_MEMBER=1: on a hosted brain every credential belongs to a
- * person, so the verifier refuses a PAT or OAuth token bound to no member,
- * on /mcp and /ingest alike (both verify through it). Off, an unbound
- * credential verifies exactly as before. A bound credential still has to be
- * bound to the brain's enabled owner.
+ * MEMRAIN_REQUIRE_MEMBER=1: the verifier refuses a PAT or OAuth token bound
+ * to no member. A bound credential still has to be bound to the brain's
+ * enabled owner, so with the flag on only owner-bound credentials work. Off,
+ * an unbound credential verifies exactly as before.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
@@ -40,6 +39,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       await expect(p.verifyAccessToken(UNBOUND)).rejects.toBeInstanceOf(InvalidTokenError);
       await expect(p.verifyAccessToken(oauth)).rejects.toBeInstanceOf(InvalidTokenError);
       expect((await p.verifyAccessToken(BOUND)).clientId).toBe("alice-laptop");
+      await expect(p.verifyAccessToken(UNBOUND)).rejects.toThrow(/bound to its owner/);
     } finally {
       await db.close();
     }

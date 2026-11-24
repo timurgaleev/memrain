@@ -46,7 +46,10 @@ export async function liveOwnerMember(engine: Pick<Engine, "query">): Promise<st
 
 /**
  * MEMRAIN_REQUIRE_MEMBER: refuse every credential that is not bound to a
- * member. Environment-only, so the database cannot loosen it.
+ * member. A credential bound to anyone but the enabled owner is refused
+ * anyway, so here the switch means "owner-bound credentials only"; with no
+ * owner member named, every credential is refused. Environment-only, so the
+ * database cannot loosen it.
  */
 export function memberRequired(env: Readonly<Record<string, string | undefined>> = process.env): boolean {
   const v = env["MEMRAIN_REQUIRE_MEMBER"]?.trim().toLowerCase();

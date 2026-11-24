@@ -3322,7 +3322,7 @@ export class OAuthProvider {
   private async withMembers<G extends PrincipalGrant>(grant: G, bound: unknown[]): Promise<G> {
     const named = bound.filter((id) => id !== null && id !== undefined).map(String);
     if (named.length === 0) {
-      if (memberRequired()) throw new InvalidTokenError("member_required: this brain accepts only credentials that belong to a member");
+      if (memberRequired()) throw new InvalidTokenError("member_required: MEMRAIN_REQUIRE_MEMBER is on, so this brain accepts only credentials bound to its owner");
       return grant;
     }
     const owner = await liveOwnerMember(this.engine);

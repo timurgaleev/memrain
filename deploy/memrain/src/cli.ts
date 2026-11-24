@@ -125,7 +125,7 @@ function printUsage(): void {
   console.log("                               daily USD ceiling across every paid op ('none' = uncapped)");
   console.log("  auth grant-token <id> <secret> [--scopes S]");
   console.log("                               mint an access token locally (= POST /token)");
-  console.log("  auth create <name> [--source SRC] [--federated-read a,b]");
+  console.log("  auth create <name> [--member OWNER] [--source SRC] [--federated-read a,b]");
   console.log("                    [--scopes read,write]");
   console.log("                               mint a long-lived personal access token (prints once)");
   console.log("  auth list                    JSON list of personal access tokens (no hashes)");
