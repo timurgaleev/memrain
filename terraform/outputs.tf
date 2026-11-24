@@ -24,7 +24,7 @@ output "ssh_access" {
 }
 
 output "bedrock_model" {
-  description = "Active Bedrock model (CRIS inference profile)"
+  description = "The Bedrock model this build calls (Titan text embeddings; informational)"
   value       = var.bedrock_model_id
 }
 

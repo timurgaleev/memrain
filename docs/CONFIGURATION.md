@@ -749,7 +749,7 @@ schema in `terraform/variables.tf`.
 | `availability_zone` | `eu-west-1b` | AZ for the primary subnet. |
 | `multi_az_subnet_cidrs` | `{eu-west-1a=10.0.2.0/24, eu-west-1c=10.0.3.0/24}` | Extra subnets to satisfy the RDS multi-AZ subnet group. |
 | `bedrock_allowed_regions` | EU family + `us-east-1` | Regions listed for Claude model invocation. Lite calls no Claude model; its IAM allows Titan text embeddings only. |
-| `bedrock_model_id` | `eu.anthropic.claude-haiku-5-5` | Informational: feeds only the `bedrock_model` output, and IAM does not reference it. Lite calls no Claude model. |
+| `bedrock_model_id` | `amazon.titan-embed-text-v2:0` | Informational: feeds only the `bedrock_model` output, and IAM does not reference it. Lite calls no generative model. |
 | `alarm_email` | `""` | Email for the EC2 status-check CloudWatch alarm. Empty skips email (alarm still fires). |
 | `ssh_allowed_cidr` | `""` | CIDR allowed inbound SSH. Empty disables SSH — use SSM Session Manager. |
 | `enable_vpc_endpoints` | `false` | Enable interface VPC endpoints (Bedrock, SM, SSM, Logs). ~$43/mo — off for personal use. |

@@ -183,19 +183,13 @@ variable "multi_az_subnet_cidrs" {
 
 variable "bedrock_allowed_regions" {
   description = <<-EOT
-    Regions where the EC2 instance role may invoke the EXPENSIVE Claude
-    foundation models directly. The IAM Deny statement
-    (BedrockDenyOffRegion) blocks `anthropic.claude-*` invocations
-    outside this list. Nova is NOT governed by this list — it is exempt
-    from the deny so `global.amazon.nova-*` can route worldwide (see
-    iam.tf). Removing entries shrinks Claude's blast radius; adding
-    entries widens it.
+    Regions where a Claude foundation model may be invoked directly. The
+    instance role is allowed Titan text embeddings only, so this list does not
+    widen anything today: it feeds the IAM Deny statement
+    (BedrockDenyOffRegion), a second wall that blocks `anthropic.claude-*`
+    outside these regions should a broader grant ever be attached to the role.
   EOT
   type        = list(string)
-  # Full EU region family + us-east-1 — the regions where Claude may be
-  # invoked directly. Still blocks us-west/ap/etc. for Claude. Nova is
-  # exempt from the deny entirely (cheap + credit-eligible), so this list
-  # no longer affects Nova routing.
   default = [
     "eu-west-1", "eu-west-2", "eu-west-3",
     "eu-central-1", "eu-central-2",
@@ -206,36 +200,18 @@ variable "bedrock_allowed_regions" {
 
 variable "bedrock_model_id" {
   description = <<-EOT
-    Amazon Bedrock CRIS inference profile ID surfaced in the `bedrock_model`
-    terraform output. Informational: Memrain's utility tier is pinned in code
-    (eu.anthropic.claude-haiku-5-5, with Titan Embed V2 for embeddings and
-    eu.anthropic.claude-sonnet-5-5 behind the paid feature flags) — this
-    variable does not change what the brain calls. Keep it in sync with the
-    deployed reality so `terraform output bedrock_model` tells the truth.
-
-    Default: Haiku 5.5 (EU profile) — what the brain actually uses.
-
-    Switch via: terraform apply -var='bedrock_model_id=...'
-
-    === Anthropic Claude — what Memrain runs on ===
-      eu.anthropic.claude-haiku-5-5           — Haiku 5.5, utility tier (default)
-      eu.anthropic.claude-sonnet-5-5          — Sonnet 5.5, paid slices (default)
-      eu.anthropic.claude-haiku-4-5-20251001  — Haiku 4.5, ~10x the Haiku 5.5 price
-      eu.anthropic.claude-sonnet-4-6          — Sonnet 4.6
-
-    === Amazon Nova — credit-eligible alternates ===
-      global.amazon.nova-2-lite-v1:0   — Nova 2 Lite (multi-turn-safe)
-      eu.amazon.nova-2-lite-v1:0       — Nova 2 Lite, EU cross-region profile (EU data residency)
-      global.amazon.nova-2-pro-v1:0    — Nova 2 Pro (when available in the account)
-      eu.amazon.nova-pro-v1:0          — Nova Pro v1 (rejects multi-turn replays with
-                                         "User messages cannot contain reasoning content" —
-                                         do not use as primary for multi-turn cron jobs)
+    Bedrock model id surfaced in the `bedrock_model` terraform output.
+    Informational only: it changes nothing the brain calls. The one model
+    Memrain calls is Amazon Titan Text Embeddings v2
+    (amazon.titan-embed-text-v2:0), the default. The other values stay
+    accepted so an existing terraform.tfvars keeps validating.
   EOT
   type        = string
-  default     = "eu.anthropic.claude-haiku-5-5"
+  default     = "amazon.titan-embed-text-v2:0"
 
   validation {
     condition = contains([
+      "amazon.titan-embed-text-v2:0",
       "global.amazon.nova-2-lite-v1:0",
       "global.amazon.nova-2-pro-v1:0",
       "eu.amazon.nova-2-lite-v1:0",
@@ -245,7 +221,7 @@ variable "bedrock_model_id" {
       "eu.anthropic.claude-haiku-5-5",
       "eu.anthropic.claude-sonnet-5-5",
     ], var.bedrock_model_id)
-    error_message = "Must be a valid Bedrock CRIS inference profile ID. See variable description for the full list."
+    error_message = "Must be amazon.titan-embed-text-v2:0 or a model id an earlier release accepted."
   }
 }
 
