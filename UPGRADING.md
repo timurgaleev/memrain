@@ -713,6 +713,13 @@ Before the upgrade, note which agents use a credential issued for a team
 member or one with a trust floor, and issue unbound replacements for the ones
 you keep.
 
+`MEMRAIN_REQUIRE_MEMBER=1` keeps refusing every credential bound to no member
+(`member_required`). Since this build accepts no member but the owner, the
+switch now means "owner-bound credentials only", and with no owner named in
+`access.owner_member` it refuses every credential. Either unset it, or keep it
+and bind each credential you use to the owner (`memrain auth create <name>
+--member <owner-id>` for a personal access token).
+
 ### Housekeeping off-switches
 
 An install that had switched its 2.x cycle off keeps its rows: the purge,
@@ -727,8 +734,12 @@ mirror, embed and retention steps obey the switches the cycle obeyed.
   naming `mirror-pages` or `embed-gaps` keeps that step off.
 - `MEMRAIN_EMBED_GAPS=0` turns off the embed step alone.
 
-The token sweep and spend-hold expiry always run, as they did outside the 2.x
-cycle.
+While housekeeping runs, its token-sweep and spend-hold steps run every hour
+whatever the switches above say, as they ran outside the 2.x cycle.
+`MEMRAIN_CYCLE=0` and `MEMRAIN_MAINTENANCE=1` stop the whole pass, those two
+steps included. The boot token sweep still runs on every start unless
+maintenance is on. A spend hold past its expiry stops counting against the
+daily caps on its own; only its row waits for the next pass.
 
 ### Upgrade
 
