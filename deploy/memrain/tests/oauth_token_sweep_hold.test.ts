@@ -26,7 +26,7 @@ for (const { name, open } of storageEngines(process.env.MEMRAIN_TEST_POSTGRES_UR
       [hash, family],
     );
     const job = (id: string, kind: string, status: string, principal: Record<string, string>) => db.storage.engine().query(
-      `INSERT INTO jobs (id, kind, status, payload) VALUES ($1, $2, $3, $4::jsonb)`,
+      `INSERT INTO jobs (id, kind, status, payload) VALUES ($1, $2, $3, $4::text::jsonb)`,
       [id, kind, status, JSON.stringify({ principal })],
     );
     const left = async () =>
