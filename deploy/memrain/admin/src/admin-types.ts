@@ -15,9 +15,7 @@ export interface FullStats {
     documents: number;
     pages: number;
     chunks: number;
-    facts?: number;
-    entities?: number;
-    links?: number;
+    links: number;
   } | null;
 }
 
@@ -40,38 +38,6 @@ export interface HealthIndicators {
   error_rate_24h: number;
 }
 
-export interface SpendGroup {
-  key: string | null;
-  calls: number;
-  usd: number;
-  input_tokens: number;
-  output_tokens: number;
-}
-
-export interface SpendReport {
-  since: string;
-  days: number;
-  total_usd: number;
-  calls: number;
-  by_model: SpendGroup[];
-  by_operation: SpendGroup[];
-  by_client: SpendGroup[];
-  outcomes: SpendGroup[];
-  latency?: { operation: string; calls: number; p50_ms: number; p95_ms: number }[];
-  coverage: {
-    unpriced_calls: number;
-    unpriced_models: string[];
-    no_usage_calls: number;
-    tokens_unrecorded_calls: number;
-  };
-  today: {
-    brain_usd: number;
-    brain_cap_usd: number | null;
-    cycle_usd: number;
-    cycle_cap_usd: number | null;
-  };
-}
-
 export interface AgentSpendRow {
   client_id: string;
   client_name: string | null;
@@ -88,34 +54,6 @@ export interface AgentUsageRow {
   usage: { requests_today: number; total_requests: number; last_used_at: string | null };
 }
 
-export interface OfficeSnapshot {
-  workers: { name: string; enabled: boolean; running: boolean }[];
-  clients: { id: string; display_name: string; last_seen: string | null }[];
-}
-
-export interface JobsWatch {
-  counts: { status: string; n: number }[];
-  recent: {
-    id: string;
-    kind: string;
-    status: string;
-    retry_count: number;
-    last_error: string | null;
-    created_at: string;
-    finished_at: string | null;
-  }[];
-}
-
-export interface FeedEvent {
-  agent: string;
-  operation: string;
-  latency_ms: number;
-  status: string;
-  timestamp: string;
-  kind?: "tool" | "job";
-  phase?: "start" | "end";
-}
-
 /**
  * Fraction of today's cap an agent has committed, or null when it has no cap.
  * Live reservations count, as they do when the budget is enforced.
@@ -125,42 +63,6 @@ export function capUse(row: AgentSpendRow): number | null {
   if (!Number.isFinite(cap) || cap <= 0) return null;
   const committed = (Number(row.spent_cents_today) + Number(row.pending_cents)) / 100;
   return Number.isFinite(committed) ? committed / cap : null;
-}
-
-// GET /admin/api/timeseries (core/admin-timeseries.ts). Per-day arrays hold one
-// entry per bucket, in bucket order; days are UTC.
-export interface TsTotals {
-  requests: number; errors: number; searches: number;
-  usd: number; priced_calls: number; unpriced_calls: number;
-  pages_created: number; page_edits: number; facts_added: number;
-}
-
-export interface AdminTimeseries {
-  days: 7 | 30 | 90;
-  since: string;
-  generated_at: string;
-  buckets: string[];
-  requests: { day: string; requests: number; errors: number }[];
-  searches: { day: string; searches: number }[];
-  spend: { day: string; usd: number; priced_calls: number; unpriced_calls: number; by_model: Record<string, number> }[];
-  spend_models: { key: string; label: string }[];
-  content: { day: string; pages_created: number; page_edits: number; facts_added: number }[];
-  corpus_now: { pages: number; facts: number };
-  top_tools: { operation: string; calls: number; errors: number }[];
-  top_agents: { id: string; agent: string; calls: number }[];
-  totals: TsTotals;
-  /** The equal-length window just before; searches cover completed days only. */
-  previous: TsTotals;
-  request_log: { db_enabled: boolean; rows_in_window: number; retention_days: number | null };
-  brain_cap_usd: number | null;
-}
-
-// GET /admin/api/graph/hubs (core/links.ts graphHubs)
-export interface GraphHubs {
-  hubs: { slug: string; title: string | null; type: string; in_degree: number; out_degree: number; degree: number }[];
-  linked_pages: number;
-  total_links: number;
-  total_pages: number;
 }
 
 // GET /admin/api/onboarding
@@ -175,59 +77,27 @@ export interface OnboardingStatus {
   };
 }
 
-// GET /admin/api/notifications/summary — the sidebar badge.
-export interface NotificationSummary {
-  open: number;
-  unread: number;
-  by_kind: Record<string, number>;
+// GET /admin/api/health-report (core/admin-health.ts)
+export interface HealthReport {
+  migrations: { head: number; applied: number; files_readable: boolean; pending: number[]; ahead: number[]; gaps: number[] };
+  housekeeping: { finished_at: string; errors: number } | null;
+  spend_today: { usd: number; cap_usd: number | null };
+  review: { write_gate_holds: number; row_holds: number; quarantined: number };
 }
 
-// One owner notification: a pointer to a problem, never its text.
-export interface AdminNotification {
-  id: number;
-  source_id: string;
-  kind: string;
-  ref: string;
-  link: string;
-  hint: string;
-  created_at: string;
-  reopened_at: string | null;
-  resolved_at: string | null;
-  read_at: string | null;
-  webhook_state: "off" | "pending" | "delivered" | "failed" | "cancelled";
-  webhook_attempts: number;
-  webhook_error: string | null;
-}
-
-// GET /admin/api/notifications
-export interface NotificationList {
-  summary: NotificationSummary;
-  webhook: { state: "off" | "refused" | "on" };
-  notifications: AdminNotification[];
-}
-
-export interface EvalCandidate {
-  id: number;
-  captured_at: string;
-  tool_name: string;
-  query: string;
-  scrubbed: boolean;
-  result_count: number;
-}
-
-export interface EvalLabelCounts {
-  dev: number;
-  sealed: number;
-  target: number;
-}
-
-export interface EvalCandidateList {
-  candidates: EvalCandidate[];
-  labels: EvalLabelCounts;
-  capture: { enabled: boolean; scrub: boolean };
-}
-
-export interface EvalPreview {
-  query: string;
-  results: { document_id: string; source_path: string; title: string | null; snippet: string }[];
+/**
+ * What waits for the operator, each with the command that works it. There is
+ * no review page in the panel: holds and quarantine are decided on the server.
+ */
+export function reviewItems(r: HealthReport["review"]): { label: string; command: string }[] {
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const out: { label: string; command: string }[] = [];
+  if (r.write_gate_holds > 0) {
+    out.push({ label: `${plural(r.write_gate_holds, "write held", "writes held")} by the write gate`, command: "memrain write-gate list" });
+  }
+  if (r.row_holds > 0) out.push({ label: `${plural(r.row_holds, "row held", "rows held")} by the write gate`, command: "memrain write-gate rows" });
+  if (r.quarantined > 0) {
+    out.push({ label: `${plural(r.quarantined, "page", "pages")} in quarantine, hidden from search`, command: "memrain quarantine list" });
+  }
+  return out;
 }

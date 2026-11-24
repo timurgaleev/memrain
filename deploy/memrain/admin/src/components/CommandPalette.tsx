@@ -4,18 +4,16 @@ import { describeError, useDebounced } from "../hooks.ts";
 import { parseResolveSlugs, parseSearch } from "../lib/tool-result.ts";
 import type { SearchHit, SlugHit } from "../lib/tool-result.ts";
 import { buildHash } from "../lib/route.ts";
-import { setPendingQuestion } from "../chat/pending.ts";
 
 // ⌘K: slug matches first (cheap, trigram), semantic search hits appended
-// below once the query is long enough, then one row that hands the typed
-// text to Ask as a question (it fills the box; nothing is sent or spent). Each group has its own abort
+// below once the query is long enough. Each group has its own abort
 // controller and sequence number, so a slow answer to an older query can
 // never overwrite a newer one, and appending search rows never moves the
 // highlighted row.
 
 interface Row {
   id: string;
-  group: "pages" | "search" | "ask";
+  group: "pages" | "search";
   slug: string | null;
   primary: string;
   secondary: string;
@@ -62,9 +60,6 @@ function useGroup<T>(
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [input, setInput] = useState("");
   const [active, setActive] = useState(0);
-  // With no page or search hit, Enter still opens full search; the Ask row is
-  // highlighted only once the operator moves to it.
-  const [askArmed, setAskArmed] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const opener = useRef<Element | null>(null);
@@ -93,10 +88,8 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         secondary: h.content.replace(/\s+/g, " ").slice(0, 120),
       });
     }
-    const q = input.trim();
-    if (q.length >= 3) out.push({ id: "ask", group: "ask", slug: null, primary: `Ask: “${q}”`, secondary: "Answer from your pages, with sources" });
     return out;
-  }, [pages.items, search.items, input]);
+  }, [pages.items, search.items]);
 
   useEffect(() => {
     if (open) {
@@ -112,19 +105,12 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   // The highlight follows the row it sits on, not its index, when slug
   // results change underneath it.
-  const askOnly = rows.length > 0 && rows.every((r) => r.group === "ask");
-  const activeId = askOnly && !askArmed ? undefined : rows[Math.min(active, Math.max(0, rows.length - 1))]?.id;
+  const activeId = rows[Math.min(active, Math.max(0, rows.length - 1))]?.id;
   useEffect(() => { setActive(0); }, [slugQuery]);
 
   if (!open) return null;
 
   const choose = (r: Row | undefined) => {
-    if (r?.group === "ask") {
-      setPendingQuestion(input.trim());
-      window.location.hash = buildHash({ name: "ask", param: null });
-      onClose();
-      return;
-    }
     if (!r || !r.slug) return;
     window.location.hash = buildHash({ name: "page", param: r.slug });
     onClose();
@@ -137,14 +123,13 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
       setActive((a) => Math.min(a + 1, Math.max(0, rows.length - 1)));
-      setAskArmed(true);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setActive((a) => Math.max(0, a - 1));
-      setAskArmed(true);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if ((rows.length === 0 || (askOnly && !askArmed)) && input.trim().length >= 3) {
+      // With no page or search hit, Enter still opens full search.
+      if (rows.length === 0 && input.trim().length >= 3) {
         window.location.hash = buildHash({ name: "search", param: input.trim() });
         onClose();
       } else {
@@ -163,7 +148,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   const typed = input.trim();
   const searchPaused = search.status === "error" && search.error.startsWith("Search paused");
-  const off = (r: Row) => !r.slug && r.group !== "ask";
+  const off = (r: Row) => !r.slug;
   const renderRow = (r: Row, i: number) => (
     <li
       key={r.id}
@@ -172,7 +157,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       aria-selected={r.id === activeId}
       aria-disabled={off(r)}
       className={`cmdk-row${r.id === activeId ? " active" : ""}${off(r) ? " cmdk-row-off" : ""}`}
-      onMouseMove={() => { setActive(i); setAskArmed(true); }}
+      onMouseMove={() => setActive(i)}
       onClick={() => choose(r)}
     >
       <span className="cmdk-primary">{r.primary}</span>
@@ -182,7 +167,6 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   );
   const pageRows = rows.filter((r) => r.group === "pages");
   const searchRows = rows.filter((r) => r.group === "search");
-  const askRows = rows.filter((r) => r.group === "ask");
 
   return (
     <div className="cmdk-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -198,7 +182,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           ref={inputRef}
           className="cmdk-input"
           value={input}
-          onChange={(e) => { setInput(e.target.value); setAskArmed(false); }}
+          onChange={(e) => setInput(e.target.value)}
           placeholder="Jump to a page or search the brain…"
           role="combobox"
           aria-expanded={rows.length > 0}
@@ -230,8 +214,6 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
               )}
               {search.status === "ok" && searchRows.length === 0 && <li className="cmdk-none" role="presentation">No other hits.</li>}
               {searchRows.map((r) => renderRow(r, rows.indexOf(r)))}
-              {askRows.length > 0 && <li className="cmdk-group" role="presentation">Ask</li>}
-              {askRows.map((r) => renderRow(r, rows.indexOf(r)))}
             </>
           )}
         </ul>

@@ -31,7 +31,7 @@ describe("routes", () => {
   it("treats login and enroll, and nothing else, as pre-auth", () => {
     expect(isPreAuthRoute("login")).toBe(true);
     expect(isPreAuthRoute("enroll")).toBe(true);
-    for (const n of ["overview", "security", "setup", "search"] as const) expect(isPreAuthRoute(n)).toBe(false);
+    for (const n of ["health", "security", "setup", "search"] as const) expect(isPreAuthRoute(n)).toBe(false);
   });
 });
 

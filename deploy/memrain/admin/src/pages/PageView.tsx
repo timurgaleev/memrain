@@ -4,12 +4,11 @@ import { describeError, useAsync, useNow } from "../hooks.ts";
 import type { AsyncState } from "../hooks.ts";
 import { Section } from "../components/Tile.tsx";
 import { Markdown } from "../components/Markdown.tsx";
-import { RadialGraph } from "../components/RadialGraph.tsx";
 import { Toast } from "../components/Toast.tsx";
 import type { ToastSpec } from "../components/Toast.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import {
-  parseGetLinks, parseGetTags, parseGraphNeighbors, parsePageGet, parsePageVersions, parseTagWrite,
+  parseGetLinks, parseGetTags, parsePageGet, parsePageVersions, parseTagWrite,
 } from "../lib/tool-result.ts";
 import type { LinkGroup } from "../lib/tool-result.ts";
 import { buildHash } from "../lib/route.ts";
@@ -65,7 +64,6 @@ function PageView({ slug, quote }: { slug: string; quote: string | null }) {
   const tags = useAsync(async (s) => parseGetTags(await tool("get_tags", { slug }, s)), [slug]);
   const links = useAsync(async (s) => parseGetLinks(await tool("get_links", { slug, limit: 200 }, s)), [slug]);
   const versions = useAsync(async (s) => parsePageVersions(await tool("page_versions", { slug, limit: 10 }, s)), [slug]);
-  const neighbors = useAsync(async (s) => parseGraphNeighbors(await tool("graph_neighbors", { slug, direction: "both", limit: 20 }, s)), [slug]);
   const [raw, setRaw] = useState(false);
   const [openVersion, setOpenVersion] = useState<number | null>(null);
   const body = useRef<HTMLDivElement>(null);
@@ -83,10 +81,6 @@ function PageView({ slug, quote }: { slug: string; quote: string | null }) {
       </nav>
       <div className="page-head">
         <h1 className="page-title">{title}</h1>
-        <div className="page-actions">
-          <a className="btn btn-secondary btn-sm" href={buildHash({ name: "entity", param: slug })}>Entity</a>
-          <a className="btn btn-secondary btn-sm" href={buildHash({ name: "graph", param: slug })}>Graph</a>
-        </div>
       </div>
 
       <div className="page-layout">
@@ -154,13 +148,6 @@ function PageView({ slug, quote }: { slug: string; quote: string | null }) {
           <section className="panel">
             <h2 className="panel-title">Tags</h2>
             <TagEditor slug={slug} state={tags} />
-          </section>
-
-          <section className="panel">
-            <h2 className="panel-title">Neighbors</h2>
-            <Section state={neighbors} isEmpty={(d) => d.length === 0} emptyText="No links to or from this page.">
-              {(edges) => <RadialGraph center={slug} edges={edges} mini />}
-            </Section>
           </section>
 
           <section className="panel">

@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "../api";
 import { withReauth } from "../lib/passkey-ceremony.ts";
-import { ClientMembers } from "./ClientMembers";
 import { ClientGrantEditor } from "../components/ClientGrant.tsx";
 import { copyText } from "../lib/clipboard.ts";
 
@@ -36,7 +35,6 @@ interface CredentialRow {
 export function CredentialsSection({ setError }: { setError: (s: string) => void }) {
   const [rows, setRows] = useState<CredentialRow[]>([]);
   const [modal, setModal] = useState<null | "api-key" | "client">(null);
-  const [members, setMembers] = useState<CredentialRow | null>(null);
   const [grantFor, setGrantFor] = useState<CredentialRow | null>(null);
 
   const load = () =>
@@ -132,19 +130,14 @@ export function CredentialsSection({ setError }: { setError: (s: string) => void
                       </button>
                       <button className="btn btn-secondary" style={{ fontSize: 12, marginRight: 6 }} onClick={() => setTtl(r)}>TTL</button>
                       {(r.grant_types ?? []).includes("authorization_code") && (
-                        <>
-                          <button
-                            className="btn btn-secondary"
-                            style={{ fontSize: 12, marginRight: 6 }}
-                            title={(r.redirect_uris ?? []).join("\n") || "no redirect URIs"}
-                            onClick={() => setRedirects(r)}
-                          >
-                            Redirects
-                          </button>
-                          <button className="btn btn-secondary" style={{ fontSize: 12, marginRight: 6 }} onClick={() => setMembers(r)}>
-                            Members
-                          </button>
-                        </>
+                        <button
+                          className="btn btn-secondary"
+                          style={{ fontSize: 12, marginRight: 6 }}
+                          title={(r.redirect_uris ?? []).join("\n") || "no redirect URIs"}
+                          onClick={() => setRedirects(r)}
+                        >
+                          Redirects
+                        </button>
                       )}
                     </>
                   )}
@@ -162,15 +155,6 @@ export function CredentialsSection({ setError }: { setError: (s: string) => void
       {modal === "client" && <RegisterClientModal onClose={() => setModal(null)} onDone={load} setError={setError} />}
       {grantFor && (
         <ClientGrantEditor clientId={grantFor.id} onClose={() => setGrantFor(null)} onSaved={() => void load()} />
-      )}
-      {members && (
-        <ClientMembers
-          clientId={members.id}
-          clientName={members.name}
-          tenantMode={members.tenant_mode}
-          onClose={() => setMembers(null)}
-          setError={setError}
-        />
       )}
     </>
   );

@@ -44,9 +44,8 @@ export async function tool(name: string, args: Record<string, unknown>, signal?:
   }
 }
 
-// memrain A2 endpoints (http/admin-api.ts). Separate stats/health/oauth-client
-// endpoints collapse onto memrain's full-stats + credentials surface; the
-// feed/calibration endpoints (B3) are added with their pages.
+// memrain admin endpoints (http/admin-api.ts): the Health page's stats and
+// report, and the credentials surface of the Agents page.
 export const api = {
   login: (token: string) => apiFetch("/admin/login", { method: "POST", body: JSON.stringify({ token }) }),
   signOutEverywhere: () => apiFetch("/admin/api/sign-out-everywhere", { method: "POST" }),
@@ -56,6 +55,7 @@ export const api = {
   dismissResume: () => apiFetch("/admin/api/dismiss-resume", { method: "POST" }),
   // The corpus counts scan whole tables; the 30 s health poll leaves them out.
   fullStats: (counts = true) => apiFetch(counts ? "/admin/api/full-stats" : "/admin/api/full-stats?counts=0"),
+  healthReport: () => apiFetch("/admin/api/health-report"),
   agents: () => apiFetch("/admin/api/agents"),
   // Minting and re-pointing credentials need a passkey step-up: these keep the
   // typed reauth_required code so callers can wrap them in withReauth.
@@ -69,15 +69,6 @@ export const api = {
     apiFetch("/admin/api/revoke-client", { method: "POST", body: JSON.stringify({ client_id }) }),
   setRedirectUris: (client_id: string, redirect_uris: string[], expected_revision?: number) =>
     sessionCall<unknown>("/admin/api/set-redirect-uris", post({ client_id, redirect_uris, ...(expected_revision !== undefined ? { expected_revision } : {}) })),
-  enrollments: (client_id: string) =>
-    apiFetch(`/admin/api/enrollments?client_id=${encodeURIComponent(client_id)}`),
-  issueEnrollment: (payload: Record<string, unknown>) => sessionCall<unknown>("/admin/api/enrollments", post(payload)),
-  revokeEnrollment: (id: string) =>
-    apiFetch("/admin/api/revoke-enrollment", { method: "POST", body: JSON.stringify({ id }) }),
-  revokeGrant: (id: string) =>
-    apiFetch("/admin/api/revoke-grant", { method: "POST", body: JSON.stringify({ id }) }),
-  requests: (page = 1, agent?: string) =>
-    apiFetch(`/admin/api/requests?page=${page}${agent ? `&agent=${encodeURIComponent(agent)}` : ""}`),
   // /health answers 503 with {ok:false} while degraded; that body is still
   // what the status strip shows.
   health: () =>
@@ -88,26 +79,8 @@ export const api = {
     }),
   stats: () => apiFetch("/admin/api/stats"),
   healthIndicators: () => apiFetch("/admin/api/health-indicators"),
-  spendReport: (days: number) => apiFetch(`/admin/api/spend/report?days=${days}`),
   agentsSpend: () => apiFetch("/admin/api/agents/spend"),
-  jobsWatch: (signal?: AbortSignal) => apiFetch("/admin/api/jobs/watch", signal ? { signal } : undefined),
-  office: (signal?: AbortSignal) => apiFetch("/admin/api/office", signal ? { signal } : undefined),
-  calibrationProfile: () => apiFetch("/admin/api/calibration/profile"),
-  timeseries: (days: number, signal?: AbortSignal) => apiFetch(`/admin/api/timeseries?days=${days}`, signal ? { signal } : undefined),
-  graphHubs: (limit = 20, signal?: AbortSignal) => apiFetch(`/admin/api/graph/hubs?limit=${limit}`, signal ? { signal } : undefined),
   onboarding: (signal?: AbortSignal) => apiFetch("/admin/api/onboarding", signal ? { signal } : undefined),
-  notifications: (all: boolean, signal?: AbortSignal) =>
-    apiFetch(all ? "/admin/api/notifications?all=1" : "/admin/api/notifications", signal ? { signal } : undefined),
-  notificationSummary: (signal?: AbortSignal) => apiFetch("/admin/api/notifications/summary", signal ? { signal } : undefined),
-  markNotificationsRead: (ids: number[] | "all") =>
-    apiFetch("/admin/api/notifications/read", { method: "POST", body: JSON.stringify(ids === "all" ? { all: true } : { ids }) }),
-  evalCandidates: (signal?: AbortSignal) => apiFetch("/admin/api/eval/candidates", signal ? { signal } : undefined),
-  evalPreview: (target: { candidate_id: number } | { query: string }) =>
-    apiFetch("/admin/api/eval/preview", { method: "POST", body: JSON.stringify(target) }),
-  evalLabel: (payload: Record<string, unknown>) =>
-    apiFetch("/admin/api/eval/label", { method: "POST", body: JSON.stringify(payload) }),
-  evalDismiss: (candidate_id: number) =>
-    apiFetch("/admin/api/eval/dismiss", { method: "POST", body: JSON.stringify({ candidate_id }) }),
 };
 
 export { ApiError, expectOk, passkeyFetch } from "./lib/passkey-fetch.ts";

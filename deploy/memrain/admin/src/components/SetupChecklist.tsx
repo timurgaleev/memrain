@@ -4,7 +4,7 @@ import { describeError, useAsync, useNow } from "../hooks.ts";
 import type { OnboardingStatus } from "../admin-types.ts";
 import { buildSnippets, checklistProgress } from "../lib/onboarding.ts";
 import { nextTab } from "../lib/tabs.ts";
-import { browserStorage } from "../lib/range.ts";
+import { browserStorage } from "../lib/browser-storage.ts";
 import { fmtAgo } from "../lib/format.ts";
 import { CopyField } from "./CopyField.tsx";
 

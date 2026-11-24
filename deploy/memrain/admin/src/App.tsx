@@ -1,34 +1,16 @@
 import { useState, useEffect, useCallback, useId } from "react";
 import { LoginPage } from "./pages/Login";
-import { OverviewPage } from "./pages/Overview.tsx";
-import { OfficePage } from "./pages/Office.tsx";
-import { AskPage } from "./pages/Ask.tsx";
+import { HealthPage } from "./pages/Health.tsx";
 import { SearchPage } from "./pages/Search.tsx";
 import { PagesPage } from "./pages/Pages.tsx";
 import { PageViewPage } from "./pages/PageView.tsx";
-import { EntityPage } from "./pages/Entity.tsx";
-import { GraphPage } from "./pages/Graph.tsx";
-import { TimelinePage } from "./pages/Timeline.tsx";
-import { SpendPage } from "./pages/Spend.tsx";
 import { AgentsPage } from "./pages/Agents";
-import { RequestLogPage } from "./pages/RequestLog";
-import { JobsWatchPage } from "./pages/JobsWatch";
-import { CalibrationPage } from "./pages/Calibration";
-import { GlossaryPage } from "./pages/Glossary.tsx";
 import { SetupPage } from "./pages/Setup.tsx";
 import { EnrollPage } from "./pages/Enroll.tsx";
 import { SecurityPage } from "./pages/Security.tsx";
-import { NotificationsPage } from "./pages/Notifications.tsx";
-import { LabellingPage } from "./pages/Labelling.tsx";
-import { ConnectionsPage } from "./pages/Connections.tsx";
-import { AutonomyPage } from "./pages/Autonomy.tsx";
-import { ApprovalsPage } from "./pages/Approvals.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { api, passkeyApi } from "./api";
 import type { AuthEvent } from "./api";
-import type { NotificationSummary } from "./admin-types.ts";
-import { useAsync } from "./hooks.ts";
-import { badgeText } from "./lib/notifications.ts";
 import { eventLabel, isPreAuthRoute, listOf, passkeyErrorCopy } from "./lib/passkey.ts";
 import { buildHash, parseHash } from "./lib/route.ts";
 import type { Route, RouteName } from "./lib/route.ts";
@@ -47,38 +29,15 @@ const NAV: { section: string; items: { name: RouteName; label: string; also?: Ro
   {
     section: "Brain",
     items: [
-      { name: "overview", label: "Overview" },
-      { name: "ask", label: "Ask" },
-      { name: "office", label: "Office" },
+      { name: "health", label: "Health" },
       { name: "search", label: "Search" },
-      { name: "pages", label: "Pages", also: ["page", "entity"] },
-      { name: "graph", label: "Graph" },
-      { name: "timeline", label: "Timeline" },
+      { name: "pages", label: "Pages", also: ["page"] },
     ],
   },
   {
-    section: "Operations",
+    section: "Access",
     items: [
-      { name: "notifications", label: "Notifications" },
-      { name: "spend", label: "Spend" },
-      { name: "jobs", label: "Jobs" },
-      { name: "log", label: "Request Log" },
       { name: "agents", label: "Agents" },
-      { name: "calibration", label: "Calibration" },
-      { name: "labelling", label: "Labelling" },
-    ],
-  },
-  {
-    section: "Automation",
-    items: [
-      { name: "connections", label: "Connections" },
-      { name: "autonomy", label: "Autonomy" },
-      { name: "approvals", label: "Approvals" },
-    ],
-  },
-  {
-    section: "Account",
-    items: [
       { name: "security", label: "Security" },
     ],
   },
@@ -86,7 +45,6 @@ const NAV: { section: string; items: { name: RouteName; label: string; also?: Ro
     section: "Help",
     items: [
       { name: "setup", label: "Setup guide" },
-      { name: "glossary", label: "Glossary" },
     ],
   },
 ];
@@ -151,10 +109,6 @@ export function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [notices, setNotices] = useState<AuthEvent[]>([]);
   const signedIn = !isPreAuthRoute(page);
-  const notificationSummary = useAsync<NotificationSummary>(
-    (signal) => api.notificationSummary(signal), [], { intervalMs: 60_000, enabled: signedIn },
-  );
-  const unreadBadge = badgeText(notificationSummary.data);
 
   useEffect(() => {
     const onHash = () => {
@@ -222,10 +176,10 @@ export function App() {
   };
 
   if (page === "login") {
-    return <LoginPage onLogin={() => navigate("overview")} />;
+    return <LoginPage onLogin={() => navigate("health")} />;
   }
   if (page === "enroll") {
-    return <EnrollPage onDone={() => navigate("overview")} />;
+    return <EnrollPage onDone={() => navigate("health")} />;
   }
 
   // The click IS the consent: it mints a one-time approval bound to this
@@ -280,7 +234,7 @@ export function App() {
         <button className="icon-btn" aria-label="Open navigation" aria-expanded={drawerOpen} aria-controls="sidebar" onClick={() => setDrawerOpen(true)}>
           <MenuIcon />
         </button>
-        <a className="topbar-logo" href="#overview"><BrandMark />memrain</a>
+        <a className="topbar-logo" href="#health"><BrandMark />memrain</a>
         <button className="icon-btn" aria-label="Search the brain" onClick={() => setPaletteOpen(true)}>
           <SearchIcon />
         </button>
@@ -306,9 +260,6 @@ export function App() {
                   aria-current={current ? "page" : undefined}
                 >
                   {item.label}
-                  {item.name === "notifications" && unreadBadge !== "" && (
-                    <span className="badge badge-write" style={{ marginLeft: 8 }} aria-label={`${unreadBadge} unread`}>{unreadBadge}</span>
-                  )}
                 </a>
               );
             })}
@@ -381,28 +332,13 @@ export function App() {
             )}
           </div>
         )}
-        {page === "overview" && <OverviewPage />}
-        {page === "ask" && <AskPage threadId={route.param} />}
-        {page === "office" && <OfficePage />}
+        {page === "health" && <HealthPage />}
         {page === "search" && <SearchPage query={route.param} />}
         {page === "pages" && <PagesPage />}
         {page === "page" && <PageViewPage slug={route.param} quote={route.quote ?? null} />}
-        {page === "entity" && <EntityPage slug={route.param} />}
-        {page === "graph" && <GraphPage slug={route.param} />}
-        {page === "timeline" && <TimelinePage param={route.param} />}
-        {page === "spend" && <SpendPage />}
         {page === "agents" && <AgentsPage />}
-        {page === "log" && <RequestLogPage />}
-        {page === "jobs" && <JobsWatchPage />}
-        {page === "calibration" && <CalibrationPage />}
-        {page === "glossary" && <GlossaryPage term={route.param} />}
         {page === "setup" && <SetupPage />}
         {page === "security" && <SecurityPage />}
-        {page === "notifications" && <NotificationsPage param={route.param} onChange={notificationSummary.reload} />}
-        {page === "labelling" && <LabellingPage />}
-        {page === "connections" && <ConnectionsPage />}
-        {page === "autonomy" && <AutonomyPage />}
-        {page === "approvals" && <ApprovalsPage />}
       </main>
       <CommandPalette open={paletteOpen} onClose={closePalette} />
     </div>

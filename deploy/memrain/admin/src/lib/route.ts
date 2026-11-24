@@ -2,17 +2,13 @@
 // the first "/". Kept free of DOM and React so the root test runner can load it.
 
 export type RouteName =
-  | "login" | "overview" | "ask" | "office" | "search" | "pages" | "page" | "entity" | "graph"
-  | "timeline" | "spend" | "agents" | "log" | "jobs" | "calibration" | "glossary" | "setup"
-  | "enroll" | "security" | "notifications" | "connections" | "autonomy" | "approvals" | "labelling";
+  | "login" | "health" | "search" | "pages" | "page" | "agents" | "setup" | "enroll" | "security";
 
 /** `quote` is a passage a page link asks the page view to highlight (`#page/<slug>?q=<quote>`). */
 export interface Route { name: RouteName; param: string | null; quote?: string }
 
 const NAMES: ReadonlySet<string> = new Set<RouteName>([
-  "login", "overview", "ask", "office", "search", "pages", "page", "entity", "graph",
-  "timeline", "spend", "agents", "log", "jobs", "calibration", "glossary", "setup",
-  "enroll", "security", "notifications", "connections", "autonomy", "approvals", "labelling",
+  "login", "health", "search", "pages", "page", "agents", "setup", "enroll", "security",
 ]);
 
 export function parseHash(hash: string): Route {
@@ -21,8 +17,9 @@ export function parseHash(hash: string): Route {
   const cut = s.indexOf("/");
   const head = cut === -1 ? s : s.slice(0, cut);
   let rest = cut === -1 ? "" : s.slice(cut + 1);
-  // `#dashboard` bookmarks predate the Overview page.
-  const name: RouteName = head === "" || head === "dashboard" || !NAMES.has(head) ? "overview" : (head as RouteName);
+  // An unknown name, `#overview` and `#dashboard` bookmarks included, opens Health.
+  if (!NAMES.has(head)) return { name: "health", param: null };
+  const name = head as RouteName;
   // A page link's quote follows the first raw "?": buildHash encodes any "?" in the slug.
   let quote = "";
   const ask = name === "page" ? rest.indexOf("?") : -1;

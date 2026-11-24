@@ -13,13 +13,8 @@ import {
   ToolShapeError,
   normalizeToolResponse,
   pageHitSlug,
-  parseChronicle,
-  parseEntityRecall,
-  parseEntityTimeline,
-  parseFacts,
   parseGetLinks,
   parseGetTags,
-  parseGraphNeighbors,
   parsePageGet,
   parsePageList,
   parsePageVersions,
@@ -33,7 +28,7 @@ import { capUse } from "../admin/src/admin-types.ts";
 describe("route", () => {
   it("round-trips params that need encoding", () => {
     for (const param of ["people/alice", "a b c", "100%", "naïve/ünïcødé", "日本/語"]) {
-      for (const name of ["page", "entity", "graph", "search"] as const) {
+      for (const name of ["page", "search"] as const) {
         const hash = buildHash({ name, param });
         expect(parseHash(hash)).toEqual({ name, param });
       }
@@ -42,13 +37,13 @@ describe("route", () => {
     expect(parseHash("#page/people%2Falice")).toEqual({ name: "page", param: "people/alice" });
   });
 
-  it("maps empty, dashboard and unknown routes to overview", () => {
-    expect(parseHash("")).toEqual({ name: "overview", param: null });
-    expect(parseHash("#")).toEqual({ name: "overview", param: null });
-    expect(parseHash("#dashboard")).toEqual({ name: "overview", param: null });
-    expect(parseHash("#/dashboard")).toEqual({ name: "overview", param: null });
-    expect(parseHash("#nope")).toEqual({ name: "overview", param: null });
-    expect(parseHash("#/spend")).toEqual({ name: "spend", param: null });
+  it("maps empty, dashboard and unknown routes to health", () => {
+    expect(parseHash("")).toEqual({ name: "health", param: null });
+    expect(parseHash("#")).toEqual({ name: "health", param: null });
+    expect(parseHash("#dashboard")).toEqual({ name: "health", param: null });
+    expect(parseHash("#/dashboard")).toEqual({ name: "health", param: null });
+    expect(parseHash("#nope")).toEqual({ name: "health", param: null });
+    expect(parseHash("#/agents")).toEqual({ name: "agents", param: null });
   });
 
   it("returns a null param when decoding fails", () => {
@@ -246,25 +241,6 @@ describe("normalizeToolResponse", () => {
 });
 
 describe("tool-result parsers", () => {
-  const fact = {
-    id: 3,
-    entity_slug: "people/alice",
-    fact: "likes graphs",
-    confidence: 0.9,
-    source_slug: null,
-    written_by: "op",
-    written_at: "2026-10-01T00:00:00Z",
-    kind: "fact",
-    notability: null,
-    valid_from: null,
-    valid_until: null,
-    visibility: "private",
-    superseded_by: null,
-    consolidated_into: null,
-    context: null,
-    attributed_to: null,
-    forgotten_at: null,
-  };
   const page = {
     slug: "people/alice",
     type: "person",
@@ -278,7 +254,6 @@ describe("tool-result parsers", () => {
     source_id: "default",
   };
   const link = { id: 1, source_slug: "a", target_slug: "b", type: "mentions", inferred_confidence: 0.5, written_at: "2026-10-01" };
-  const event = { date: "2026-10-01", summary: "shipped", detail: null, slug: "notes/a", event_slug: null, kind: null };
 
   it("pageHitSlug reads page:// paths only", () => {
     expect(pageHitSlug("page://a/b")).toBe("a/b");
@@ -309,13 +284,6 @@ describe("tool-result parsers", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]?.links).toHaveLength(1);
     expect(parseGetTags({ ok: true, slug: "a", tags: ["x", 7, "y"] })).toEqual(["x", "y"]);
-    expect(parseGraphNeighbors({ ok: true, slug: "a", links: [{ ...link, direction: "outbound" }] })).toHaveLength(1);
-    const recall = parseEntityRecall({ ok: true, slug: "people/alice", page, facts: [fact], timeline: [] });
-    expect(recall.facts).toHaveLength(1);
-    expect(parseFacts({ ok: true, entity_slug: null, facts: [fact] }, "facts")).toHaveLength(1);
-    expect(parseFacts({ ok: true, supersessions: [fact] }, "supersessions")).toHaveLength(1);
-    expect(parseEntityTimeline({ ok: true, slug: "a", timeline: [{ id: 1, slug: "a", occurred_at: "t", event: "e", detail: null, source_label: null, written_at: "t" }] })).toHaveLength(1);
-    expect(parseChronicle({ ok: true, since: "2026-10-01", events: [event] })).toHaveLength(1);
     expect(parseTagWrite({ ok: true, slug: "a", tag: "t" })).toEqual({ slug: "a", tag: "t" });
   });
 
@@ -328,15 +296,6 @@ describe("tool-result parsers", () => {
       expect(parsePageVersions(d)).toEqual([]);
       expect(parseGetLinks(d)).toEqual([]);
       expect(parseGetTags(d)).toEqual([]);
-      expect(parseGraphNeighbors(d)).toEqual([]);
-      expect(parseFacts(d, "facts")).toEqual([]);
-      expect(parseFacts(d, "supersessions")).toEqual([]);
-      expect(parseEntityTimeline(d)).toEqual([]);
-      expect(parseChronicle(d)).toEqual([]);
-      const er = parseEntityRecall(d);
-      expect(er.page).toBeNull();
-      expect(er.facts).toEqual([]);
-      expect(er.timeline).toEqual([]);
       expect(() => parsePageGet(d)).not.toThrow();
       expect(() => parseTagWrite(d)).not.toThrow();
     }
