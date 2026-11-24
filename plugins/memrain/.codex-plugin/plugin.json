@@ -1,6 +1,6 @@
 {
   "name": "memrain",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "description": "Connect Codex to your Memrain memory over MCP: search, read and write pages and links shared across sessions, plus skills to connect, look things up and save them.",
   "author": { "name": "Timur Galeev" },
   "license": "MIT",

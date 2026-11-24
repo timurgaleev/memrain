@@ -48,6 +48,8 @@ keep their names.
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-11-24
+
 Memrain Lite: one person's brain with 29 MCP tools. Pages, links, tags, hybrid search, the safety checks and the credentials stay; everything else goes. The schema does not change, and rows of the removed features stay in the database untouched. Read [UPGRADING.md](UPGRADING.md#0260) before deploying, and stay on 0.25.x if you use facts, connectors, Ask or team members.
 
 ### Removed
