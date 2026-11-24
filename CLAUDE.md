@@ -49,8 +49,8 @@ the legacy SQL functions (`memex_fact_claim_key` and friends), the
 alias, the `memexResponseVersion` response field, the `memex_admin`,
 `memex_return_to` and `memex_approval` cookies and parameters, the `memex-cycle`
 and `memex:fact-withdraw` lock ids, the `memex_rds_*` and `memex_postgres_url`
-terraform outputs, the `memex` secret prefix used when `SECRETS_PREFIX` is
-unset, and the "set up memex" / "update memex" skill triggers. Existing
+terraform outputs, and the `memex` secret prefix used when `SECRETS_PREFIX` is
+unset. Existing
 installs and stored data depend on them. Do not remove or rename them outside
 an announced release (see UPGRADING.md and the CONFIGURATION.md "Legacy names"
 section).
@@ -70,14 +70,11 @@ lost disk data is high.
 ## Conventions
 
 ### AWS model selection
-- Memrain uses Bedrock for embeddings (Amazon Titan Text Embeddings v2)
-  and the Bedrock Claude Haiku calls behind intent classification / query
-  expansion / friction-propose. Answer *synthesis* is the MCP client's
-  job (Claude Code etc.) — Memrain is a retrieval brain, not a chat agent.
-- `var.bedrock_model_id` surfaces a configured default in
-  `terraform output bedrock_model`.
-- Switching to a new model family requires widening the Bedrock invoke
-  permissions in `terraform/iam.tf` (region- and model-scoped).
+- Memrain calls Bedrock only for embeddings (Amazon Titan Text Embeddings
+  v2). Search uses no LLM; answer synthesis is the MCP client's job.
+- The instance role may invoke the Titan embedding model only
+  (`terraform/iam.tf`); widen it there, region- and model-scoped, if that
+  ever changes.
 
 ### Secret naming
 - Every secret is prefixed by `var.secrets_prefix` (default: `memrain`,
@@ -135,7 +132,7 @@ for this repo:
      (`env -C deploy/memrain bun run test:sharded`) — not just the touched
      file. The local suite is the authoritative gate (operator decision:
      local is faster and is what we trust; see below). It MUST go through
-     `test:sharded`: a bare `bun test` over all 324 files exhausts the
+     `test:sharded`: a bare `bun test` over all test files exhausts the
      PGLite WASM heaps mid-run and reports hundreds of phantom failures.
      `test:changed` (files affected since `origin/main`) is for the edit
      loop only; it does not replace this run.
