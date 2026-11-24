@@ -13,6 +13,7 @@
  */
 import { adminTimeseries, AGENT_CALL, NOT_PANEL_ROW, type TimeseriesDays } from "../core/admin-timeseries.ts";
 import { onboardingSteps, type OnboardingStatus } from "../core/admin-onboarding.ts";
+import { adminHealthReport } from "../core/admin-health.ts";
 import { graphHubs } from "../core/links.ts";
 import { requestLogDbEnabled } from "../mcp/request-log-db.ts";
 import { requestLogRetentionDays } from "../core/request-log-retention.ts";
@@ -339,6 +340,16 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
       return Response.json({ health, counts: counts.rows[0] ?? null });
     } catch (e) {
       return serverError("full-stats", e);
+    }
+  }
+
+  // GET /admin/api/health-report — schema, housekeeping, today's spend and the
+  // review queues the CLI works (Health page).
+  if (p === "/admin/api/health-report" && req.method === "GET") {
+    try {
+      return Response.json(await adminHealthReport(engine), { headers: { "Cache-Control": "no-store" } });
+    } catch (e) {
+      return serverError("health-report", e);
     }
   }
 
