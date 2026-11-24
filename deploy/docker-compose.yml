@@ -2,7 +2,7 @@
 #
 # Required env (from a `.env` file passed via --env-file):
 #   EFS_MOUNT     host path of the mounted EFS data tree
-#   EFS_REPO      host path of the git checkout for the code chunkers
+#   EFS_REPO      host path of the git checkout (read-only mount)
 #   REPO_DIR      path of the repo checkout on the host (default: /opt/memrain)
 #   AWS_REGION    AWS region (default: eu-west-1)
 #   AWS_PROFILE   AWS CLI profile (default: default)
@@ -28,14 +28,13 @@ services:
     restart: unless-stopped
     logging: *bounded-logs
     # init: a real PID 1 forwards SIGTERM to bun and reaps children.
-    # stop_grace_period: room for the jobs worker to drain and hand back its
-    # running job (MEMRAIN_WORKER_DRAIN_MS) before Docker sends SIGKILL.
+    # stop_grace_period: room for an in-flight request or housekeeping step to
+    # finish before Docker sends SIGKILL.
     init: true
     stop_grace_period: 30s
-    # Cap container memory so a runaway (a cycle phase has hit 3.48 GB RSS on
-    # the ~3.7 GB host) is a clean cgroup OOM-kill + restart of THIS container,
-    # not a kernel global-OOM that kills an arbitrary process (Postgres client,
-    # cloudflared) and strands the cycle lock. Tunable via the host .env; leaves
+    # Cap container memory so a runaway is a clean cgroup OOM-kill + restart
+    # of THIS container, not a kernel global-OOM that kills an arbitrary
+    # process (Postgres client, cloudflared) and strands the housekeeping lock. Tunable via the host .env; leaves
     # headroom for cloudflared + the system on a small instance.
     mem_limit: ${MEMRAIN_MEM_LIMIT:-${MEMEX_MEM_LIMIT:-3000m}}
     security_opt:
@@ -63,26 +62,17 @@ services:
         target: /home/bun/.memex
         bind:
           create_host_path: false
-      # Read-only mount of operator-provided content for the indexer to
-      # sweep (markdown notes, archived conversations, etc.).
+      # Read-only mount of operator-provided content the `index` tool and
+      # `memrain import` may read (markdown notes, archived conversations).
       - type: bind
         source: ${EFS_MOUNT}/workspace/memory
         target: /memory
         read_only: true
         bind:
           create_host_path: false
-      # Brain-resident skillpack (list_skills / get_skill). The image copies
-      # only deploy/memrain, so the pack rides a read-only mount instead.
-      - type: bind
-        source: ./skills
-        target: /skills
-        read_only: true
-        bind:
-          create_host_path: false
-      # Read-only access to the repo checkout for the code chunkers.
-      # bootstrap.sh clones ${EFS_REPO} alongside the EFS mount. The directory
-      # must exist; an empty one makes the serve.ts boot WARN "0 indexable
-      # files" and continue, so a missing checkout doesn't take the brain down.
+      # Read-only access to the repo checkout (an `index` path root).
+      # bootstrap.sh clones ${EFS_REPO} alongside the EFS mount; the directory
+      # must exist.
       - type: bind
         source: ${EFS_REPO:?EFS_REPO must be set}
         target: /repo-source
@@ -100,8 +90,6 @@ services:
           create_host_path: false
     environment:
       - AWS_REGION=${AWS_REGION:?AWS_REGION must be set}
-      # Brain-resident skillpack location (see the ./skills volume above).
-      - MEMRAIN_SKILLS_DIR=/skills
       - AWS_PROFILE=${AWS_PROFILE:-default}
       - SECRETS_PREFIX=${SECRETS_PREFIX:-memex}
       - HOME=/home/bun
@@ -109,161 +97,56 @@ services:
       # (entrypoint exit 78, and the factory for `docker exec` commands).
       - MEMRAIN_REQUIRE_POSTGRES=${MEMRAIN_REQUIRE_POSTGRES:-${MEMEX_REQUIRE_POSTGRES:-}}
       # Quiescence switches, env-only. Empty = unset = today's behaviour.
-      # MEMRAIN_MAINTENANCE=1 turns off the boot code sweep, the jobs worker,
-      # the cycle and the boot OAuth token sweep, and makes deploy.sh hold
-      # ingress; each of the other three =0 turns off just its own work.
+      # MEMRAIN_MAINTENANCE=1 turns off the hourly housekeeping and the boot
+      # OAuth token sweep, and makes deploy.sh hold ingress. MEMRAIN_CYCLE=0
+      # turns off housekeeping alone. The other two are the 2.x worker and
+      # code-sweep switches, still accepted so an existing .env parses the same.
       - MEMRAIN_MAINTENANCE=${MEMRAIN_MAINTENANCE:-${MEMEX_MAINTENANCE:-}}
       - MEMRAIN_BOOT_CODE_SWEEP=${MEMRAIN_BOOT_CODE_SWEEP:-${MEMEX_BOOT_CODE_SWEEP:-}}
       - MEMRAIN_JOBS_WORKER=${MEMRAIN_JOBS_WORKER:-${MEMEX_JOBS_WORKER:-}}
       - MEMRAIN_CYCLE=${MEMRAIN_CYCLE:-${MEMEX_CYCLE:-}}
-      # Filesystem-watch recipes are paused: pages are DB-canonical.
-      # `/memory` is mounted read-only above so the search recipe can
-      # still see archived content alongside DB-canonical pages.
+      # Paths the `index` tool may read a file from. `/memory` is the
+      # read-only operator content mounted above; `/repo-source` the checkout.
       - MEMRAIN_VAULT_PATHS=/memory
-      - MEMRAIN_SWEEP_DELAY_MS=50
-      - MEMRAIN_SWEEP_MAX_FILES=1000
-      # Code chunkers: graph-only call/def/ref index over the stack
-      # repo. Re-swept on container boot (mtime-skip). Add more paths
-      # CSV-style to index sibling repos.
       - MEMRAIN_CODE_PATHS=/repo-source
-      - MEMRAIN_CODE_SWEEP_DELAY_MS=20
-      # 6-phase cycle every 6h. Re-embeds docs older than 30d. The
-      # configured quiet-hours window skips the costly embed-stale
-      # phase so heavyweight ingest doesn't run during quiet hours.
-      - MEMRAIN_DREAM_INTERVAL_S=21600
-      - MEMRAIN_DREAM_STALE_DAYS=30
-      # Per-cycle-phase wall-clock cap so a hung phase (e.g. a Bedrock call with
-      # no client timeout) can't wedge the whole tick and strand the cycle lock.
-      # Default 15min; lower via the host .env for faster recovery on a small
-      # instance (phases are individually bounded — embed-stale caps at 50/cycle).
-      - MEMRAIN_CYCLE_PHASE_TIMEOUT_MS=${MEMRAIN_CYCLE_PHASE_TIMEOUT_MS:-${MEMEX_CYCLE_PHASE_TIMEOUT_MS:-900000}}
-      # Operator escape hatch — CSV of cycle phases to skip every tick, to isolate
-      # a phase with a live defect without losing the rest of the cycle (set in
-      # the host .env, default none).
+      # CSV of 2.x cycle phase names whose housekeeping steps stay off
+      # (`purge` also covers retention), set in the host .env; default none.
       - MEMRAIN_CYCLE_SKIP_PHASES=${MEMRAIN_CYCLE_SKIP_PHASES:-${MEMEX_CYCLE_SKIP_PHASES:-}}
-      # Opt-in auto-think (default OFF). =1 appends the Claude Haiku synthesis
-      # chain (atoms→concepts→takes→grade→calibration → the isolated synth_* store,
-      # read via list_concepts/list_takes) to QUIET-HOURS ticks only. Count-capped
-      # (MEMRAIN_DREAM_SYNTHESIS_MAX_DOCS/_MAX_CONCEPTS/_MAX_TAKES/_MIN_GRADED), Claude
-      # Haiku via Bedrock, idempotent. Leave unset to keep the brain pure-retrieval.
-      - MEMRAIN_DREAM_SYNTHESIS=${MEMRAIN_DREAM_SYNTHESIS:-${MEMEX_DREAM_SYNTHESIS:-}}
-      # Opt-in per-source (per-tenant) doctor warn check (default OFF, free). =1
-      # makes `doctor` WARN when any single source has chunks but zero embeddings.
-      - MEMRAIN_DOCTOR_PER_SOURCE=${MEMRAIN_DOCTOR_PER_SOURCE:-${MEMEX_DOCTOR_PER_SOURCE:-}}
       # Opt-in multi-tenant fail-closed read/write floor (default OFF). =1 makes an
       # authenticated PUBLIC principal with no source grant read/write nothing
       # instead of the redacted whole brain. The static bearer (no authInfo) is
-      # unaffected. Flip once a real remote OAuth tenant with a grant exists.
+      # unaffected.
       - MEMRAIN_TENANT_FAIL_CLOSED=${MEMRAIN_TENANT_FAIL_CLOSED:-${MEMEX_TENANT_FAIL_CLOSED:-}}
       # Public-ingress writes (opt-in, default OFF). When =1, the public /mcp
       # path (static bearer or OAuth) may call the CONSTRUCTIVE write tools
-      # (index, page_put, page_append, add_fact, add_timeline_event, add_tag,
-      # link). Destructive ops + privacy-sensitive reads stay internal-only
-      # regardless. Set =1 in the host .env to activate.
+      # (index, page_put, page_append, add_tag, link). Destructive ops +
+      # privacy-sensitive reads stay internal-only regardless. Set =1 in the
+      # host .env to activate.
       - MEMRAIN_PUBLIC_WRITE=${MEMRAIN_PUBLIC_WRITE:-${MEMEX_PUBLIC_WRITE:-0}}
       # Name recorded as the actor on grant changes made with `docker exec …
       # memrain auth rescope-client` (falls back to USER, then 'cli'). Audit data
       # only; it grants nothing.
       - MEMRAIN_OPERATOR=${MEMRAIN_OPERATOR:-${MEMEX_OPERATOR:-}}
-      # Two-pass Haiku rerank (opt-in, default OFF). =1 reorders the top hybrid
-      # hits with one CHEAP Claude Haiku call per search (~$1-3/mo at moderate
-      # volume). The budget-friendly alternative to the paid Sonnet graph-rerank
-      # below — recommended over graph-rerank unless you specifically want the
-      # graph-centrality signal + Sonnet-tier reasoning.
-      - MEMRAIN_RERANK=${MEMRAIN_RERANK:-${MEMEX_RERANK:-}}
-      # Rerank candidate window (default 30). Read by the hybrid arm and
-      # keyed into the query cache — unsettable from .env without this line.
-      - MEMRAIN_RERANK_WINDOW=${MEMRAIN_RERANK_WINDOW:-${MEMEX_RERANK_WINDOW:-}}
-      # Ranking flags (default off; =1 on). Each is promoted only after a paired
-      # A/B on the live corpus (memrain eval --config-b); see docs/CONFIGURATION.md.
-      - MEMRAIN_RANK_METADATA_GATE=${MEMRAIN_RANK_METADATA_GATE:-${MEMEX_RANK_METADATA_GATE:-}}
-      - MEMRAIN_RANK_ENTITY_TRUTH_SOFT=${MEMRAIN_RANK_ENTITY_TRUTH_SOFT:-${MEMEX_RANK_ENTITY_TRUTH_SOFT:-}}
+      # Page-grain fusion in search (default off; =1 on); see docs/CONFIGURATION.md.
       - MEMRAIN_RANK_PAGE_FUSION=${MEMRAIN_RANK_PAGE_FUSION:-${MEMEX_RANK_PAGE_FUSION:-}}
-      - MEMRAIN_RANK_KEYWORD_CONFIDENCE=${MEMRAIN_RANK_KEYWORD_CONFIDENCE:-${MEMEX_RANK_KEYWORD_CONFIDENCE:-}}
-      - MEMRAIN_RANK_EXACT_LOOKUP=${MEMRAIN_RANK_EXACT_LOOKUP:-${MEMEX_RANK_EXACT_LOOKUP:-}}
       # Search hits cut to this many characters at a word boundary, with a
       # page_get pointer to the full text (default 0 = whole chunk).
       - MEMRAIN_SEARCH_SNIPPET_CHARS=${MEMRAIN_SEARCH_SNIPPET_CHARS:-${MEMEX_SEARCH_SNIPPET_CHARS:-}}
-      # context_pack cards list newer pages that mention the entity (default on; 0 = off).
-      - MEMRAIN_CONTEXT_NEWER_MENTIONS=${MEMRAIN_CONTEXT_NEWER_MENTIONS:-${MEMEX_CONTEXT_NEWER_MENTIONS:-}}
-      # Pages the cycle's stale-link sweep re-extracts per run (default 200; 0 = off).
-      - MEMRAIN_LINKS_STALE_MAX_PER_CYCLE=${MEMRAIN_LINKS_STALE_MAX_PER_CYCLE:-${MEMEX_LINKS_STALE_MAX_PER_CYCLE:-}}
-      # --- Paid opt-in Bedrock Claude Sonnet slices (all default OFF) ---------
-      # Each makes a PAID Sonnet call only when its flag is set, bounded by its
-      # own USD BudgetTracker (*_BUDGET_USD, default 1.0). See docs/CONFIGURATION.md.
-      # think: `memrain think <q>` deep synthesis (CLI). relational-LLM: Sonnet
-      # fallback for the relational arm. graph-rerank: Sonnet rerank per search.
-      # deep-synth: scheduled think over top concepts. take-ensemble: N-judge
-      # Sonnet grading of takes. facts-extraction: conversation→facts.
-      - MEMRAIN_THINK=${MEMRAIN_THINK:-${MEMEX_THINK:-}}
+      # The brain's daily dollar cap on embedding spend. Per-client caps are
+      # set on the client (admin panel or `memrain auth set-budget`).
       - MEMRAIN_DAILY_BUDGET_USD=${MEMRAIN_DAILY_BUDGET_USD:-${MEMEX_DAILY_BUDGET_USD:-}}
-      - MEMRAIN_CYCLE_MAX_USD_PER_DAY=${MEMRAIN_CYCLE_MAX_USD_PER_DAY:-${MEMEX_CYCLE_MAX_USD_PER_DAY:-}}
-      - MEMRAIN_THINK_BUDGET_USD=${MEMRAIN_THINK_BUDGET_USD:-${MEMEX_THINK_BUDGET_USD:-}}
-      - MEMRAIN_RELATIONAL_LLM=${MEMRAIN_RELATIONAL_LLM:-${MEMEX_RELATIONAL_LLM:-}}
-      - MEMRAIN_RELATIONAL_LLM_BUDGET_USD=${MEMRAIN_RELATIONAL_LLM_BUDGET_USD:-${MEMEX_RELATIONAL_LLM_BUDGET_USD:-}}
-      - MEMRAIN_GRAPH_RERANK=${MEMRAIN_GRAPH_RERANK:-${MEMEX_GRAPH_RERANK:-}}
-      - MEMRAIN_GRAPH_RERANK_BUDGET_USD=${MEMRAIN_GRAPH_RERANK_BUDGET_USD:-${MEMEX_GRAPH_RERANK_BUDGET_USD:-}}
-      - MEMRAIN_DEEP_SYNTH=${MEMRAIN_DEEP_SYNTH:-${MEMEX_DEEP_SYNTH:-}}
-      - MEMRAIN_DEEP_SYNTH_BUDGET_USD=${MEMRAIN_DEEP_SYNTH_BUDGET_USD:-${MEMEX_DEEP_SYNTH_BUDGET_USD:-}}
-      - MEMRAIN_DEEP_SYNTH_MAX_QUESTIONS=${MEMRAIN_DEEP_SYNTH_MAX_QUESTIONS:-${MEMEX_DEEP_SYNTH_MAX_QUESTIONS:-}}
-      - MEMRAIN_TAKE_ENSEMBLE=${MEMRAIN_TAKE_ENSEMBLE:-${MEMEX_TAKE_ENSEMBLE:-}}
-      - MEMRAIN_TAKE_ENSEMBLE_BUDGET_USD=${MEMRAIN_TAKE_ENSEMBLE_BUDGET_USD:-${MEMEX_TAKE_ENSEMBLE_BUDGET_USD:-}}
-      - MEMRAIN_TAKE_ENSEMBLE_JUDGES=${MEMRAIN_TAKE_ENSEMBLE_JUDGES:-${MEMEX_TAKE_ENSEMBLE_JUDGES:-}}
-      - MEMRAIN_FACTS_EXTRACTION=${MEMRAIN_FACTS_EXTRACTION:-${MEMEX_FACTS_EXTRACTION:-}}
-      - MEMRAIN_FACTS_BUDGET_USD=${MEMRAIN_FACTS_BUDGET_USD:-${MEMEX_FACTS_BUDGET_USD:-}}
-      # Admin "Ask" chat (paid, off by default; also needs MEMRAIN_DAILY_BUDGET_USD).
-      - MEMRAIN_CHAT=${MEMRAIN_CHAT:-${MEMEX_CHAT:-}}
-      - MEMRAIN_CHAT_MODELS=${MEMRAIN_CHAT_MODELS:-${MEMEX_CHAT_MODELS:-}}
-      - MEMRAIN_CHAT_ANSWER_MAX_USD=${MEMRAIN_CHAT_ANSWER_MAX_USD:-${MEMEX_CHAT_ANSWER_MAX_USD:-}}
-      - MEMRAIN_CHAT_ANSWER_MAX_USD_CAP=${MEMRAIN_CHAT_ANSWER_MAX_USD_CAP:-${MEMEX_CHAT_ANSWER_MAX_USD_CAP:-}}
-      - MEMRAIN_CHAT_USER_DAY_USD=${MEMRAIN_CHAT_USER_DAY_USD:-${MEMEX_CHAT_USER_DAY_USD:-}}
+      # Days of 2.x chat history housekeeping keeps (default 90; 0 = keep all).
       - MEMRAIN_CHAT_RETENTION_DAYS=${MEMRAIN_CHAT_RETENTION_DAYS:-${MEMEX_CHAT_RETENTION_DAYS:-}}
-      - MEMRAIN_CHAT_TIMEOUT_MS=${MEMRAIN_CHAT_TIMEOUT_MS:-${MEMEX_CHAT_TIMEOUT_MS:-}}
-      # The owner's entity slug: first-person `User` claims from first-party
-      # transcripts land there instead of being dropped (unset = unchanged).
-      - MEMRAIN_OWNER_ENTITY=${MEMRAIN_OWNER_ENTITY:-${MEMEX_OWNER_ENTITY:-}}
-      # Junk gate on extracted facts (default on; 0 = off) and how many
-      # extractor calls one long non-transcript page may get (default 1).
-      - MEMRAIN_FACTS_JUNK_FILTER=${MEMRAIN_FACTS_JUNK_FILTER:-${MEMEX_FACTS_JUNK_FILTER:-}}
-      - MEMRAIN_FACTS_MAX_WINDOWS=${MEMRAIN_FACTS_MAX_WINDOWS:-${MEMEX_FACTS_MAX_WINDOWS:-}}
-      # `think`: quote check against the evidence (default on; 0 = off) and the
-      # IANA zone its "today" and page dates use (default UTC).
-      - MEMRAIN_THINK_QUOTE_VERIFY=${MEMRAIN_THINK_QUOTE_VERIFY:-${MEMEX_THINK_QUOTE_VERIFY:-}}
-      - MEMRAIN_TIMEZONE=${MEMRAIN_TIMEZONE:-${MEMEX_TIMEZONE:-}}
-      # Contextual-retrieval embed wrapper (LLM-free). Enabling it changes ONLY
-      # future embeds — run a full re-embed after enabling, or the vector space
-      # becomes mixed (wrapped + unwrapped) and search quality degrades.
-      - MEMRAIN_CONTEXTUAL_RETRIEVAL=${MEMRAIN_CONTEXTUAL_RETRIEVAL:-${MEMEX_CONTEXTUAL_RETRIEVAL:-}}
-      # PAID per-chunk contextual-retrieval tier (Haiku): each chunk gets an
-      # LLM-generated blurb situating it in its document. Bounded by its own
-      # budget (default 5.0). Enable, then run `reindex --contextual` to backfill.
-      - MEMRAIN_CONTEXTUAL_LLM=${MEMRAIN_CONTEXTUAL_LLM:-${MEMEX_CONTEXTUAL_LLM:-}}
-      - MEMRAIN_CONTEXTUAL_LLM_DOC_MAX_CHARS=${MEMRAIN_CONTEXTUAL_LLM_DOC_MAX_CHARS:-${MEMEX_CONTEXTUAL_LLM_DOC_MAX_CHARS:-}}
-      - MEMRAIN_CONTEXTUAL_LLM_BUDGET_USD=${MEMRAIN_CONTEXTUAL_LLM_BUDGET_USD:-${MEMEX_CONTEXTUAL_LLM_BUDGET_USD:-}}
-      # How many chunks a write situates and embeds at once, shared by every
-      # concurrent write (default 4; empty = default). 1 restores the old serial
-      # behaviour. Not the backfill's pool width — that is MEMRAIN_EMBED_CONCURRENCY.
+      # How many chunks a write embeds at once, shared by every concurrent
+      # write (default 4; empty = default). 1 restores serial embedding.
       - MEMRAIN_EMBED_MAX_INFLIGHT=${MEMRAIN_EMBED_MAX_INFLIGHT:-${MEMEX_EMBED_MAX_INFLIGHT:-}}
-      # Where the search mirror of a written page is built. Default (unset/1):
-      # inline, before page_put / page_append return. 0: queued as a page_mirror
-      # job, so the write returns at once and search sees the page seconds later
-      # (the response then says search_pending; callers can pass wait_for_index).
-      - MEMRAIN_PAGE_MIRROR_SYNC=${MEMRAIN_PAGE_MIRROR_SYNC:-${MEMEX_PAGE_MIRROR_SYNC:-}}
-      # Dated body lines (## Timeline bullets, ### date headers, [Source: X,
-      # date] citations) become timeline events on write. Default on; 0 = off.
-      - MEMRAIN_BODY_TIMELINE=${MEMRAIN_BODY_TIMELINE:-${MEMEX_BODY_TIMELINE:-}}
-      # Bedrock request timeouts, in ms, per call kind; each falls back to
-      # MEMRAIN_LLM_TIMEOUT_MS, then to its own default (utility 30000, reasoning
-      # 120000, embedding 10000). A timeout ends the request and the SDK retries.
+      # Bedrock embedding request timeout in ms; falls back to
+      # MEMRAIN_LLM_TIMEOUT_MS, then to 10000. A timeout ends the request and
+      # the SDK retries.
       - MEMRAIN_LLM_TIMEOUT_MS=${MEMRAIN_LLM_TIMEOUT_MS:-${MEMEX_LLM_TIMEOUT_MS:-}}
-      - MEMRAIN_LLM_UTILITY_TIMEOUT_MS=${MEMRAIN_LLM_UTILITY_TIMEOUT_MS:-${MEMEX_LLM_UTILITY_TIMEOUT_MS:-}}
-      - MEMRAIN_LLM_REASONING_TIMEOUT_MS=${MEMRAIN_LLM_REASONING_TIMEOUT_MS:-${MEMEX_LLM_REASONING_TIMEOUT_MS:-}}
       - MEMRAIN_EMBED_TIMEOUT_MS=${MEMRAIN_EMBED_TIMEOUT_MS:-${MEMEX_EMBED_TIMEOUT_MS:-}}
-      # Override the paid-tier model (default eu.anthropic.claude-sonnet-5-5).
-      - MEMRAIN_FACTS_MODEL=${MEMRAIN_FACTS_MODEL:-${MEMEX_FACTS_MODEL:-}}
-      - MEMRAIN_FACTS_EXTRACT_MODEL=${MEMRAIN_FACTS_EXTRACT_MODEL:-${MEMEX_FACTS_EXTRACT_MODEL:-}}
-      # Override the utility-tier model (default Claude Haiku 5.5).
-      - MEMRAIN_UTILITY_MODEL=${MEMRAIN_UTILITY_MODEL:-${MEMEX_UTILITY_MODEL:-}}
+      # Housekeeping's embed-gap step: 0 = off.
+      - MEMRAIN_EMBED_GAPS=${MEMRAIN_EMBED_GAPS:-${MEMEX_EMBED_GAPS:-}}
       # Credentials in ingested text: redact (default) | flag | reject, and
       # comma-separated 12-hex fingerprints to leave alone.
       - MEMRAIN_SECRET_SCAN_DISPOSITION=${MEMRAIN_SECRET_SCAN_DISPOSITION:-${MEMEX_SECRET_SCAN_DISPOSITION:-}}
@@ -271,21 +154,9 @@ services:
       # Largest export `memrain transcripts ingest` will read, in bytes (default
       # 104857600). A bigger file is refused, never truncated.
       - MEMRAIN_TRANSCRIPT_MAX_FILE_BYTES=${MEMRAIN_TRANSCRIPT_MAX_FILE_BYTES:-${MEMEX_TRANSCRIPT_MAX_FILE_BYTES:-}}
-      # `memrain connectors github sync`: the token (or pass --token-file), the
-      # minutes re-read behind the watermark (default 15), and the days after
-      # which doctor flags a connector with no clean run (default 7).
-      - MEMRAIN_GITHUB_TOKEN=${MEMRAIN_GITHUB_TOKEN:-${MEMEX_GITHUB_TOKEN:-}}
-      - MEMRAIN_CONNECTOR_GAP_HEAL_MINUTES=${MEMRAIN_CONNECTOR_GAP_HEAL_MINUTES:-${MEMEX_CONNECTOR_GAP_HEAL_MINUTES:-}}
-      - MEMRAIN_CONNECTOR_STALL_DAYS=${MEMRAIN_CONNECTOR_STALL_DAYS:-${MEMEX_CONNECTOR_STALL_DAYS:-}}
       # Content-sanity pattern names to switch off (comma-separated), e.g.
       # access_denied,operator_literal_2 — see `memrain doctor` quarantined-pages.
       - MEMRAIN_CONTENT_SANITY_DISABLE=${MEMRAIN_CONTENT_SANITY_DISABLE:-${MEMEX_CONTENT_SANITY_DISABLE:-}}
-      - MEMRAIN_THINK_MODEL=${MEMRAIN_THINK_MODEL:-${MEMEX_THINK_MODEL:-}}
-      - MEMRAIN_DRIFT_MODEL=${MEMRAIN_DRIFT_MODEL:-${MEMEX_DRIFT_MODEL:-}}
-      - MEMRAIN_CONCEPTS_MODEL=${MEMRAIN_CONCEPTS_MODEL:-${MEMEX_CONCEPTS_MODEL:-}}
-      - MEMRAIN_EXPANSION_MODEL=${MEMRAIN_EXPANSION_MODEL:-${MEMEX_EXPANSION_MODEL:-}}
-      - MEMRAIN_INTENT_MODEL=${MEMRAIN_INTENT_MODEL:-${MEMEX_INTENT_MODEL:-}}
-      - MEMRAIN_RERANK_MODEL=${MEMRAIN_RERANK_MODEL:-${MEMEX_RERANK_MODEL:-}}
       # Public base URL (Cloudflare tunnel origin). When set, the OAuth 2.1
       # discovery document + issuer advertise this external https origin so a
       # cloud MCP client auto-configures against the real host instead of the
@@ -321,33 +192,12 @@ services:
       - MEMRAIN_MCP_LENIENT_ARGS=${MEMRAIN_MCP_LENIENT_ARGS:-${MEMEX_MCP_LENIENT_ARGS:-}}
       - MEMRAIN_MCP_MAX_RESULT_BYTES=${MEMRAIN_MCP_MAX_RESULT_BYTES:-${MEMEX_MCP_MAX_RESULT_BYTES:-}}
       - MEMRAIN_MCP_FORCE_SURFACE=${MEMRAIN_MCP_FORCE_SURFACE:-${MEMEX_MCP_FORCE_SURFACE:-}}
-      - MEMRAIN_JOB_TIMEOUT_MS=${MEMRAIN_JOB_TIMEOUT_MS:-${MEMEX_JOB_TIMEOUT_MS:-}}
-      - MEMRAIN_JOB_STALL_GRACE_MS=${MEMRAIN_JOB_STALL_GRACE_MS:-${MEMEX_JOB_STALL_GRACE_MS:-}}
-      - MEMRAIN_JOB_LLM_HALT=${MEMRAIN_JOB_LLM_HALT:-${MEMEX_JOB_LLM_HALT:-}}
-      - MEMRAIN_EMBED_GAPS=${MEMRAIN_EMBED_GAPS:-${MEMEX_EMBED_GAPS:-}}
-      - MEMRAIN_EMBED_GAPS_MAX_PER_CYCLE=${MEMRAIN_EMBED_GAPS_MAX_PER_CYCLE:-${MEMEX_EMBED_GAPS_MAX_PER_CYCLE:-}}
-      - MEMRAIN_SYNTHESIS_ONCE_PER_DAY=${MEMRAIN_SYNTHESIS_ONCE_PER_DAY:-${MEMEX_SYNTHESIS_ONCE_PER_DAY:-}}
-      # How long shutdown lets a running job finish before handing it back to
-      # the queue (default 8000). Keep it under stop_grace_period above.
-      - MEMRAIN_WORKER_DRAIN_MS=${MEMRAIN_WORKER_DRAIN_MS:-${MEMEX_WORKER_DRAIN_MS:-}}
-      # Operator agent loop (`memrain agent run`): off unless set to 1; the
-      # per-job dollar ceiling defaults to 0.25. MEMRAIN_AGENT_TENANT_ENABLED=1
-      # additionally lets OAuth clients granted 'agent' use submit_agent.
-      - MEMRAIN_AGENT_ENABLED=${MEMRAIN_AGENT_ENABLED:-${MEMEX_AGENT_ENABLED:-}}
-      - MEMRAIN_AGENT_MAX_USD=${MEMRAIN_AGENT_MAX_USD:-${MEMEX_AGENT_MAX_USD:-}}
-      - MEMRAIN_AGENT_TENANT_ENABLED=${MEMRAIN_AGENT_TENANT_ENABLED:-${MEMEX_AGENT_TENANT_ENABLED:-}}
-      # `memrain skillopt eval` (paid routing benchmark): off unless 1; per-run cap defaults to 0.25.
-      - MEMRAIN_SKILLOPT_ENABLED=${MEMRAIN_SKILLOPT_ENABLED:-${MEMEX_SKILLOPT_ENABLED:-}}
-      - MEMRAIN_SKILLOPT_MAX_USD=${MEMRAIN_SKILLOPT_MAX_USD:-${MEMEX_SKILLOPT_MAX_USD:-}}
       - MEMRAIN_HNSW_ZOMBIE_SWEEP=${MEMRAIN_HNSW_ZOMBIE_SWEEP:-${MEMEX_HNSW_ZOMBIE_SWEEP:-}}
       - MEMRAIN_MAX_BODY_BYTES=${MEMRAIN_MAX_BODY_BYTES:-${MEMEX_MAX_BODY_BYTES:-}}
-      - MEMRAIN_INGEST_MAX_BYTES=${MEMRAIN_INGEST_MAX_BYTES:-${MEMEX_INGEST_MAX_BYTES:-}}
       - MEMRAIN_REQUIRE_WRITE_PRECONDITION=${MEMRAIN_REQUIRE_WRITE_PRECONDITION:-${MEMEX_REQUIRE_WRITE_PRECONDITION:-}}
       - MEMRAIN_SECRET_SCAN_HIGH_ENTROPY=${MEMRAIN_SECRET_SCAN_HIGH_ENTROPY:-${MEMEX_SECRET_SCAN_HIGH_ENTROPY:-}}
       - MEMRAIN_SECRET_SCAN_ECHO=${MEMRAIN_SECRET_SCAN_ECHO:-${MEMEX_SECRET_SCAN_ECHO:-}}
-      - MEMRAIN_CODE_SECRET_SCAN=${MEMRAIN_CODE_SECRET_SCAN:-${MEMEX_CODE_SECRET_SCAN:-}}
       - MEMRAIN_OUTPUT_REDACTION=${MEMRAIN_OUTPUT_REDACTION:-${MEMEX_OUTPUT_REDACTION:-}}
-      - MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES=${MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES:-${MEMEX_INGEST_TRANSCRIPT_MAX_BYTES:-}}
       # Admin login credential. Unset -> a fresh random token every restart,
       # which invalidates the operator's admin session on every recompose.
       - MEMRAIN_ADMIN_BOOTSTRAP=${MEMRAIN_ADMIN_BOOTSTRAP:-${MEMEX_ADMIN_BOOTSTRAP:-}}

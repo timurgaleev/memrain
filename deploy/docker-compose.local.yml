@@ -23,7 +23,6 @@ services:
     environment:
       - MEMRAIN_KEYWORD_ONLY=1
       - MEMRAIN_INTERNAL_TOKEN=${MEMRAIN_INTERNAL_TOKEN:?run scripts/local-up.sh, which creates deploy/local.env}
-      - MEMRAIN_SKILLS_DIR=/skills
       # The image defaults these for the EC2 role; a local trial has no AWS.
       - AWS_REGION=
       - AWS_PROFILE=
@@ -31,10 +30,6 @@ services:
       - type: volume
         source: memrain-data
         target: /home/bun/.memrain
-      - type: bind
-        source: ./skills
-        target: /skills
-        read_only: true
 
 volumes:
   memrain-data:

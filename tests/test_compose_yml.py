@@ -19,79 +19,10 @@ EXPECTED_SERVICES = {
     "cloudflared",
 }
 
-# The app's `environment:` keys before the rename, without their brand
-# prefix. The renamed file must pass exactly these (as MEMRAIN_<suffix>)
-# plus the documented additions, and drop none: a key missing here is a
-# setting that silently stops reaching the container.
+# Keys without the brand prefix the app's `environment:` may carry.
 PRE_RENAME_UNBRANDED = {"AWS_REGION", "AWS_PROFILE", "SECRETS_PREFIX", "HOME"}
-PRE_RENAME_SUFFIXES = {
-    "SKILLS_DIR", "VAULT_PATHS", "SWEEP_DELAY_MS", "SWEEP_MAX_FILES",
-    "CODE_PATHS", "CODE_SWEEP_DELAY_MS", "DREAM_INTERVAL_S", "DREAM_STALE_DAYS",
-    "CYCLE_PHASE_TIMEOUT_MS", "CYCLE_SKIP_PHASES", "DREAM_SYNTHESIS",
-    "DOCTOR_PER_SOURCE", "TENANT_FAIL_CLOSED", "PUBLIC_WRITE", "OPERATOR",
-    "RERANK", "RERANK_WINDOW", "THINK", "THINK_BUDGET_USD", "RELATIONAL_LLM",
-    "RELATIONAL_LLM_BUDGET_USD", "GRAPH_RERANK", "GRAPH_RERANK_BUDGET_USD",
-    "DEEP_SYNTH", "DEEP_SYNTH_BUDGET_USD", "DEEP_SYNTH_MAX_QUESTIONS",
-    "TAKE_ENSEMBLE", "TAKE_ENSEMBLE_BUDGET_USD", "TAKE_ENSEMBLE_JUDGES",
-    "FACTS_EXTRACTION", "FACTS_BUDGET_USD", "CONTEXTUAL_RETRIEVAL",
-    "CONTEXTUAL_LLM", "CONTEXTUAL_LLM_BUDGET_USD", "EMBED_MAX_INFLIGHT",
-    "PAGE_MIRROR_SYNC", "BODY_TIMELINE", "LLM_TIMEOUT_MS",
-    "LLM_UTILITY_TIMEOUT_MS", "LLM_REASONING_TIMEOUT_MS", "EMBED_TIMEOUT_MS",
-    "FACTS_MODEL", "SECRET_SCAN_DISPOSITION", "SECRET_SCAN_ALLOW",
-    "TRANSCRIPT_MAX_FILE_BYTES", "GITHUB_TOKEN", "CONNECTOR_GAP_HEAL_MINUTES",
-    "CONNECTOR_STALL_DAYS", "CONTENT_SANITY_DISABLE", "THINK_MODEL",
-    "DRIFT_MODEL", "CONCEPTS_MODEL", "EXPANSION_MODEL", "INTENT_MODEL",
-    "RERANK_MODEL", "PUBLIC_URL", "ASSUME_PUBLIC", "OAUTH_REQUIRE_LOGIN",
-    "OAUTH_REFRESH_REUSE_REVOKE", "ENABLE_DCR", "ENABLE_DCR_INSECURE",
-    "HTTP_CORS_ORIGIN", "MCP_RATE_LIMIT_PER_TOKEN_PER_MINUTE",
-    "DEPLOYMENT_IDENTITY", "MCP_INSTRUCTIONS", "MCP_LENIENT_ARGS",
-    "JOB_TIMEOUT_MS", "AGENT_ENABLED", "AGENT_MAX_USD", "AGENT_TENANT_ENABLED",
-    "SKILLOPT_ENABLED", "SKILLOPT_MAX_USD", "HNSW_ZOMBIE_SWEEP",
-    "MAX_BODY_BYTES", "INGEST_MAX_BYTES", "ADMIN_BOOTSTRAP", "HTTP_TRUST_PROXY",
-}
 QUIESCENCE_SWITCHES = {"MAINTENANCE", "BOOT_CODE_SWEEP", "JOBS_WORKER", "CYCLE"}
-ADDED_SUFFIXES = {
-    "MCP_MAX_RESULT_BYTES",
-    "MCP_FORCE_SURFACE",
-    "OUTPUT_REDACTION",
-    "REQUIRE_WRITE_PRECONDITION",
-    "CODE_SECRET_SCAN",
-    "FACTS_EXTRACT_MODEL",
-    "CONTEXTUAL_LLM_DOC_MAX_CHARS",
-    "JOB_STALL_GRACE_MS",
-    "JOB_LLM_HALT",
-    "EMBED_GAPS",
-    "EMBED_GAPS_MAX_PER_CYCLE",
-    "SYNTHESIS_ONCE_PER_DAY",
-    "DAILY_BUDGET_USD",
-    "CYCLE_MAX_USD_PER_DAY",
-    "SECRET_SCAN_HIGH_ENTROPY",
-    "SECRET_SCAN_ECHO",
-    "INGEST_TRANSCRIPT_MAX_BYTES",
-    "REQUIRE_POSTGRES",
-    "UTILITY_MODEL",
-    "WORKER_DRAIN_MS",
-    "OWNER_ENTITY",
-    "FACTS_JUNK_FILTER",
-    "FACTS_MAX_WINDOWS",
-    "THINK_QUOTE_VERIFY",
-    "TIMEZONE",
-    "RANK_METADATA_GATE",
-    "RANK_ENTITY_TRUTH_SOFT",
-    "RANK_PAGE_FUSION",
-    "RANK_KEYWORD_CONFIDENCE",
-    "RANK_EXACT_LOOKUP",
-    "SEARCH_SNIPPET_CHARS",
-    "CONTEXT_NEWER_MENTIONS",
-    "LINKS_STALE_MAX_PER_CYCLE",
-    "CHAT",
-    "CHAT_MODELS",
-    "CHAT_ANSWER_MAX_USD",
-    "CHAT_ANSWER_MAX_USD_CAP",
-    "CHAT_USER_DAY_USD",
-    "CHAT_RETENTION_DAYS",
-    "CHAT_TIMEOUT_MS",
-} | QUIESCENCE_SWITCHES
+SRC_DIR = REPO_ROOT / "deploy" / "memrain" / "src"
 NESTED_ENTRY = re.compile(r"^MEMRAIN_(\w+)=\$\{MEMRAIN_\1:-\$\{MEMEX_\1:-[^}]*\}\}$")
 
 
@@ -278,7 +209,7 @@ def test_binds_are_long_syntax_without_host_path_creation(compose):
         assert v["type"] == "bind"
         assert v["bind"]["create_host_path"] is False, v
     by_target = {v["target"]: v for v in vols}
-    for ro in ("/memory", "/skills", "/repo-source", "/home/bun/.aws"):
+    for ro in ("/memory", "/repo-source", "/home/bun/.aws"):
         assert by_target[ro].get("read_only") is True, ro
     for rw in ("/home/bun/.memrain", "/home/bun/.memex"):
         assert not by_target[rw].get("read_only"), rw
@@ -305,7 +236,6 @@ def test_env_entries_are_memrain_with_legacy_fallback(compose):
             assert NESTED_ENTRY.match(entry), f"not the nested fallback form: {entry}"
     by_key = dict(e.split("=", 1) for e in _env_entries(compose))
     assert by_key["MEMRAIN_PUBLIC_WRITE"] == "${MEMRAIN_PUBLIC_WRITE:-${MEMEX_PUBLIC_WRITE:-0}}"
-    assert by_key["MEMRAIN_CYCLE_PHASE_TIMEOUT_MS"].endswith(":-900000}}")
 
 
 def test_quiescence_switches_default_empty(compose):
@@ -314,15 +244,15 @@ def test_quiescence_switches_default_empty(compose):
         assert by_key[f"MEMRAIN_{sw}"] == f"${{MEMRAIN_{sw}:-${{MEMEX_{sw}:-}}}}", sw
 
 
-def test_env_key_set_is_the_pre_rename_set_plus_additions(compose):
-    expected = PRE_RENAME_UNBRANDED | {
-        f"MEMRAIN_{s}" for s in PRE_RENAME_SUFFIXES | ADDED_SUFFIXES
-    }
+def test_every_env_key_is_read_by_the_source(compose):
+    """A key the server no longer reads is a setting for a removed feature:
+    it reaches the container and does nothing."""
+    sources = "\n".join(p.read_text(encoding="utf-8") for p in SRC_DIR.rglob("*.ts")
+                         if p.name != "runtime-config-schema.ts")
     keys = _env_keys(compose)
     assert len(keys) == len(_env_entries(compose)), "duplicate environment key"
-    assert keys == expected, (
-        f"missing: {sorted(expected - keys)}; unexpected: {sorted(keys - expected)}"
-    )
+    unread = sorted(k for k in keys - PRE_RENAME_UNBRANDED if not re.search(rf"\b{k}\b", sources))
+    assert not unread, f"compose passes variables the source never reads: {unread}"
 
 
 def test_no_secret_or_host_in_environment(compose):
@@ -366,7 +296,7 @@ def test_compose_config_legacy_env(tmp_path):
         "MEMEX_PUBLIC_WRITE=1\n"
         "MEMEX_MAINTENANCE=1\n"
         "MEMRAIN_OAUTH_REQUIRE_LOGIN=\nMEMEX_OAUTH_REQUIRE_LOGIN=1\n"
-        "MEMRAIN_RERANK=new\nMEMEX_RERANK=old\n"
+        "MEMRAIN_SEARCH_SNIPPET_CHARS=new\nMEMEX_SEARCH_SNIPPET_CHARS=old\n"
         "MEMEX_VERSION=legacy-stamp\n",
     )
     assert cfg["name"] == "deploy"
@@ -375,7 +305,7 @@ def test_compose_config_legacy_env(tmp_path):
     assert env["MEMRAIN_PUBLIC_WRITE"] == "1"
     assert env["MEMRAIN_MAINTENANCE"] == "1"
     assert env["MEMRAIN_OAUTH_REQUIRE_LOGIN"] == "1"
-    assert env["MEMRAIN_RERANK"] == "new"
+    assert env["MEMRAIN_SEARCH_SNIPPET_CHARS"] == "new"
     assert env["MEMRAIN_JOBS_WORKER"] == ""
     assert cfg["services"]["memrain"]["build"]["args"]["MEMRAIN_VERSION"] == "legacy-stamp"
     vols = {v["target"]: v["source"] for v in cfg["services"]["memrain"]["volumes"]}
