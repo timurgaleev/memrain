@@ -9,27 +9,24 @@ Transcripts get rules other writes do not: cookie values after a
 password, a password label with its value on the same line, the password half
 of a `login: user / password` pair, a password flag (`--password X`), a cell
 under a password column of a Markdown table, and a key, token or password
-label whose value sits alone on the next line or opens the next message. With the connector key set, every value a
+label whose value sits alone on the next line or opens the next message. With the secret-store key set, every value a
 redaction removes is kept in the secret store (see SECURITY.md, "Kept
 originals"); `memrain secrets audit --transcripts` rescans transcripts already
-stored. Re-import keeps established managed Facts/Takes fences while replacing the
-imported text outside them. If an older page's fence provenance cannot be
-proven, the importer reports `unproven_fences` and leaves its body, versions
-and facts intact for review.
+stored. Re-import keeps the fenced blocks a 2.x brain wrote into a page while
+replacing the imported text outside them. If an older page's fence provenance
+cannot be proven, the importer reports `unproven_fences` and leaves its body
+and versions intact for review.
 
-There are two ways in:
-
-- **`memrain transcripts ingest`** runs where the brain's database is
-  reachable (the server, or a local brain) and reads files directly.
-- **`memrain transcripts push`** runs on a laptop and sends one session log to
-  a hosted brain's `POST /ingest`.
+`memrain transcripts ingest` runs where the brain's database is reachable (the
+server, or a local brain) and reads files directly. There is no upload
+endpoint: to import a log from a laptop, copy it to the host first.
 
 ## Ingest
 
 ```bash
 memrain transcripts ingest <path> [--format auto|chatgpt|claude-ai|codex|claude-code]
-                                  [--source ID] [--since ISO|auto] [--no-embed]
-                                  [--facts --max-cost-usd N] [--dry-run] [--json]
+                                  [--source ID] [--since ISO|7d|auto] [--no-embed]
+                                  [--dry-run] [--json]
 ```
 
 `<path>` is a ChatGPT or Claude.ai export, a Codex rollout, a Claude Code
@@ -41,12 +38,12 @@ session log, or a directory of session logs.
   time. `--since auto` uses the watermark that the last clean run over the
   same path and source left. A run moves the watermark only when nothing was
   refused, failed or malformed, and only without an explicit `--since`, so a
-  partial run never makes the next one skip sessions.
-- `--no-embed` writes the pages and leaves search indexing to the cycle's
-  `mirror-pages` phase, which indexes and embeds a bounded batch per run.
-  Pages stay unsearchable until the cycle reaches them.
-- `--facts --max-cost-usd N` runs the paid fact extractor over the parts this
-  run wrote, stopping at N dollars. It needs `MEMRAIN_FACTS_EXTRACTION=1`.
+  partial run never makes the next one skip sessions. `--since` also accepts a
+  relative lookback (`7d`, `2w`, `6m`, `1y`); months mean 30 days and years
+  365 days.
+- `--no-embed` writes the pages and leaves search indexing to the hourly
+  housekeeping, which indexes and embeds a bounded batch per run. Pages stay
+  unsearchable until it reaches them.
 
 The command exits non-zero when it does not recognise the format, when a
 session was refused for carrying a credential under the `reject` disposition,
@@ -57,8 +54,7 @@ empty. The other logs in a directory are still imported.
 
 A log with a session id but no text turn (a session opened and closed without
 a word, or one whose every turn was harness traffic) is empty, not drift:
-`transcripts ingest` lists it as skipped with `empty_session`, and
-`transcripts push` exits 0 and prints `<path>: empty session, nothing sent`.
+`transcripts ingest` lists it as skipped with `empty_session`.
 A log whose turns the importer cannot read (an unknown content block or event
 kind) is still reported as a format change.
 
@@ -80,131 +76,5 @@ kept. An AskUserQuestion answer is imported as a user turn, one
 memrain transcripts status [--source ID] [--json]
 ```
 
-Shows sessions and parts per source and format, pushed logs by job status, and
-the `--since auto` watermark for each path.
-
-## Repair agent-session attribution
-
-When a local Codex or Claude Code log proves that a stored transcript came
-from an agent session, preview its fact-attribution repair on the operator
-host:
-
-```bash
-memrain transcripts repair-origin /private/session-logs --source <source-id> --json
-# Repeat the same source and logs with the preview's exact plan_hash:
-memrain transcripts repair-origin /private/session-logs --source <source-id> \
-  --apply --plan-hash <reviewed-hash> --json
-```
-
-The preview connects without migrations or writes. The hash covers local
-log digests, matching page versions/content and fact IDs/attribution. Apply
-rechecks the targets under locks and changes only eligible attribution from
-unset/`user` to `other`; text, IDs and page history remain intact. Changed
-evidence or a uniqueness collision refuses the entire repair. Incomplete or
-unrecognized logs are refused. Keep the apply receipt private: it includes
-the old attribution needed to review or reverse the metadata change.
-Deployment does not run this repair or establish that any sessions were fixed.
-
-## Push from a laptop
-
-```bash
-memrain transcripts push <path> --url https://brain.example.com \
-  --token-file ~/.config/memrain/push-token [--hook-stdin] [--dry-run] [--json]
-```
-
-- `<path>` must be a `.jsonl` session log under `~/.claude/projects` or
-  `~/.codex/sessions`. Push resolves every symlink in the path first and
-  refuses a file outside those directories, as well as a file that is itself a
-  symlink.
-- The token is a bearer token with the `write` scope. Keep it in a file only
-  you can read (`chmod 600`). Push refuses a token file that other users can
-  read, and it never accepts a token on the command line.
-- `--url` must be `https`. Plain `http` is accepted only for `localhost`.
-- The file is capped at `MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES` (default 8 MiB)
-  on both ends. A bigger file is refused whole, never truncated.
-
-The server checks the log the same way `transcripts ingest` does, against the
-token's own write source and slug-prefix grant, and scans it for credentials
-before anything is queued. It answers `202` with a job id. The
-`transcripts_ingest` job then writes the pages. Pushing the same file twice
-reuses the same job. The job records which token queued it (a reference,
-never the token) and, just before writing, checks that token again as it
-stands then: if it was revoked, its client deleted, or its grant no longer
-covers the `write` scope, the source or the session's slug prefix, the job is
-refused for good and the reason is kept on the job. A token that only reached
-its expiry while the job waited still counts, as long as its session was not
-revoked. Jobs queued before this check existed name no token and are refused
-the same way; push the log again. No answer carries the log's
-text; refusals give an error code and counts:
-
-| Status | `error` | Meaning |
-|---|---|---|
-| 200 | | `{"ok": true, "queued": false, "reason": "empty_session", "format": …}`: the log has a session id but no text turn; nothing was queued. |
-| 400 | `transcript_unreadable` | No session could be read from the body. |
-| 400 | `user_turns_missing` | Assistant turns but no user turn. |
-| 400 | `secret_in_content` | A credential, under the `reject` disposition. |
-| 400 | `invalid_content` | U+0000 in the body, or U+0000 or an unpaired surrogate in a session once parsed (a `\u0000` or lone `\ud800` escape); nothing was queued. Every `POST /ingest` body is refused the same way for U+0000. |
-| 403 | `permission_denied` | No write source, or the session is outside the token's bound prefixes. |
-| 413 | | Over `MEMRAIN_INGEST_TRANSCRIPT_MAX_BYTES`. |
-| 415 | `unsupported_transcript` | A log that is not from Codex or Claude Code. |
-| 429 | `push_in_flight` | Another push from the same client is still being read; retry after `Retry-After`. |
-
-### Claude Code session hook
-
-Nothing is installed for you. To push every Claude Code session when it ends,
-add a `SessionEnd` hook to `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cd / && exec /absolute/path/to/bun /absolute/path/to/memrain/deploy/memrain/src/cli.ts transcripts push --hook-stdin --url https://brain.example.com --token-file ~/.config/memrain/push-token"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-Bun loads `bunfig.toml` preloads and `.env` from the current directory, and a
-hook starts in the directory where the session ended, so a plain `memrain` or
-`bun` there would run a cloned repository's code with your push token. `cd /`
-and absolute paths to `bun` and `cli.ts` (no `PATH` lookup, no shebang) keep
-the hook out of its reach.
-
-With `--hook-stdin`, push reads `transcript_path` from the JSON that Claude
-Code passes to the hook. It reports any failure on stderr and still exits 0,
-so a brain that is unreachable never breaks the session.
-
-### Codex session hook
-
-Codex supports `SessionEnd` (local CLI checked at 0.167.0). Merge the same
-`hooks.SessionEnd` object above into `~/.codex/hooks.json`, adding `"timeout": 3`
-next to `"type": "command"`. Keep `cd /` and both absolute executable paths.
-Codex supplies `transcript_path`, which `--hook-stdin` accepts. Review and trust
-the definition in `/hooks` before it can run.
-
-Session-end hooks have a three-second maximum and run synchronously. A slow
-upload may be interrupted; check stderr and retry manually. Closing a session
-triggers the hook, switching conversations does not. See the
-[official hook contract](https://learn.chatgpt.com/docs/hooks#sessionend).
-Do not install this upload on every `Stop`: a growing transcript has a new
-content hash, so successive turns can create successive imported pages.
-
-For manual capture or a scheduled job, push one rollout at a time:
-
-```bash
-memrain transcripts push ~/.codex/sessions/2026/10/01/rollout-<id>.jsonl \
-  --url https://brain.example.com --token-file ~/.config/memrain/push-token
-```
-
-`--since` also accepts a relative lookback (`7d`, `2w`, `6m`, `1y`), using the
-same parser as retrieval. Months mean 30 days and years 365 days. `auto` keeps
-its transcript-watermark meaning. The `friction`, `eval-export`, and `reports`
-commands accept the same date/duration forms alongside their existing numeric
-hour values; their existing maximum lookback limits still apply.
+Shows sessions and parts per source and format, and the `--since auto`
+watermark for each path.
