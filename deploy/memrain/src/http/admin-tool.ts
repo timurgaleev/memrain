@@ -53,7 +53,7 @@ const oneOf = (...values: string[]): ArgRule => ({ kind: "enum", values });
 const ARG_RULES = new Map<string, Readonly<Record<string, ArgRule>>>([
   ["search", { q: str(200), k: int(1, 20), offset: int(0, 100), since: str(40), until: str(40) }],
   ["resolve_slugs", { query: str(200), limit: int(1, 10) }],
-  ["page_get", { slug: str(512), fuzzy: bool }],
+  ["page_get", { slug: str(512), version: int(1, 2_147_483_647), fuzzy: bool }],
   [
     "page_list",
     {
