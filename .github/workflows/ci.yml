@@ -113,7 +113,7 @@ jobs:
       - name: bun install (frozen lockfile)
         run: bun install --frozen-lockfile
       - name: bun install admin (frozen lockfile)
-        # Tests import admin modules (the Office page pulls in three.js), so the
+        # Tests import admin modules (React and the passkey client), so the
         # typecheck and the suite need the admin dependencies too.
         working-directory: deploy/memrain/admin
         run: bun install --frozen-lockfile
