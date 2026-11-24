@@ -1,6 +1,5 @@
 {
   "core/admin-onboarding.ts": 1,
-  "core/admin-timeseries.ts": 4,
   "core/budget.ts": 1,
   "core/chunker-version.ts": 2,
   "core/chunks-read.ts": 1,
@@ -15,7 +14,7 @@
   "core/indexer.ts": 2,
   "core/ingest-log.ts": 1,
   "core/links-privacy.ts": 1,
-  "core/links.ts": 5,
+  "core/links.ts": 2,
   "core/oauth-provider.ts": 26,
   "core/orphan-policy.ts": 1,
   "core/page-index.ts": 1,

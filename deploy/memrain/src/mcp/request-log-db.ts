@@ -1,9 +1,9 @@
 /**
  * mcp/request-log-db.ts — DB sink for the MCP request log
- * (`mcp_request_log`, migration 046), the table the admin Request Log page
- * reads. memrain's default request observability is the JSONL audit trail +
- * console line (param-redaction.ts `logToolCall`); this adds a THIRD sink — a
- * redacted row per tool call — for the in-dashboard feed.
+ * (`mcp_request_log`, migration 046), the table the admin Health and Agents
+ * pages count usage from. memrain's default request observability is the JSONL
+ * audit trail + console line (param-redaction.ts `logToolCall`); this adds a
+ * THIRD sink — a redacted row per tool call.
  *
  * Two enablement paths:
  *   - `MEMRAIN_REQUEST_LOG_DB=1` turns the sink on for ALL ingress classes
@@ -22,6 +22,17 @@
  */
 import type { Engine } from "../core/engine/interface.ts";
 import { summarizeMcpParams, isKnownTool } from "./param-redaction.ts";
+
+/**
+ * The operator's own admin-panel calls are not agent traffic. They are the
+ * rows with agent 'admin-panel' and no credential; IS DISTINCT FROM keeps rows
+ * whose agent_name is NULL.
+ */
+export const NOT_PANEL_ROW = "(agent_name IS DISTINCT FROM 'admin-panel' OR token_name IS NOT NULL)";
+
+// Rows that are not an agent's tool call: the MCP handshake and the
+// webhook ingest path. rate_limited stays in: the agent did call and was refused.
+export const AGENT_CALL = `operation NOT IN ('tools/list', 'webhook_ingest')`;
 
 /** Whether the DB request-log sink is enabled for every ingress class. */
 export function requestLogDbEnabled(): boolean {

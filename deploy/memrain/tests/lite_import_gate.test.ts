@@ -5,9 +5,8 @@
  * break when that code goes or keep a dropped feature half alive.
  *
  * "Kept" is every file under src/ that is not on the removal list below. The
- * removal list is the set of modules and commands this build retires. They are
- * deleted, all but the admin routes the panel cut still serves (STILL_SERVED),
- * and no kept module is exempt from the boundary.
+ * removal list is the set of modules and commands this build retires. Every one
+ * of them is deleted, and no kept module is exempt from the boundary.
  */
 import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -42,6 +41,7 @@ const REMOVED_FILES = new Set([
   "http/ingest.ts", "http/share.ts", "http/chat-api.ts", "http/feedback-api.ts", "http/admin-office.ts",
   "http/admin-events.ts", "http/admin-eval.ts", "http/admin-connectors.ts", "http/admin-members.ts",
   "http/admin-approvals.ts", "http/admin-notifications.ts", "http/admin-autonomy.ts",
+  "core/admin-timeseries.ts",
 ]);
 
 /** Name prefixes of retired core modules (facts, chronicle, timeline, code, entities, ontology, eval). */
@@ -64,13 +64,6 @@ const KEPT_COMMANDS = new Set([
   "auth", "status", "reindex", "embed", "import", "sources", "quarantine", "write-gate", "secrets", "transcripts",
   "admin", "erase", "purge-leftovers", "remote-doctor",
 ]);
-
-/**
- * Retired modules that still exist because a kept route serves them until the
- * admin panel is cut down to its kept pages. None of them may import a
- * forbidden module either.
- */
-const STILL_SERVED = new Set(["http/admin-autonomy.ts"]);
 
 function removed(file: string): boolean {
   if (REMOVED_DIRS.some((d) => file.startsWith(d)) || REMOVED_FILES.has(file)) return true;
@@ -107,19 +100,16 @@ describe("kept modules import no retired feature code", () => {
   // Value: protects=the kept core stands without synthesis, connectors, jobs, members,
   // groups and the extension registry; fails_when=a kept module imports one of them;
   // why_new=nothing enforced the boundary before the cut; seam=none
-  it("no kept or still-served module imports one", () => {
+  it("no kept module imports one", () => {
     const violations = files
-      .filter((f) => !removed(f.rel) || STILL_SERVED.has(f.rel))
+      .filter((f) => !removed(f.rel))
       .flatMap((f) => importsOf(f.path).filter(forbidden).map((t) => `${f.rel} -> ${t}`));
     expect(violations).toEqual([]);
   });
 
   // Value: protects=a retired module does not linger as dead or half-wired code;
-  // fails_when=a module on the removal list exists again outside STILL_SERVED, or a
-  // STILL_SERVED entry is gone and its exemption is stale; why_new=the cut deleted them; seam=none
-  it("every retired module is gone, except the ones a kept route still serves", () => {
-    const present = new Set(files.map((f) => f.rel));
-    expect(files.filter((f) => removed(f.rel) && !STILL_SERVED.has(f.rel)).map((f) => f.rel)).toEqual([]);
-    expect([...STILL_SERVED].filter((rel) => !present.has(rel))).toEqual([]);
+  // fails_when=a module on the removal list exists again; why_new=the cut deleted them; seam=none
+  it("every retired module is gone", () => {
+    expect(files.filter((f) => removed(f.rel)).map((f) => f.rel)).toEqual([]);
   });
 });

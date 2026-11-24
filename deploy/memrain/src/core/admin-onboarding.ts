@@ -7,7 +7,7 @@
  * revoking the client deletes its tokens, and nothing else records it.
  */
 import type { Engine } from "./engine/interface.ts";
-import { AGENT_CALL, NOT_PANEL_ROW } from "./admin-timeseries.ts";
+import { AGENT_CALL, NOT_PANEL_ROW } from "../mcp/request-log-db.ts";
 
 export interface OnboardingSteps {
   /** An active credential exists now. */

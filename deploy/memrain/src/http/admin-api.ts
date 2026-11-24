@@ -2,21 +2,18 @@
  * http/admin-api.ts — admin data endpoints (increment A2).
  *
  * The `/admin/api/*` data routes the admin SPA reads, on Bun.serve: the brain
- * stats plus credential management (Agents page), which wraps the same OAuth
- * provider + PAT store the `auth` CLI uses — a unified `agents` view over
- * oauth_clients + access_tokens with per-credential usage, PAT
- * mint/list/revoke, OAuth client register/revoke, and the per-client
- * token_ttl write side.
+ * stats and health report (Health page) plus credential management (Agents
+ * page), which wraps the same OAuth provider + PAT store the `auth` CLI uses —
+ * a unified `agents` view over oauth_clients + access_tokens with
+ * per-credential usage, PAT mint/list/revoke, OAuth client register/revoke,
+ * and the per-client token_ttl write side.
  *
  * EVERY route gates on `requireAdmin` itself — the public bearer guard exempts
  * `/admin*`, so there is no ambient protection here.
  */
-import { adminTimeseries, AGENT_CALL, NOT_PANEL_ROW, type TimeseriesDays } from "../core/admin-timeseries.ts";
+import { AGENT_CALL, NOT_PANEL_ROW } from "../mcp/request-log-db.ts";
 import { onboardingSteps, type OnboardingStatus } from "../core/admin-onboarding.ts";
 import { adminHealthReport } from "../core/admin-health.ts";
-import { graphHubs } from "../core/links.ts";
-import { requestLogDbEnabled } from "../mcp/request-log-db.ts";
-import { requestLogRetentionDays } from "../core/request-log-retention.ts";
 import { resolveIssuer } from "./oauth-metadata.ts";
 import { patNameSpendConflict } from "../core/budget.ts";
 import { assertCredentialScoped } from "../core/requester-scope.ts";
@@ -43,7 +40,6 @@ import { isTrustTier } from "../core/trust-tier.ts";
 import { normalizeScopesInput } from "../core/scope.ts";
 import { isSameOriginPost } from "./same-origin.ts";
 import { handleAdminTool } from "./admin-tool.ts";
-import { handleAdminAutonomy } from "./admin-autonomy.ts";
 import { OperationError } from "../core/operation-error.ts";
 import type { RateLimiter } from "../mcp/rate_limit.ts";
 import type { SearchOptions } from "../core/search/hybrid.ts";
@@ -185,7 +181,6 @@ const cooldownRefusal = (until: number) =>
 const STEP_UP_REQUIRED = new Set<string>([
   "/admin/api/register-client",
   "/admin/api/api-keys",
-  "/admin/api/enrollments",
   "/admin/api/set-redirect-uris",
   "/admin/api/update-client-ttl",
 ]);
@@ -276,8 +271,8 @@ function parseTokenTtl(raw: unknown): number | null {
 }
 
 /**
- * Dispatch an `/admin/api/*` data route. Returns a Response, or null when the
- * path is not a data route (so the caller can fall through to 404).
+ * Dispatch an `/admin/api/*` data route. Returns a Response (404 for an
+ * unknown data route), or null when the path is not under `/admin/api/`.
  */
 export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps): Promise<Response | null> {
   const p = url.pathname;
@@ -310,12 +305,7 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
     });
   }
 
-  if (p === "/admin/api/spend/paused" || p === "/admin/api/spend/resume") {
-    const r = await handleAdminAutonomy(req, url, engine).catch((e: unknown) => serverError("spend-paused", e));
-    if (r) return r;
-  }
-
-  // GET /admin/api/full-stats — brain health + corpus counts (Overview).
+  // GET /admin/api/full-stats — brain health + corpus counts (Health page).
   // `?counts=0` skips the whole-table counts for the frequent health poll.
   if (p === "/admin/api/full-stats" && req.method === "GET") {
     try {
@@ -325,16 +315,12 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
         documents: number;
         pages: number;
         chunks: number;
-        facts: number;
-        entities: number;
         links: number;
       }>(
         `SELECT
            (SELECT count(*) FROM documents WHERE deleted_at IS NULL)::int AS documents,
            (SELECT count(*) FROM pages WHERE deleted_at IS NULL)::int AS pages,
            (SELECT count(*) FROM chunks)::int AS chunks,
-           (SELECT count(*) FROM entity_facts WHERE forgotten_at IS NULL)::int AS facts,
-           (SELECT count(DISTINCT entity_slug) FROM entity_facts WHERE forgotten_at IS NULL)::int AS entities,
            (SELECT count(*) FROM links)::int AS links`,
       );
       return Response.json({ health, counts: counts.rows[0] ?? null });
@@ -935,197 +921,6 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
     }
   }
 
-  // GET /admin/api/enrollments?client_id= — enrollment codes and the people
-  // who redeemed them (= `auth enrollments`), never the code itself.
-  if (p === "/admin/api/enrollments" && req.method === "GET") {
-    const clientId = url.searchParams.get("client_id") ?? undefined;
-    try {
-      const rows = await new OAuthProvider({ engine }).listEnrollments(clientId);
-      return Response.json({ count: rows.length, enrollments: rows });
-    } catch (e) {
-      return serverError("enrollments-list", e);
-    }
-  }
-
-  // POST /admin/api/enrollments — issue a one-time enrollment code
-  // (= `auth enroll`). The code is returned ONCE; only its hash persists.
-  // `replaces` issues it for the same person as an earlier enrollment.
-  if (p === "/admin/api/enrollments" && req.method === "POST") {
-    let body: {
-      source?: unknown;
-      read?: unknown;
-      label?: unknown;
-      client_id?: unknown;
-      ttl_seconds?: unknown;
-      replaces?: unknown;
-    };
-    try {
-      body = (await req.json()) as typeof body;
-    } catch {
-      return badRequest("invalid JSON body");
-    }
-    const optString = (v: unknown): v is string | undefined =>
-      v === undefined || (typeof v === "string" && v.length > 0);
-    if (!optString(body.source) || !optString(body.label) || !optString(body.client_id) || !optString(body.replaces)) {
-      return badRequest("source, label, client_id and replaces must be non-empty strings when given");
-    }
-    if (body.source === undefined && body.replaces === undefined) return badRequest("source or replaces required");
-    if (
-      body.read !== undefined &&
-      (!Array.isArray(body.read) || !body.read.every((x) => typeof x === "string" && x.length > 0))
-    ) {
-      return badRequest("read must be an array of source ids");
-    }
-    if (
-      body.ttl_seconds !== undefined &&
-      (typeof body.ttl_seconds !== "number" || !Number.isInteger(body.ttl_seconds) || body.ttl_seconds <= 0)
-    ) {
-      return badRequest("ttl_seconds must be a positive integer");
-    }
-    try {
-      const r = await new OAuthProvider({ engine }).issueEnrollment(
-        {
-          ...(body.source !== undefined ? { sourceId: body.source } : {}),
-          ...(Array.isArray(body.read) && body.read.length > 0 ? { federatedRead: body.read as string[] } : {}),
-          ...(body.label !== undefined ? { label: body.label } : {}),
-          ...(body.client_id !== undefined ? { clientId: body.client_id } : {}),
-          ...(typeof body.ttl_seconds === "number" ? { ttlSeconds: body.ttl_seconds } : {}),
-          ...(body.replaces !== undefined ? { replaces: body.replaces } : {}),
-        },
-        { actor: "admin", via: "admin_api" },
-      );
-      return Response.json({
-        ok: true,
-        enrollment_id: r.id,
-        code: r.code,
-        source_id: r.sourceId,
-        federated_read: r.federatedRead,
-        label: r.label,
-        client_id: r.clientId,
-        spend_id: r.spendId,
-        replaces: r.replaces,
-        expires_at: r.expiresAt,
-        note: "Give this code to the person. It works once — store nothing else.",
-      });
-    } catch (e) {
-      // Every refusal here is an operator input problem (unknown source,
-      // client or enrollment, a client not in enrollment mode, a ttl out of
-      // range); the messages name ids the operator typed, nothing internal.
-      const msg = e instanceof Error ? e.message : "";
-      if (/^(?:Unknown |Client '|ttl must|an enrollment needs)/.test(msg)) return badRequest(msg);
-      return serverError("enrollments-issue", e);
-    }
-  }
-
-  // POST /admin/api/revoke-enrollment — kill a code nobody redeemed yet
-  // (= `auth revoke-enrollment`). Audited.
-  if (p === "/admin/api/revoke-enrollment" && req.method === "POST") {
-    let body: { id?: unknown };
-    try {
-      body = (await req.json()) as typeof body;
-    } catch {
-      return badRequest("invalid JSON body");
-    }
-    if (typeof body.id !== "string" || body.id.length === 0) return badRequest("id required");
-    try {
-      const ok = await new OAuthProvider({ engine }).revokeEnrollment(body.id, { actor: "admin", via: "admin_api" });
-      if (!ok) {
-        return Response.json({ error: `no live enrollment "${body.id}" (used, revoked or unknown)` }, { status: 404 });
-      }
-      return Response.json({ ok: true, enrollment_id: body.id, revoked: true });
-    } catch (e) {
-      return serverError("revoke-enrollment", e);
-    }
-  }
-
-  // POST /admin/api/revoke-grant — cut off one person who redeemed her code:
-  // revoke the enrollment and delete every token minted under it
-  // (= `auth revoke-grant`). Others on the same connector are untouched.
-  if (p === "/admin/api/revoke-grant" && req.method === "POST") {
-    let body: { id?: unknown };
-    try {
-      body = (await req.json()) as typeof body;
-    } catch {
-      return badRequest("invalid JSON body");
-    }
-    if (typeof body.id !== "string" || body.id.length === 0) return badRequest("id required");
-    try {
-      const r = await new OAuthProvider({ engine }).revokeGrant(body.id, { actor: "admin", via: "admin_api" });
-      if (!r.revoked) return Response.json({ error: `no enrollment "${body.id}"` }, { status: 404 });
-      return Response.json({ ok: true, enrollment_id: body.id, revoked: true, tokens_deleted: r.tokens });
-    } catch (e) {
-      return serverError("revoke-grant", e);
-    }
-  }
-
-  // GET /admin/api/requests?page=N — recent MCP request log rows (RequestLog
-  // page). The table (mig 046) exists; a request-logger populates it. Paginated.
-  if (p === "/admin/api/requests" && req.method === "GET") {
-    try {
-      const PER = 25;
-      const page = Math.max(1, Math.floor(Number(url.searchParams.get("page")) || 1));
-      // Optional filters (all parameterized) so an operator can isolate one
-      // agent's traffic, one operation, or the failures. `total` honours the
-      // same filter so pagination stays correct.
-      const filters: unknown[] = [];
-      const clauses: string[] = [];
-      const agent = url.searchParams.get("agent");
-      if (agent) { filters.push(agent); clauses.push(`agent_name = $${filters.length}`); }
-      const operation = url.searchParams.get("operation");
-      if (operation) { filters.push(operation); clauses.push(`operation = $${filters.length}`); }
-      const status = url.searchParams.get("status");
-      if (status) { filters.push(status); clauses.push(`status = $${filters.length}`); }
-      const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-      const rows = await engine.query<Record<string, unknown>>(
-        // error_message capped (left(...,300)) — admin-only, but it can carry
-        // upstream payload/path text; no need to ship the raw blob to the UI.
-        // `params` is stored already-redacted (param-redaction.ts), so shipping
-        // it lets the operator see WHAT a misbehaving agent called.
-        `SELECT id, token_name, agent_name, operation, latency_ms, status, params,
-                left(error_message, 300) AS error_message, created_at::text AS created_at
-           FROM mcp_request_log ${where}
-          ORDER BY created_at DESC, id DESC
-          LIMIT $${filters.length + 1} OFFSET $${filters.length + 2}`,
-        [...filters, PER, (page - 1) * PER],
-      );
-      const total = await engine.query<{ n: number }>(
-        `SELECT count(*)::int AS n FROM mcp_request_log ${where}`,
-        filters,
-      );
-      return Response.json({
-        page,
-        per_page: PER,
-        total: total.rows[0]?.n ?? 0,
-        rows: rows.rows,
-        db_enabled: requestLogDbEnabled(),
-        retention_days: requestLogRetentionDays(),
-      });
-    } catch (e) {
-      return serverError("requests", e);
-    }
-  }
-
-  // GET /admin/api/jobs/watch — job queue snapshot (JobsWatch page): status
-  // counts + the most-recent jobs.
-  if (p === "/admin/api/jobs/watch" && req.method === "GET") {
-    try {
-      const counts = await engine.query<{ status: string; n: number }>(
-        "SELECT status, count(*)::int AS n FROM jobs GROUP BY status ORDER BY status",
-      );
-      const recent = await engine.query<Record<string, unknown>>(
-        `SELECT id, kind, status, retry_count, left(last_error, 300) AS last_error,
-                created_at::text AS created_at,
-                started_at::text AS started_at, finished_at::text AS finished_at
-           FROM jobs
-          ORDER BY created_at DESC
-          LIMIT 25`,
-      );
-      return Response.json({ counts: counts.rows, recent: recent.rows });
-    } catch (e) {
-      return serverError("jobs-watch", e);
-    }
-  }
-
   // GET /admin/api/agents/spend — per-OAuth-client daily spend vs budget cap.
   // The mig-081 spend ledger enforces budget_usd_per_day on paid ops; this is
   // the read side so an operator can see who is near their cap.
@@ -1146,33 +941,6 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
       return Response.json({ agents: rows.rows });
     } catch (e) {
       return serverError("agents-spend", e);
-    }
-  }
-
-  // GET /admin/api/timeseries?days=7|30|90 — per-UTC-day series for the
-  // Overview charts, with totals for the equal-length previous window.
-  if (p === "/admin/api/timeseries" && req.method === "GET") {
-    const raw = url.searchParams.get("days");
-    if (raw !== null && raw !== "7" && raw !== "30" && raw !== "90") {
-      return badRequest("days must be 7, 30 or 90");
-    }
-    try {
-      return Response.json(await adminTimeseries(engine, { days: Number(raw ?? 30) as TimeseriesDays }));
-    } catch (e) {
-      return serverError("timeseries", e);
-    }
-  }
-
-  // GET /admin/api/graph/hubs?limit=N — the most connected pages (Graph home).
-  if (p === "/admin/api/graph/hubs" && req.method === "GET") {
-    const raw = url.searchParams.get("limit");
-    if (raw !== null && !/^-?\d{1,9}$/.test(raw)) {
-      return badRequest("limit must be a whole number from 1 to 50");
-    }
-    try {
-      return Response.json(await graphHubs(engine, { limit: raw === null ? 20 : Number(raw) }));
-    } catch (e) {
-      return serverError("graph-hubs", e);
     }
   }
 
@@ -1237,5 +1005,6 @@ export async function handleAdminApi(req: Request, url: URL, deps: AdminApiDeps)
     }
   }
 
-  return null; // not a known data route
+  // An unknown data route is a 404, never the SPA shell the static fallback would serve.
+  return Response.json({ error: "not_found" }, { status: 404, headers: { "Cache-Control": "no-store" } });
 }

@@ -4,7 +4,7 @@
  * In quarantine mode a gated row is not inserted: it lands here as the row its
  * writer would have inserted, so it is invisible to every reader of
  * entity_facts, synth_takes and timeline_events without any filter. The owner
- * decides through the local CLI or the admin Approvals page:
+ * decides through the local CLI (`memrain write-gate rows|release|drop`):
  *
  *   release  the row is inserted as written (same principal and source, so
  *            readers frame it exactly as they would have) and carries a flag

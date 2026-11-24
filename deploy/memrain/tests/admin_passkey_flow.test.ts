@@ -943,9 +943,9 @@ describe("step-up, revoke and cooldown", () => {
     const allowed = new Set(["/admin/api/tool"]);
     const guarded = posts.filter((p) => !allowed.has(p));
     expect(guarded).toEqual(expect.arrayContaining([
-      "/admin/api/enrollments", "/admin/api/set-redirect-uris", "/admin/api/rescope-client",
+      "/admin/api/register-client", "/admin/api/set-redirect-uris", "/admin/api/rescope-client",
       "/admin/api/update-client-ttl", "/admin/api/revoke-client", "/admin/api/invalidate-tokens",
-      "/admin/api/api-keys/revoke", "/admin/api/revoke-grant", "/admin/api/revoke-enrollment",
+      "/admin/api/api-keys", "/admin/api/api-keys/revoke",
     ]));
     const { b: owner } = await settledOwner();
     const thief = new Browser("198.51.100.145");
@@ -961,7 +961,7 @@ describe("step-up, revoke and cooldown", () => {
     expect((await thief.post("/admin/api/dismiss-resume")).status).toBe(200);
     // An operator session is never in cooldown.
     const op = await operator();
-    expect((await op.post("/admin/api/enrollments", {})).status).not.toBe(403);
+    expect((await op.post("/admin/api/revoke-client", {})).status).not.toBe(403);
   });
 
   it("register/verify re-checks the step-up: options asked while fresh cannot be used once it lapses", async () => {

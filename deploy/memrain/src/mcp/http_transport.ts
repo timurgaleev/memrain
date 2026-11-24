@@ -405,9 +405,9 @@ async function handleSingle(
         // Opt-in redacted request log (no-op unless MEMRAIN_LOG_REQUESTS set).
         // Names + counts + coarse size only — never raw param values.
         logToolCall(params.name, ctx.isPublic, params.arguments, !result.isError);
-        // DB sink — feeds the admin Request Log page. Fire-and-forget +
+        // DB sink — feeds the admin usage counts. Fire-and-forget +
         // redacted; never blocks or fails the call. On error results the
-        // envelope's message/code is re-extracted so the admin reader's
+        // envelope's message/code is re-extracted so the stored row's
         // error_message column is populated (scope rejections land here).
         const errMsg = result.isError
           ? extractErrorMessage(result.content?.[0]?.text)

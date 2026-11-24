@@ -370,7 +370,7 @@ describe("auth CLI", () => {
   });
 });
 
-describe("admin API: enrollments and member grants", () => {
+describe("admin API: redirect URIs", () => {
   const BOOT = "boot-secret";
   let auth: ReturnType<typeof createAdminAuth>;
   let cookie: string;
@@ -395,66 +395,31 @@ describe("admin API: enrollments and member grants", () => {
       requireAdmin: auth.requireAdmin,
       sessionFresh: auth.sessionFresh,
     });
-    return res!;
+    return res ?? new Response("Not Found", { status: 404 });
   }
 
-  it("401s the new routes without a session", async () => {
-    for (const [path, body] of [
-      ["/admin/api/enrollments?client_id=x", undefined],
-      ["/admin/api/enrollments", {}],
-      ["/admin/api/revoke-enrollment", {}],
-      ["/admin/api/revoke-grant", {}],
-      ["/admin/api/set-redirect-uris", {}],
-    ] as const) {
-      expect((await call(path, body, false)).status).toBe(401);
-    }
+  it("401s the route without a session", async () => {
+    expect((await call("/admin/api/set-redirect-uris", {}, false)).status).toBe(401);
   });
 
-  it("issues, lists, and revokes codes and redeemed members, audited as admin", async () => {
+  // Value: protects=enrollment codes are issued and revoked only through the CLI, which
+  // audits them; fails_when=an admin route for them comes back without its page;
+  // why_new=the panel's member editor and its routes were dropped; seam=none
+  it("serves no enrollment routes; the auth CLI issues and revokes codes", async () => {
     await login();
-    const { client } = await connector();
-    const issued = (await (
-      await call("/admin/api/enrollments", { source: "alice", label: "Alice", client_id: client.client_id })
-    ).json()) as { enrollment_id: string; code: string };
-    const tokens = await redeem(client, issued.code);
-    const pending = (await (
-      await call("/admin/api/enrollments", { source: "bob", label: "Bob", client_id: client.client_id })
-    ).json()) as { enrollment_id: string };
-
-    const listed = (await (await call(`/admin/api/enrollments?client_id=${client.client_id}`)).json()) as {
-      enrollments: { id: string; used_at: string | null; last_token_at: string | null; spend_id: string }[];
-    };
-    const alice = listed.enrollments.find((e) => e.id === issued.enrollment_id)!;
-    expect(alice.used_at).not.toBeNull();
-    expect(alice.last_token_at).not.toBeNull();
-    expect(alice.spend_id).toBe(issued.enrollment_id);
-    expect(JSON.stringify(listed)).not.toContain(issued.code);
-
-    // A redeemed member is not a live code: revoke-enrollment refuses it.
-    expect((await call("/admin/api/revoke-enrollment", { id: issued.enrollment_id })).status).toBe(404);
-    expect((await call("/admin/api/revoke-enrollment", { id: pending.enrollment_id })).status).toBe(200);
-
-    const cut = await call("/admin/api/revoke-grant", { id: issued.enrollment_id });
-    expect(cut.status).toBe(200);
-    expect(((await cut.json()) as { tokens_deleted: number }).tokens_deleted).toBe(2);
-    await expect(provider.verifyAccessToken(tokens.access_token)).rejects.toThrow();
-    expect((await call("/admin/api/revoke-grant", { id: "memex_enr_nope" })).status).toBe(404);
-
-    const trail = await storage.raw().query<{ action: string; actor: string; via: string }>(
-      "SELECT action, actor, via FROM oauth_enrollment_audit WHERE enrollment_id = ANY($1::text[]) ORDER BY id",
-      [[issued.enrollment_id, pending.enrollment_id]],
-    );
-    expect(trail.rows.map((r) => r.action)).toEqual(["issue", "issue", "revoke_code", "revoke_grant"]);
-    expect(trail.rows.every((r) => r.actor === "admin" && r.via === "admin_api")).toBe(true);
+    for (const [path, body] of [
+      ["/admin/api/enrollments?client_id=x", undefined],
+      ["/admin/api/enrollments", { source: "alice" }],
+      ["/admin/api/revoke-enrollment", { id: "x" }],
+      ["/admin/api/revoke-grant", { id: "x" }],
+    ] as const) {
+      expect((await call(path, body)).status).toBe(404);
+    }
   });
 
   it("refuses bad input with 400 and an unknown client with 404", async () => {
     await login();
     const { client } = await connector("client");
-    expect((await call("/admin/api/enrollments", { label: "x" })).status).toBe(400);
-    expect((await call("/admin/api/enrollments", { source: "nope" })).status).toBe(400);
-    // Pinning a code to a client-mode connector is refused, as on the CLI.
-    expect((await call("/admin/api/enrollments", { source: "alice", client_id: client.client_id })).status).toBe(400);
     expect(
       (await call("/admin/api/set-redirect-uris", { client_id: client.client_id, redirect_uris: ["http://evil.example/cb"] }))
         .status,
