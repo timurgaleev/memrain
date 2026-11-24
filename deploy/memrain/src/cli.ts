@@ -48,12 +48,12 @@ function printUsage(): void {
   console.log("  backup status [--rds-instance ID] [--efs-id ID] [--copy-report FILE]  inspect backup evidence");
   console.log("  export [--dir DIR] [--source ID]  export live pages as markdown");
   console.log("  import --dir DIR --source ID [--apply --plan-hash HASH]  preview create-only page import; indexing deferred");
-  console.log("  purge-leftovers [--apply --plan-hash HASH64 --export FILE]  preview what purged sources left in synthesis and facts");
+  console.log("  purge-leftovers [--apply --plan-hash HASH64 --export FILE]  preview derived 2.x rows that purged sources left behind");
   console.log("  purge-leftovers restore --from FILE  undo an apply from its export");
   console.log("  unpurge <slug> [--source ID]  clear a purged page's tombstones so its text can be written again");
   console.log("  erase forgotten --source ID [--fact-ids CSV] [--deleted-pages CSV] [--apply --plan-hash HASH]");
-  console.log("                               preview explicit database erasure of forgotten facts/deleted pages");
-  console.log("  erase chat --owner KEY [--apply]  preview, then delete one owner's chat threads");
+  console.log("                               preview explicit database erasure of forgotten 2.x rows and deleted pages");
+  console.log("  erase chat --owner KEY [--apply]  preview, then delete one owner's history a 2.x brain kept");
   console.log("  engine status [--probe] [--json]  inspect engine config; optionally test one connection");
   console.log("  init --pglite                initialize ~/.memrain/ + PGLite db");
   console.log("  serve --http --host H --port N");
@@ -92,7 +92,7 @@ function printUsage(): void {
   console.log("                               one-time link for the panel owner to create a passkey (default 24h, max 72h)");
   console.log("  auth who-can-read <slug>     check issued credentials through page_get, without recording reads");
   console.log("  auth register-client <name> [--scopes S] [--source SRC] [--federated-read a,b]");
-  console.log("                               [--tenant-mode client|enrollment]  (enrollment = one connector, many tenants)");
+  console.log("                               [--tenant-mode client|enrollment]  (enrollment = each sign-in pinned by a one-time code)");
   console.log("                               [--token-endpoint-auth-method none|client_secret_post|client_secret_basic]");
   console.log("                               [--access-ttl 1h] [--refresh-ttl 30d]");
   console.log("                               register a client_credentials OAuth client (prints secret once;");
@@ -112,7 +112,7 @@ function printUsage(): void {
   console.log("  auth grant-history <id> [--limit N]");
   console.log("                               JSON audit of a client's grant changes, newest first");
   console.log("  auth enroll <source> [--label N] [--client ID] [--ttl 7d] [--replaces ENROLLMENT_ID]");
-  console.log("                               one-time enrollment code: a person presents it at /authorize");
+  console.log("                               one-time enrollment code: present it at /authorize");
   console.log("                               on an enrollment-mode client and lands in <source> (printed once);");
   console.log("                               --replaces keeps the old grant's spend key and revokes it on redemption");
   console.log("  auth enrollments [--client ID]");
@@ -125,7 +125,7 @@ function printUsage(): void {
   console.log("                               daily USD ceiling across every paid op ('none' = uncapped)");
   console.log("  auth grant-token <id> <secret> [--scopes S]");
   console.log("                               mint an access token locally (= POST /token)");
-  console.log("  auth create <name> [--member M] [--source SRC] [--federated-read a,b]");
+  console.log("  auth create <name> [--source SRC] [--federated-read a,b]");
   console.log("                    [--scopes read,write]");
   console.log("                               mint a long-lived personal access token (prints once)");
   console.log("  auth list                    JSON list of personal access tokens (no hashes)");
@@ -155,7 +155,7 @@ function printUsage(): void {
   console.log("                               by default, never prints a value");
   console.log("  secrets audit --transcripts [--slug-prefixes P/,P/] [--json] [--apply --yes]");
   console.log("                               agent transcripts only, with the cookie/.netrc/split-label rules;");
-  console.log("                               counts and slugs only; apply keeps originals (needs the connector key)");
+  console.log("                               counts and slugs only; apply keeps originals (needs the secret-store key)");
   console.log("  secrets originals [--slug S] [--source ID] [--json]   redacted originals the store keeps (no values)");
   console.log("  secrets reveal <slug> <fingerprint> [--json]          print the original behind a marker (audited)");
   console.log("  secrets restore <slug> <fingerprint> [--apply --plan-hash H]  put a false positive back (preview first)");

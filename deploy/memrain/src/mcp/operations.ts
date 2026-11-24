@@ -347,7 +347,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "index",
     scope: "write",
     description:
-      "Index a markdown document. Either pass `path` (an absolute path the daemon can read) or `sourcePath` + `text` (in-memory).",
+      "Index a markdown document. Either pass `path` (an absolute path the server can read) or `sourcePath` + `text` (in-memory).",
     params: {
       path: str({ description: "Absolute path to a .md file." }),
       sourcePath: str(),
@@ -396,7 +396,7 @@ export const OPERATIONS: readonly Operation[] = [
       markdown_body: str(),
       written_by: str({
         description:
-          "Optional caller id for the audit trail (skill slug, recipe, …).",
+          "Optional caller id for the audit trail (agent or skill name).",
       }),
       allowAdHocType: bool(),
       allow_empty_body: bool({
@@ -434,7 +434,7 @@ export const OPERATIONS: readonly Operation[] = [
     // The diff quotes the stored lines around the edit.
     outputRedaction: "retrieval",
     description:
-      "Atomically apply 1..50 ordered exact-text body replacements, keeping title/frontmatter. Copy unique old_text from page_get; misses/duplicates give edit_no_match/edit_ambiguous_match. Facts/takes fences are protected (edit_protected_span). Requires expected_version; a conflict returns current_version. Returns version and a diff capped at 8 KB (diff_truncated). Indexing as page_put. Public writes need MEMRAIN_PUBLIC_WRITE=1.",
+      "Atomically apply 1..50 ordered exact-text body replacements, keeping title/frontmatter. Copy unique old_text from page_get; misses/duplicates give edit_no_match/edit_ambiguous_match. Fenced blocks from earlier versions are protected (edit_protected_span). Requires expected_version; a conflict returns current_version. Returns version and a diff capped at 8 KB (diff_truncated). Indexing as page_put. Public writes need MEMRAIN_PUBLIC_WRITE=1.",
     params: {
       reason: str({ description: "Optional one-line reason, ≤500 code points, trimmed and secret-scanned; stored only with a new version." }),
       slug: str({ ...req, description: "The page to edit; it must exist." }),
@@ -459,7 +459,7 @@ export const OPERATIONS: readonly Operation[] = [
       }),
       written_by: str({
         description:
-          "Optional caller id for the audit trail (skill slug, recipe, …).",
+          "Optional caller id for the audit trail (agent or skill name).",
       }),
       wait_for_index: bool({ description: "No effect: the search mirror is always written before return." }),
       request_id: requestIdParam,
@@ -469,7 +469,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "page_rename",
     scope: "write",
     description:
-      "Rename a page, carrying its history, facts, links and timeline and redirecting the old slug. Requires expected_version from page_get. Refuses imported pages; rename them upstream. Old search mirrors are removed immediately; the next cycle indexes the new slug. Both slugs must be within your write grant. Static public bearer: forbidden.",
+      "Rename a page, carrying its history, links and tags and redirecting the old slug. Requires expected_version from page_get. Refuses imported pages; rename them upstream. Old search mirrors are removed immediately; hourly housekeeping indexes the new slug. Both slugs must be within your write grant. Static public bearer: forbidden.",
     params: {
       from: str(req),
       to: str(req),
@@ -688,7 +688,7 @@ export const OPERATIONS: readonly Operation[] = [
     name: "purge_deleted_pages",
     scope: "admin",
     description:
-      "HARD-delete pages soft-deleted over older_than_hours ago (default 720) with versions, aliases, links, raw_data, tags, redirects, facts on them, synthesis output and secret originals only they held. Returns slugs, count, ttl_hours, per-table counts. Admin scope in the owning source or internal token; never the public bearer.",
+      "HARD-delete pages soft-deleted over older_than_hours ago (default 720) with versions, aliases, links, raw_data, tags, redirects, what was derived from them and secret originals only they held. Returns slugs, count, ttl_hours, per-table counts. Admin scope in the owning source or internal token; never the public bearer.",
     params: {
       older_than_hours: num({
         minimum: 0,

@@ -102,7 +102,7 @@
   },
   {
     "name": "index",
-    "description": "Index a markdown document. Either pass `path` (an absolute path the daemon can read) or `sourcePath` + `text` (in-memory).",
+    "description": "Index a markdown document. Either pass `path` (an absolute path the server can read) or `sourcePath` + `text` (in-memory).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -201,7 +201,7 @@
         },
         "written_by": {
           "type": "string",
-          "description": "Optional caller id for the audit trail (skill slug, recipe, …)."
+          "description": "Optional caller id for the audit trail (agent or skill name)."
         },
         "allowAdHocType": {
           "type": "boolean"
@@ -282,7 +282,7 @@
   },
   {
     "name": "page_edit",
-    "description": "Atomically apply 1..50 ordered exact-text body replacements, keeping title/frontmatter. Copy unique old_text from page_get; misses/duplicates give edit_no_match/edit_ambiguous_match. Facts/takes fences are protected (edit_protected_span). Requires expected_version; a conflict returns current_version. Returns version and a diff capped at 8 KB (diff_truncated). Indexing as page_put. Public writes need MEMRAIN_PUBLIC_WRITE=1.",
+    "description": "Atomically apply 1..50 ordered exact-text body replacements, keeping title/frontmatter. Copy unique old_text from page_get; misses/duplicates give edit_no_match/edit_ambiguous_match. Fenced blocks from earlier versions are protected (edit_protected_span). Requires expected_version; a conflict returns current_version. Returns version and a diff capped at 8 KB (diff_truncated). Indexing as page_put. Public writes need MEMRAIN_PUBLIC_WRITE=1.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -324,7 +324,7 @@
         },
         "written_by": {
           "type": "string",
-          "description": "Optional caller id for the audit trail (skill slug, recipe, …)."
+          "description": "Optional caller id for the audit trail (agent or skill name)."
         },
         "wait_for_index": {
           "type": "boolean",
@@ -350,7 +350,7 @@
   },
   {
     "name": "page_rename",
-    "description": "Rename a page, carrying its history, facts, links and timeline and redirecting the old slug. Requires expected_version from page_get. Refuses imported pages; rename them upstream. Old search mirrors are removed immediately; the next cycle indexes the new slug. Both slugs must be within your write grant. Static public bearer: forbidden.",
+    "description": "Rename a page, carrying its history, links and tags and redirecting the old slug. Requires expected_version from page_get. Refuses imported pages; rename them upstream. Old search mirrors are removed immediately; hourly housekeeping indexes the new slug. Both slugs must be within your write grant. Static public bearer: forbidden.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -908,7 +908,7 @@
   },
   {
     "name": "purge_deleted_pages",
-    "description": "HARD-delete pages soft-deleted over older_than_hours ago (default 720) with versions, aliases, links, raw_data, tags, redirects, facts on them, synthesis output and secret originals only they held. Returns slugs, count, ttl_hours, per-table counts. Admin scope in the owning source or internal token; never the public bearer.",
+    "description": "HARD-delete pages soft-deleted over older_than_hours ago (default 720) with versions, aliases, links, raw_data, tags, redirects, what was derived from them and secret originals only they held. Returns slugs, count, ttl_hours, per-table counts. Admin scope in the owning source or internal token; never the public bearer.",
     "inputSchema": {
       "type": "object",
       "properties": {
