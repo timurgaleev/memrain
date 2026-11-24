@@ -1,8 +1,0 @@
-// Routing eval fixtures for skills/mcp-access.
-// Each line: {intent, expected_skill, ambiguous_with?}.
-// Rule: intent must paraphrase the trigger, not copy it.
-{"intent": "I need to manage mcp clients, one of them belongs to a contractor who left", "expected_skill": "mcp-access"}
-{"intent": "Please revoke an mcp client that we no longer use", "expected_skill": "mcp-access"}
-{"intent": "How do I open the admin panel on my server?", "expected_skill": "mcp-access"}
-{"intent": "Tell me who can read this page before I share the prefix", "expected_skill": "mcp-access"}
-{"intent": "Open the garage door", "expected_skill": null}

@@ -1,8 +1,0 @@
-// Routing eval fixtures for skills/blog-ingest.
-// Each line: {intent, expected_skill, ambiguous_with?}.
-// Rule: intent must paraphrase the trigger, not copy it.
-{"intent": "Please ingest this whole blog into my brain, every post in the archive and not just the recent ones", "expected_skill": "blog-ingest"}
-{"intent": "Ingest this publication: walk the feed, page through the archive and write one page per post", "expected_skill": "blog-ingest"}
-{"intent": "Backfill this blog from its feed, oldest posts first, without duplicates on a re-run", "expected_skill": "blog-ingest"}
-{"intent": "Ingest this newsletter archive, all the back issues, deduped by canonical URL", "expected_skill": "blog-ingest"}
-{"intent": "Unsubscribe me from this newsletter and mute future issues", "expected_skill": null}

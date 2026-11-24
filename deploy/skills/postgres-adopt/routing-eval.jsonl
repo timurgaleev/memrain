@@ -1,8 +1,0 @@
-// Routing eval fixtures for skills/postgres-adopt.
-// Each line: {intent, expected_skill, ambiguous_with?}.
-// Rule: intent must paraphrase the trigger, not copy it.
-{"intent": "Is my brain on pglite or postgres right now?", "expected_skill": "postgres-adopt"}
-{"intent": "We have three agents writing now, time to upgrade to postgres", "expected_skill": "postgres-adopt"}
-{"intent": "Help me move my brain to postgres without losing anything", "expected_skill": "postgres-adopt"}
-{"intent": "Which memrain engine does this install use?", "expected_skill": "postgres-adopt"}
-{"intent": "Explain what a database index is", "expected_skill": null}

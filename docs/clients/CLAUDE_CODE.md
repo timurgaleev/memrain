@@ -95,16 +95,8 @@ enrollment-mode client and a code as described in
 
 The repository is also a Claude Code plugin marketplace. Its one plugin lives
 in `plugins/memrain`, so an install copies only that folder: the same `memrain`
-MCP server plus 31 skills that teach the agent how to use it: the core loop
-(`query`, `capture`, `brain-ops`, `briefing`, `correction-pipeline`), ingestion
-(`ingest`, `ingest-gate`, `media-ingest`, `idea-ingest`, `meeting-ingestion`,
-`blog-ingest`, `bulk-ingestion` and more), research and checking (`fact-check`,
-`research-compendium`, `academic-verify`, `citation-fixer`), daily work
-(`daily-task-prep`, `daily-task-manager`, `mail-loops`, `reports`) and
-`connect-client` for setup. They are generated from `deploy/skills`;
-`deploy/skills/plugin-lanes.json` decides which skills ship, with a reason for
-each one left out. Host-side skills never ship, and a shipped skill never
-names an operator-only tool or hands off to a skill outside the plugin.
+MCP server plus three skills: `connect-client` for setup, `query` for
+lookups with citations, and `ingest` for saving content as linked pages.
 
 1. Mint a token as in Option A, step 1 (or take the one `make local-up`
    printed for a local brain).

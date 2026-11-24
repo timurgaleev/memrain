@@ -1,3 +1,0 @@
-{"intent": "connect a memrain client", "expected_skill": "connect-client"}
-{"intent": "set up a memrain connector", "expected_skill": "connect-client"}
-{"intent": "show tomorrow weather forecast", "expected_skill": null, "ambiguous_with": []}

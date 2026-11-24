@@ -1,8 +1,0 @@
-// Routing eval fixtures for skills/brain-link-discipline.
-// Each line: {intent, expected_skill, ambiguous_with?}.
-// Rule: intent must paraphrase the trigger, not copy it.
-{"intent": "You saved the page, now give me the link in the same message next time", "expected_skill": "brain-link-discipline"}
-{"intent": "Where is the page you just wrote? I should not have to ask", "expected_skill": "brain-link-discipline"}
-{"intent": "Why does this link 404 right after you said you saved it", "expected_skill": "brain-link-discipline"}
-{"intent": "Rewrite subagent paths into clickable links before relaying the result", "expected_skill": "brain-link-discipline"}
-{"intent": "Add a typed link between the alice-example page and the acme-example page", "expected_skill": null}

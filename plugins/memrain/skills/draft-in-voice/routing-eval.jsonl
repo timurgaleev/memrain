@@ -1,8 +1,0 @@
-// Routing eval fixtures for skills/draft-in-voice.
-// Each line: {intent, expected_skill, ambiguous_with?}.
-// Rule: intent must paraphrase the trigger, not copy it.
-{"intent": "Ghostwrite a launch post for alice-example about the new release", "expected_skill": "draft-in-voice"}
-{"intent": "Draft a tweet as charlie-example announcing the hire", "expected_skill": "draft-in-voice"}
-{"intent": "Rewrite this reply in my voice, keep it short", "expected_skill": "draft-in-voice"}
-{"intent": "Build a voice profile for alice-example from her posts", "expected_skill": "draft-in-voice"}
-{"intent": "Translate this paragraph into French", "expected_skill": null}

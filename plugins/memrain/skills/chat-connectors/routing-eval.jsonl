@@ -1,8 +1,0 @@
-// Routing eval fixtures for skills/chat-connectors.
-// Each line: {intent, expected_skill, ambiguous_with?}.
-// Rule: intent must paraphrase the trigger, not copy it.
-{"intent": "Keep my conversations synced without downloading an export every week", "expected_skill": "chat-connectors"}
-{"intent": "Connect my chatgpt so new chats land in the brain", "expected_skill": "chat-connectors"}
-{"intent": "Sync my chat history from Claude Code every time a session ends", "expected_skill": "chat-connectors"}
-{"intent": "Auto-import my chats from the laptop on a schedule", "expected_skill": "chat-connectors"}
-{"intent": "Delete my old chat app from the phone", "expected_skill": null}

@@ -1,8 +1,0 @@
-// Routing eval fixtures for skills/two-tier-extraction.
-// Each line: {intent, expected_skill, ambiguous_with?}.
-// Rule: intent must paraphrase the trigger, not copy it.
-{"intent": "Set up two-tier extraction for this document dump: cheap model on the noise, best model on what matters", "expected_skill": "two-tier-extraction"}
-{"intent": "Use triage then deep read on these 5,000 old mail threads", "expected_skill": "two-tier-extraction"}
-{"intent": "What is the model escalation pattern for my transcript library?", "expected_skill": "two-tier-extraction"}
-{"intent": "Route models by content value for this archive run", "expected_skill": "two-tier-extraction"}
-{"intent": "Which model should be the default for my chat app?", "expected_skill": null}

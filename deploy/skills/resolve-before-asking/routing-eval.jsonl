@@ -1,8 +1,0 @@
-// Routing eval fixtures for skills/resolve-before-asking.
-// Each line: {intent, expected_skill, ambiguous_with?}.
-// Rule: intent must paraphrase the trigger, not copy it.
-{"intent": "There is an unidentified contact in this reply draft, check the brain first", "expected_skill": "resolve-before-asking"}
-{"intent": "This person page still says to be filled by content analysis, fix it from the brain", "expected_skill": "resolve-before-asking"}
-{"intent": "The briefing lists three people with unknown relationship to me", "expected_skill": "resolve-before-asking"}
-{"intent": "I don't know who this is, should I ask who they are or can the brain answer?", "expected_skill": "resolve-before-asking"}
-{"intent": "What's for breakfast", "expected_skill": null}

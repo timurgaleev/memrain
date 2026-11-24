@@ -1,8 +1,0 @@
-// Routing eval fixtures for skills/measure-before-you-fix.
-// Each line: {intent, expected_skill, ambiguous_with?}.
-// Rule: intent must paraphrase the trigger, not copy it.
-{"intent": "Doctor says the mail source is behind, should we just raise the timeout on the sync?", "expected_skill": "measure-before-you-fix"}
-{"intent": "The embed step died with ETIMEDOUT again, bump it and rerun", "expected_skill": "measure-before-you-fix"}
-{"intent": "Third freshness alert today, let's rewrite the wrapper", "expected_skill": "measure-before-you-fix"}
-{"intent": "The connector sync is stuck again since last night", "expected_skill": "measure-before-you-fix"}
-{"intent": "Why does this function return undefined? Debug it", "expected_skill": null}

@@ -5,18 +5,19 @@ marketplaces at the repo root that point at it.
 Both hosts connect to a Memrain server the user names (remote MCP over HTTP),
 so the checks are: the fields each host needs are there, the marketplaces
 install only the plugin folder (never the repo with its ignored local files),
-the curated skills are exact copies of deploy/skills, both manifests carry the
-version being released, the endpoint and token come from the user's settings
-or environment, and no credential is committed.
+the plugin ships exactly its three skills and each names only tools this build
+serves, both manifests carry the version being released, the endpoint and
+token come from the user's settings or environment, and no credential is
+committed.
 """
 from __future__ import annotations
 
-import filecmp
 import json
 import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO = Path(__file__).resolve().parent.parent
 PLUGIN = REPO / "plugins" / "memrain"
@@ -28,11 +29,17 @@ CODEX_MARKET = REPO / ".agents" / "plugins" / "marketplace.json"
 ALL = (CLAUDE_PLUGIN, CLAUDE_MARKET, CODEX_PLUGIN, CODEX_MCP, CODEX_MARKET)
 
 PLUGIN_SKILLS = PLUGIN / "skills"
-SOURCE_SKILLS = REPO / "deploy" / "skills"
-LANES = json.loads((SOURCE_SKILLS / "plugin-lanes.json").read_text(encoding="utf-8"))
-CURATED = set(LANES["plugin"])
-OPERATOR_ONLY = set(LANES["operator_only"])
-EXCLUDED = set(LANES["excluded"])
+SHIPPED_SKILLS = {"connect-client", "ingest", "query"}
+OPERATIONS = REPO / "deploy" / "memrain" / "src" / "mcp" / "operations.ts"
+# Tools a 2.x skill named that this build no longer serves. A skill that
+# mentions one in a code span is telling the agent to call a tool that is gone.
+RETIRED_TOOLS = {
+    "query", "think", "recall", "add_fact", "extract_facts", "forget_fact", "entity_facts",
+    "entity_recall", "entity_timeline", "add_timeline_event", "graph_query", "graph_neighbors",
+    "traverse_graph", "put_raw_data", "get_raw_data", "get_ingest_log", "log_ingest",
+    "list_skills", "get_skill", "context_pack", "volunteer_context", "find_contradictions",
+    "source_health", "takes_search", "code_def", "code_callers", "loops_list",
+}
 
 # A literal bearer value, a Memrain token, a long hex or base64 secret, an AWS key.
 CREDENTIAL = re.compile(
@@ -109,29 +116,43 @@ def test_claude_reads_the_same_skills_folder():
     assert PLUGIN_SKILLS.is_dir()
 
 
-def test_plugin_ships_the_curated_skills():
+def served_tools() -> set[str]:
+    names = set(re.findall(r'^    name: "([a-z_]+)",$', OPERATIONS.read_text(encoding="utf-8"), re.M))
+    assert "search" in names and "page_put" in names, "operations.ts scan found no tools"
+    return names
+
+
+def skill_parts(name: str) -> tuple[dict, str]:
+    text = (PLUGIN_SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
+    assert text.startswith("---\n"), f"{name}/SKILL.md has no frontmatter"
+    end = text.index("\n---", 4)
+    return yaml.safe_load(text[4:end]) or {}, text[end + 4:]
+
+
+def test_plugin_ships_its_three_skills():
     shipped = {p.name for p in PLUGIN_SKILLS.iterdir() if p.is_dir()}
-    assert shipped == CURATED
-    assert not shipped & OPERATOR_ONLY, sorted(shipped & OPERATOR_ONLY)
-    assert not shipped & EXCLUDED, sorted(shipped & EXCLUDED)
-    assert {"query", "capture", "connect-client"} <= CURATED
-    for name in CURATED:
+    assert shipped == SHIPPED_SKILLS
+    for name in SHIPPED_SKILLS:
         assert (PLUGIN_SKILLS / name / "SKILL.md").is_file(), f"{name}/SKILL.md missing"
 
 
-@pytest.mark.parametrize("name", sorted(CURATED))
-def test_plugin_skill_matches_its_source(name: str):
-    def differences(cmp: filecmp.dircmp) -> list[str]:
-        out = [f"{cmp.left}/{f}" for f in cmp.left_only + cmp.right_only + cmp.diff_files + cmp.funny_files]
-        for sub in cmp.subdirs.values():
-            out += differences(sub)
-        return out
-
-    drift = differences(filecmp.dircmp(SOURCE_SKILLS / name, PLUGIN_SKILLS / name, ignore=[]))
-    assert not drift, (
-        f"plugins/memrain/skills/{name} differs from deploy/skills/{name}: {drift}; "
-        "regenerate it: cd deploy/memrain && bun scripts/generate-plugin-tree.ts"
-    )
+@pytest.mark.parametrize("name", sorted(SHIPPED_SKILLS))
+def test_plugin_skill_names_only_served_tools(name: str):
+    front, body = skill_parts(name)
+    assert front["name"] == name
+    assert front.get("description", "").strip()
+    assert front.get("triggers"), f"{name} has no triggers"
+    tools = set(front.get("tools") or [])
+    assert tools, f"{name} lists no tools"
+    unknown = sorted(tools - served_tools())
+    assert not unknown, f"{name} lists tools this build does not serve: {unknown}"
+    # MCP prompts are not served, so a prompt opt-in would be dead config.
+    assert "prompt" not in front, f"{name} opts in to MCP prompts, which this build does not serve"
+    spans = set(re.findall(r"`([a-z_]+)`", body))
+    retired = sorted(spans & RETIRED_TOOLS)
+    assert not retired, f"{name} tells the agent to call retired tools: {retired}"
+    undeclared = sorted((spans & served_tools()) - tools)
+    assert not undeclared, f"{name} uses tools its frontmatter does not list: {undeclared}"
 
 
 def test_claude_server_comes_from_user_settings():

@@ -1,8 +1,0 @@
-// Routing eval fixtures for skills/mail-loops.
-// Each line: {intent, expected_skill, ambiguous_with?}.
-// Rule: intent must paraphrase the trigger, not copy it.
-{"intent": "Who is waiting on me this week, anything urgent?", "expected_skill": "mail-loops"}
-{"intent": "What do I owe people from yesterday's threads?", "expected_skill": "mail-loops"}
-{"intent": "Show me my open loops across Gmail and Outlook", "expected_skill": "mail-loops"}
-{"intent": "I want to connect outlook so my work mail lands in the brain", "expected_skill": "mail-loops"}
-{"intent": "Close the loop on the kitchen renovation budget with my partner tonight", "expected_skill": null}

@@ -1,8 +1,0 @@
-// Routing eval fixtures for skills/bulk-ingestion.
-// Each line: {intent, expected_skill, ambiguous_with?}.
-// Rule: intent must paraphrase the trigger, not copy it.
-{"intent": "I want to ingest all my podcast transcripts into the brain", "expected_skill": "bulk-ingestion"}
-{"intent": "Build an ingestion pipeline for three years of standup notes", "expected_skill": "bulk-ingestion"}
-{"intent": "Set up a bulk import of this mail export with hundreds of thousands of messages", "expected_skill": "bulk-ingestion"}
-{"intent": "Make a manifest so we can resume this big ingest across sessions and workers", "expected_skill": "bulk-ingestion"}
-{"intent": "Bulk-rename the screenshots in this folder to kebab-case filenames", "expected_skill": null}

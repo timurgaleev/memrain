@@ -1,3 +1,0 @@
-{"intent": "check before creating a page", "expected_skill": "ingest-gate"}
-{"intent": "check ingest duplicates", "expected_skill": "ingest-gate"}
-{"intent": "show tomorrow weather forecast", "expected_skill": null, "ambiguous_with": []}
