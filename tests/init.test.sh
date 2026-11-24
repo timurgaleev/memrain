@@ -36,7 +36,6 @@ pass() { echo "  ✓ $*"; PASS=$((PASS + 1)); }
 #   AWS_ACCOUNT_ID, AWS_REGION, AWS_PROFILE, PROJECT_NAME, DOMAIN, SUBDOMAIN,
 #   GITHUB_OWNER, REPO_NAME, SECRETS_PREFIX, TFSTATE_BUCKET, TFSTATE_REGION,
 #   TFSTATE_KEY, ALARM_EMAIL, SSH_ALLOWED_CIDR, USE_SSH_DEPLOY_KEY
-# The feature tier prompt that follows reads EOF and takes its default.
 # valid_answers [TFSTATE_KEY] — empty takes the default <project>/terraform.tfstate.
 valid_answers() {
   cat <<EOF
@@ -263,21 +262,16 @@ if grep -q '^subdomain           = "brain"$' "$t1/terraform/terraform.tfvars" \
    && grep -q '^PUBLIC_HOST=brain.example.com$' "$t1/.env" \
    && grep -q '^MEMRAIN_PUBLIC_URL=https://brain.example.com$' "$t1/.env" \
    && grep -q '^MEMRAIN_PUBLIC_WRITE=0$' "$t1/.env" \
-   && grep -q '^MEMRAIN_GRAPH_RERANK=1$' "$t1/.env" \
    && ! grep -q 'MEMEX_' "$t1/.env"; then
   pass "T16 subdomain + MEMRAIN_ keys, no memex_subdomain, no MEMEX_ key"
 else
   die "T16 new names: $(cat "$t1/.env" "$t1/terraform/terraform.tfvars" 2>/dev/null)"
 fi
 
-# T17. MEMRAIN_INIT_TIER picks the tier; MEMEX_INIT_TIER is the fallback.
-t17=$(new_workspace t17)
-valid_answers | (cd "$t17" && MEMEX_INIT_TIER=free INIT_NON_INTERACTIVE=1 INIT_REPO_ROOT="$t17" bash "$INIT_SH") >/dev/null 2>&1
-t17b=$(new_workspace t17b)
-valid_answers | (cd "$t17b" && MEMRAIN_INIT_TIER=balanced MEMEX_INIT_TIER=free INIT_NON_INTERACTIVE=1 INIT_REPO_ROOT="$t17b" bash "$INIT_SH") >/dev/null 2>&1
-if grep -q 'Feature tier: free' "$t17/.env" \
-   && grep -q 'Feature tier: balanced' "$t17b/.env"; then
-  pass "T17 MEMRAIN_INIT_TIER wins, MEMEX_INIT_TIER falls back"
+# T17. No feature-tier prompt, and the .env enables no removed feature.
+if ! grep -q 'Feature tier' "$t1/.env" \
+   && ! grep -Eq '^MEMRAIN_(RERANK|GRAPH_RERANK|DREAM_SYNTHESIS|THINK|DEEP_SYNTH|TAKE_ENSEMBLE|FACTS_EXTRACTION|CONTEXTUAL_[A-Z_]+|RELATIONAL_LLM|DOCTOR_PER_SOURCE)=' "$t1/.env"; then
+  pass "T17 no feature tier, no removed feature flag in .env"
 else
-  die "T17 tier env: $(grep 'Feature tier' "$t17/.env" "$t17b/.env" 2>/dev/null)"
+  die "T17 tier leftovers: $(grep -E 'Feature tier|^MEMRAIN_' "$t1/.env" 2>/dev/null)"
 fi
