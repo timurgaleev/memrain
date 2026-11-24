@@ -36,7 +36,6 @@ import {
 } from "../core/oauth-provider.ts";
 import type { GrantChange, TenantMode } from "../core/oauth-provider.ts";
 import { isToolSurface } from "../mcp/surface.ts";
-import { isTrustTier } from "../core/trust-tier.ts";
 import { normalizeScopesInput } from "../core/scope.ts";
 import { isSameOriginPost } from "./same-origin.ts";
 import { handleAdminTool } from "./admin-tool.ts";
@@ -104,7 +103,8 @@ const isIdList = (v: unknown): v is string[] =>
 
 /**
  * The grant change a rescope body names. Every field is optional and omitted
- * means unchanged; `null` clears the fence, the budget or the trust floor.
+ * means unchanged; `null` clears the fence, the budget or the trust floor
+ * (a floor can only be cleared).
  */
 function parseGrantChange(body: Record<string, unknown>): GrantChange | string {
   const change: GrantChange = {};
@@ -148,9 +148,11 @@ function parseGrantChange(body: Record<string, unknown>): GrantChange | string {
     }
     change.budgetUsdPerDay = b as number | null;
   }
+  // Only clearing is accepted: credentials with a trust floor are refused at
+  // verify, so setting one would lock the client out.
   if (body.min_trust !== undefined) {
-    if (body.min_trust !== null && !isTrustTier(body.min_trust)) return "min_trust must be owner, member, agent or external, or null";
-    change.minTrust = body.min_trust as GrantChange["minTrust"];
+    if (body.min_trust !== null) return "min_trust can only be cleared (null); this brain refuses credentials that carry a trust floor";
+    change.minTrust = null;
   }
   return change;
 }

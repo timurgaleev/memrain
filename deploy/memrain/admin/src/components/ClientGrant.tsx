@@ -38,12 +38,11 @@ interface GrantDraft {
   scopes: string[];
   surface: string;
   budget: string;
-  floor: string;
+  clearFloor: boolean;
 }
 
 const SCOPES = ["read", "write", "admin"];
 const SURFACES = ["full", "starter", "verbs"];
-const FLOORS = ["", "owner", "member", "agent", "external"];
 const split = (text: string) => text.split(/[\s,]+/).filter(Boolean);
 const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x) => b.includes(x));
 
@@ -55,7 +54,7 @@ function grantDraft(g: ClientGrant): GrantDraft {
     scopes: g.scopes,
     surface: g.tool_surface,
     budget: g.budget_usd_per_day === null ? "unlimited" : String(g.budget_usd_per_day),
-    floor: g.min_trust ?? "",
+    clearFloor: false,
   };
 }
 
@@ -79,8 +78,9 @@ export function grantChange(g: ClientGrant, d: GrantDraft): Record<string, unkno
   const budget = budgetText === "" || budgetText === "unlimited" ? null : Number(budgetText);
   if (budget !== null && (!Number.isFinite(budget) || budget < 0)) return "Daily budget is an amount such as 2.50, or unlimited.";
   if (budget !== g.budget_usd_per_day) change.budget_usd_per_day = budget;
-  const floor = d.floor === "" ? null : d.floor;
-  if (floor !== g.min_trust) change.min_trust = floor;
+  // A trust floor can only be removed here: this brain refuses every token of a
+  // client that carries one, so setting a floor would lock the client out.
+  if (d.clearFloor && g.min_trust !== null) change.min_trust = null;
   return change;
 }
 
@@ -116,8 +116,11 @@ function implications(p: GrantPreview): string[] {
       ? "Added scopes reach only tokens issued after the change; removed scopes leave issued tokens at their next request."
       : "Removed scopes leave issued tokens at their next request.");
   }
-  if (p.changed.some((f) => f === "tool_surface" || f === "min_trust")) {
-    out.push("Tool surface and trust floor apply to every token at its next request.");
+  if (p.changed.includes("tool_surface")) {
+    out.push("The tool surface applies to every token at its next request.");
+  }
+  if (p.changed.includes("min_trust")) {
+    out.push("Removing the trust floor lets the client's tokens in again at their next request.");
   }
   if (p.changed.includes("budget_usd_per_day")) {
     out.push(p.after.tenant_mode === "enrollment"
@@ -284,12 +287,17 @@ export function ClientGrantEditor({ clientId, onClose, onSaved }: { clientId: st
               <label htmlFor="grant-budget">Daily budget (USD)</label>
               <input id="grant-budget" value={draft.budget} onChange={(e) => edit({ ...draft, budget: e.target.value })} placeholder="unlimited" />
             </div>
-            <div style={field}>
-              <label htmlFor="grant-floor">Trust floor (least trusted content it may read)</label>
-              <select id="grant-floor" value={draft.floor} onChange={(e) => edit({ ...draft, floor: e.target.value })}>
-                {FLOORS.map((f) => <option key={f} value={f}>{f === "" ? "none" : f}</option>)}
-              </select>
-            </div>
+            {grant?.min_trust && (
+              <div style={field}>
+                <p style={{ fontSize: 12, color: "var(--warning)" }}>
+                  This client carries a trust floor ({grant.min_trust}) from an earlier version. This brain does not enforce trust floors and refuses the client's tokens until the floor is removed.
+                </p>
+                <label className="checkbox-label">
+                  <input type="checkbox" checked={draft.clearFloor} onChange={(e) => edit({ ...draft, clearFloor: e.target.checked })} />
+                  Remove the trust floor
+                </label>
+              </div>
+            )}
           </>
         )}
       </fieldset>

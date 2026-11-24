@@ -239,6 +239,22 @@ describe("the routes the panel keeps", () => {
     expect(after.review).toEqual({ write_gate_holds: 1, row_holds: 0, quarantined: 1 });
   });
 
+  // Value: protects=the panel cannot give a client a trust floor, which this build refuses at
+  // verify and so would lock the client out; clearing an old floor still previews;
+  // fails_when=the rescope route accepts a non-null min_trust again; why_new=the editor field
+  // was removed; seam=none
+  it("rescope refuses to set a trust floor and still previews clearing one", async () => {
+    const b = await operator();
+    const { clientId } = await provider.registerClientManual(
+      "e2e-floor", ["authorization_code", "refresh_token"], "read", [REDIRECT], "default",
+    );
+    const set = await b.call("/admin/api/rescope-client", { client_id: clientId, min_trust: "member", dry_run: true });
+    expect(set.status).toBe(400);
+    expect(((await set.json()) as { error: string }).error).toContain("min_trust can only be cleared");
+    const clear = await b.call("/admin/api/rescope-client", { client_id: clientId, min_trust: null, dry_run: true });
+    expect(clear.status).toBe(200);
+  });
+
   // Value: protects=the dropped pages leave no server route behind; fails_when=a route of a
   // retired page answers again; why_new=the panel cut removed them; seam=none
   it("routes of the dropped pages are gone", async () => {
