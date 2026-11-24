@@ -24,6 +24,7 @@ import { checkSecretExposure, checkSecretStore } from "./doctor-secrets.ts";
 import { checkOauthClientHygiene } from "./doctor-oauth.ts";
 import { brainHealthMetrics } from "./source-health.ts";
 import { lastHousekeepingRun } from "./housekeeping.ts";
+import { checkRuntimeConfigValues } from "./runtime-config-schema.ts";
 
 /** Housekeeping runs hourly; older than this, the serving process is not running it. */
 const HOUSEKEEPING_STALE_MS = 3 * 60 * 60 * 1000;
@@ -122,6 +123,7 @@ export async function liteEngineChecks(storage: Storage, now: Date = new Date())
     ["stale-locks", async () => verdict("stale-locks", await checkStaleLocks(engine))],
     ["housekeeping", () => housekeepingCheck(engine, now)],
     ["runtime-config-overlay", async () => verdict("runtime-config-overlay", await checkRuntimeConfigOverlay(engine))],
+    ["runtime-config-values", () => checkRuntimeConfigValues(engine)],
     ["db-backends", async () => verdict("db-backends", await checkDbBackends(engine))],
     ["jsonb-integrity", async () => verdict("jsonb-integrity", await checkJsonbIntegrity(engine))],
     ["page-version-storage", async () => verdict("page-version-storage", await checkPageVersionStorage(engine))],
