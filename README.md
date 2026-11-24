@@ -77,11 +77,6 @@ connector features exists separately. Coming from 2.x? Read
 
 ## How it works
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/how-it-works-dark.svg">
-  <img src="docs/assets/how-it-works-light.svg" alt="Five steps: your notes, code and chats; Memrain reads them; stored in your Postgres database; search by meaning and by words; your AI agent answers with sources." width="100%">
-</picture>
-
 Memrain does the remembering, not the talking. It returns ranked passages with
 their sources, and your agent writes the answer from them. A search costs one
 embedding call and never a chat-model call. The full pipeline is in
