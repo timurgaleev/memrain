@@ -218,7 +218,7 @@ deploy/memrain/tests/require_postgres.test.ts|COMPAT-TEST|1|incidental: pre-rena
 deploy/memrain/tests/resolve_slugs.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/rls_integrity.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/runtime_config.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/runtime_config_schema.test.ts|COMPAT-TEST|1|checks canonical validation through the legacy environment-prefix alias
+deploy/memrain/tests/runtime_config_schema.test.ts|COMPAT-TEST|2|checks canonical validation through the legacy environment-prefix alias
 deploy/memrain/tests/runtime_config_overlay.test.ts|COMPAT-TEST|44|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/search_embed_deadline.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/search_empty_scope.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
