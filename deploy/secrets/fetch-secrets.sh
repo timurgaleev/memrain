@@ -131,11 +131,11 @@ case "$rc" in
   *) echo "[secrets] ERROR: internal token lookup failed; nothing written" >&2; exit 1 ;;
 esac
 
-# Connector key (KEK): seals every connector token and bring-your-own OAuth
-# client secret. Optional — without it connectors stay closed and doctor says
-# why. terraform creates it as an empty placeholder (no version) only when
-# enable_connector_kek_secret is true; the operator puts the value in by hand
-# (docs/connectors/KEY.md), so it never sits in terraform state.
+# Secret-store key (KEK, still named the connector key): seals the originals
+# the secret scan redacts. Optional — without it a redacted original is not
+# kept and doctor says why. terraform creates it as an empty placeholder (no
+# version) only when enable_connector_kek_secret is true; the operator puts
+# the value in by hand (SECURITY.md), so it never sits in terraform state.
 rc=0; fetch_kind connector-kek 1 || rc=$?
 case "$rc" in
   0) append_env MEMRAIN_CONNECTOR_KEK

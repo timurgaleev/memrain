@@ -43,7 +43,7 @@ without `SECRETS_PREFIX` means the prefix `memex`. The optional `*_SECRET_NAME` 
 | `<prefix>/memrain-postgres-url` | string (URL) | Memrain |
 | `<prefix>/memrain-public-bearer` | string | Memrain — validates public `/mcp` bearers |
 | `<prefix>/github-deploy-key` | OpenSSH private key | `bootstrap.sh` `git clone` (SSH deploy-key mode only) |
-| `<prefix>/memrain-connector-kek` | base64 of 32 random bytes | Memrain — `MEMRAIN_CONNECTOR_KEK`, seals connector tokens (optional; [docs/connectors/KEY.md](../../docs/connectors/KEY.md)) |
+| `<prefix>/memrain-connector-kek` | base64 of 32 random bytes | Memrain — `MEMRAIN_CONNECTOR_KEK`, seals the originals the secret scan redacts (optional; [SECURITY.md](../../SECURITY.md#the-secret-store-key)) |
 | `<prefix>/memrain-notify-webhook` | string, 32+ characters | Memrain — `MEMRAIN_NOTIFY_WEBHOOK_SECRET`, signs notification webhooks (optional) |
 
 Terraform creates the last two only when `enable_connector_kek_secret` /

@@ -9,8 +9,7 @@ On a Team or Enterprise plan only an Owner adds a custom connector, once, for
 the whole organisation, and every member then connects to that same client. To
 keep each member in their own space, register the client in **enrollment
 mode**: each person redeems a one-time code on first connect, and that sign-in
-is pinned to their source. The background and the security argument are in
-[TEAM-SETUP.md](../TEAM-SETUP.md); this page is the checklist.
+is pinned to their source. This page is the checklist.
 
 A connector set up before the rename to Memrain keeps working: the URL is
 unchanged and so are its credentials. Renaming its display name is optional.

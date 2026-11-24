@@ -48,8 +48,7 @@ tsvector. Embeddings: Bedrock Titan v2 (1024-dim).
   layered with `pages`, `links`, `entity_facts`, `timeline_events`,
   `hot_memory`, `jobs`, and `subagent_*` ledgers.
 - Per-credential source scoping (each remote client confined to its sources;
-  opt-in fail-closed via `MEMRAIN_TENANT_FAIL_CLOSED`). One brain can serve a
-  team; see [docs/TEAM-SETUP.md](../../../docs/TEAM-SETUP.md).
+  opt-in fail-closed via `MEMRAIN_TENANT_FAIL_CLOSED`).
 
 ## Quick CLI surface
 

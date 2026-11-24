@@ -266,4 +266,4 @@ See [docs/DEPLOYMENT.md](./DEPLOYMENT.md) and [docs/CONFIGURATION.md](./CONFIGUR
 - RDS is encrypted, deletion-protected and keeps a final snapshot. CloudTrail is
   on by default. No vendor analytics or third-party telemetry; Memrain's own search telemetry, request and spend logs stay in your account.
 
-Details: [docs/TEAM-SETUP.md](./TEAM-SETUP.md) and [SECURITY.md](../SECURITY.md).
+Details: [SECURITY.md](../SECURITY.md).

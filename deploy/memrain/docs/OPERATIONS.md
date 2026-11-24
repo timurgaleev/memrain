@@ -128,8 +128,7 @@ docker exec deploy-memrain-1 bun run src/cli.ts eval code [--json]
 # exits 1 without a score unless the code index reports ready
 ```
 
-The LongMemEval benchmark is budgeted and resumable; see
-[docs/eval/LONGMEMEVAL.md](../../../docs/eval/LONGMEMEVAL.md). Price it with
+The LongMemEval benchmark is budgeted and resumable. Price it with
 `eval longmemeval --dry-run` before any paid run.
 
 ## Pages vector search cannot return

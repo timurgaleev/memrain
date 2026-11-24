@@ -77,9 +77,10 @@ variable "use_ssh_deploy_key" {
 variable "enable_connector_kek_secret" {
   description = <<-EOT
     Create the empty <secrets_prefix>/memrain-connector-kek secret that holds
-    the connector key (32 random bytes, base64) and let the instance role read
-    it. Terraform never writes the value: put it in by hand afterwards
-    (docs/connectors/KEY.md). Off by default; connectors stay closed without it.
+    the secret-store key (32 random bytes, base64) that seals the originals the
+    secret scan redacts, and let the instance role read it. Terraform never
+    writes the value: put it in by hand afterwards (SECURITY.md). Off by
+    default; without it redacted originals are not kept.
 
     The secret is prevent_destroy: flipping this back to false fails at plan
     until the secret is dropped from state with
