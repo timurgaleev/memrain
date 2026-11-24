@@ -4,9 +4,51 @@ All notable changes to this project are documented in this file. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Releases were renumbered to 0.x: the ones first tagged 1.x and 2.x are 0.1 to 0.25
+now, as listed under [Version numbers](#version-numbers).
+
+### Version numbers
+
+Each old minor release became the next 0.x minor, in order; the patch number is
+kept, so 1.15.1 is 0.16.1. The archive tags of the pre-rename releases below
+keep their names.
+
+<details>
+<summary>Old → new</summary>
+
+| Old | New |
+| --- | --- |
+| 1.0.x | 0.1.x |
+| 1.1.x | 0.2.x |
+| 1.2.x | 0.3.x |
+| 1.3.x | 0.4.x |
+| 1.4.x | 0.5.x |
+| 1.5.x | 0.6.x |
+| 1.6.x | 0.7.x |
+| 1.7.x | 0.8.x |
+| 1.8.x | 0.9.x |
+| 1.9.x | 0.10.x |
+| 1.10.x | 0.11.x |
+| 1.11.x | 0.12.x |
+| 1.12.x | 0.13.x |
+| 1.13.x | 0.14.x |
+| 1.14.x | 0.15.x |
+| 1.15.x | 0.16.x |
+| 1.16.x | 0.17.x |
+| 2.0.x | 0.18.x |
+| 2.1.x | 0.19.x |
+| 2.2.x | 0.20.x |
+| 2.3.x | 0.21.x |
+| 2.4.x | 0.22.x |
+| 2.5.x | 0.23.x |
+| 2.6.x | 0.24.x |
+| 2.7.x | 0.25.x |
+
+</details>
+
 ## [Unreleased]
 
-Memrain Lite: one person's brain with 29 MCP tools. Pages, links, tags, hybrid search, the safety checks and the credentials stay; everything else goes. The schema does not change, and rows of the removed features stay in the database untouched. Read [UPGRADING.md](UPGRADING.md#300) before deploying, and stay on 2.7.x if you use facts, connectors, Ask or team members.
+Memrain Lite: one person's brain with 29 MCP tools. Pages, links, tags, hybrid search, the safety checks and the credentials stay; everything else goes. The schema does not change, and rows of the removed features stay in the database untouched. Read [UPGRADING.md](UPGRADING.md#0260) before deploying, and stay on 0.25.x if you use facts, connectors, Ask or team members.
 
 ### Removed
 
@@ -25,13 +67,13 @@ Memrain Lite: one person's brain with 29 MCP tools. Pages, links, tags, hybrid s
 
 ### Changed
 
-- One hourly in-process housekeeping pass replaces the worker and daemons: purge past the soft-delete window, rebuild missing search mirrors, embed chunks without a vector, sweep expired tokens, expire unsettled spend holds, and trim the request log and 2.x chat history. Its deleting and rebuilding steps obey the off-switches a 2.x cycle obeyed.
+- One hourly in-process housekeeping pass replaces the worker and daemons: purge past the soft-delete window, rebuild missing search mirrors, embed chunks without a vector, sweep expired tokens, expire unsettled spend holds, and trim the request log and pre-Lite chat history. Its deleting and rebuilding steps obey the off-switches a pre-Lite cycle obeyed.
 - Search is one path: keyword and vector arms fused with RRF, page fusion, dedup, filters, source scope, visibility and the owner-only fence.
-- Page writes sync wikilinks and mirror the page inline; they no longer refresh 2.x facts, timeline events or takes.
+- Page writes sync wikilinks and mirror the page inline; they no longer refresh pre-Lite facts, timeline events or takes.
 - The instance role may invoke Bedrock Titan text embeddings only (an in-place change to its inline policy).
-- `memrain doctor` checks only the subsystems this build runs and reports how many 2.x feature rows it leaves unused.
+- `memrain doctor` checks only the subsystems this build runs and reports how many pre-Lite feature rows it leaves unused.
 - `memrain config set` knows only the keys this build reads; a removed key is an unknown key.
-- The client editor in the admin panel no longer sets a trust floor. It shows one a 2.x client carries and offers to remove it; the rescope route refuses a non-null `min_trust`.
+- The client editor in the admin panel no longer sets a trust floor. It shows one a pre-Lite client carries and offers to remove it; the rescope route refuses a non-null `min_trust`.
 - `/health` reports `edition: "lite"`.
 - The server refuses to start when `MEMRAIN_TENANT_ID` or `MEMRAIN_CONTROL_URL` is set.
 
@@ -39,7 +81,7 @@ Memrain Lite: one person's brain with 29 MCP tools. Pages, links, tags, hybrid s
 
 - Viewing an old version of a page in the admin panel showed the current text: the panel's argument allowlist dropped `version` from `page_get`.
 
-## [2.7.0] — 2026-11-23
+## [0.25.0] — 2026-11-23
 
 A release about the surface agents see. The admin panel gets a grant editor with signed previews and a passkey step-up, open loops can be closed and muted over MCP, an incident switch can narrow every client's tools, and the Claude Code and Codex plugin ships 31 skills.
 
@@ -73,7 +115,7 @@ A release about the surface agents see. The admin panel gets a grant editor with
 - An admin who mints keys or registers clients from the panel will be asked for a passkey once per five minutes.
 - Before rolling back below this release, unmute every sender muted since the upgrade. Older releases do not reopen loops a mute closed.
 
-## [2.6.0] — 2026-11-22
+## [0.24.0] — 2026-11-22
 
 A connectors release. Gmail learns your send-as addresses and can reach further back on request, Fireflies waits for a meeting's summary, Slack keeps a channel that turned private private, conversation facts survive model refusals, and connector pages can feed facts under their own opt-in cap.
 
@@ -106,7 +148,7 @@ A connectors release. Gmail learns your send-as addresses and can reach further 
 - Don't roll back below this release while a Gmail widen backfill is open. Remove `gmail_history_days` from the account first.
 - Rolling back below this release while Fireflies meetings are held back makes the older release re-read 90 days of transcripts once.
 
-## [2.5.0] — 2026-11-22
+## [0.23.0] — 2026-11-22
 
 A release about search quality and memory headroom. Embeddings move to half precision, code gets vectors without crowding notes out of ordinary search, search learns page twins, alias fan-out, relative time and multi-hop relations, and the trust model closes owner-only sources and guards remote forgets.
 
@@ -167,7 +209,7 @@ A release about search quality and memory headroom. Embeddings move to half prec
 - The query-cache ranking version is 10, so the first searches after deploy run uncached.
 - Remove `MEMRAIN_RANK_KEYWORD_OR_RETRY` from `.env`. If it was stored with `memrain config set`, run `memrain config unset MEMRAIN_RANK_KEYWORD_OR_RETRY`.
 
-## [2.4.0] — 2026-11-21
+## [0.22.0] — 2026-11-21
 
 A release about who owns a brain and how far its rows are trusted. A brain names its owner, closes personal sources to everyone else once it serves several people, reads fact slots and `known_as_of` at read time, holds instruction-like facts, takes and timeline entries for the owner, and keeps every derived row at the trust tier of what it was drawn from: a less trusted write files a proposal instead of replacing a more trusted fact, and a credential can carry a read floor.
 
@@ -204,7 +246,7 @@ A release about who owns a brain and how far its rows are trusted. A brain names
 - `recall` by fact id, `find_trajectory` and `fact_supersessions` returned private and diary-derived facts to every remote caller in scope. They now show them to the operator and the brain owner only, like `entity_facts`, `entity_recall` and `context_pack`.
 - `ontology_propose` stored an agent's observation as the owner's, and `extract_facts` with `persist` stored the extracted facts as the owner's. Both now record the calling key, so readers frame those facts as an agent's. A consolidated fact keeps the writer of the fact it restates.
 
-## [2.3.0] — 2026-11-21
+## [0.21.0] — 2026-11-21
 
 A release about secrets. A redaction no longer destroys what it removed: the
 value is sealed in an encrypted store under the connector key, so a false
@@ -234,7 +276,7 @@ Upgrade notes: [UPGRADING.md](./UPGRADING.md#from-22-to-23).
 - A credential-shaped assignment the scanner rejected (a path such as `token=./run.sh?…`, or an encoded URL) no longer hides a credential later in its value: the search resumes at the rejected value's start, so `…?password=<secret>` is still redacted.
 - Transcript ingest now leaves a value the owner restored in that source in place, as page writes already did.
 
-## [2.2.0] — 2026-11-21
+## [0.20.0] — 2026-11-21
 
 A release about trust and correctness. Every new agent sign-in now waits for
 the owner's approval in the dashboard; tokens already issued keep working. A
@@ -310,9 +352,9 @@ so every attempt counts against the caps. A brain upgrades in place
   nothing is held or refused yet. Both origins are checked unless
   `MEMRAIN_WRITE_GATE_EXTERNAL` / `MEMRAIN_WRITE_GATE_AGENT` is `off`.
 
-## [2.1.0] — 2026-11-20
+## [0.19.0] — 2026-11-20
 
-A maintenance release on top of 2.0.0: Ask links each source to the passage
+A maintenance release on top of 0.18.0: Ask links each source to the passage
 it quoted, fact extraction keeps what a cut reply already holds, and the
 connectors and the secret scanner close the gaps found since. A brain
 upgrades in place (migrations 176–177). The secret scanner moves to version
@@ -399,7 +441,7 @@ scanner until you run `memrain secrets audit` again.
 - HOW-IT-WORKS no longer says no bundled skill opts into MCP prompts; it names
   the four that do.
 
-## [2.0.0] — 2026-11-19
+## [0.18.0] — 2026-11-19
 
 Memrain becomes a platform: it reads your mail, calendars and chats, answers
 questions in its own chat and runs background workers under hard spend caps.
@@ -482,7 +524,7 @@ brain upgrades in place
 - A malformed chat thread id is a 404; a chat run that throws is stored as an
   error turn.
 
-## [1.16.0] — 2026-11-14
+## [0.17.0] — 2026-11-14
 
 ### Added
 - Try Memrain on a laptop without AWS: `make local-up` builds and starts a
@@ -538,7 +580,7 @@ brain upgrades in place
 - A take added after a page lost its takes section no longer overwrites stored
   take #1.
 
-## [1.15.1] — 2026-11-12
+## [0.16.1] — 2026-11-12
 
 ### Fixed
 - Scheduled deep-synth honours a pinned reasoning model. With
@@ -552,7 +594,7 @@ brain upgrades in place
   deep-synth now invokes that model. It budgeted for the deep model but called
   the facts model, so the reserved and the actual cost could differ.
 
-## [1.15.0] — 2026-11-09
+## [0.16.0] — 2026-11-09
 
 ### Added
 - Optional reasons on page put, edit, delete and revert, retained with each
@@ -595,7 +637,7 @@ brain upgrades in place
   numeric precision. Tool descriptions fit the existing context budget while
   retaining parameter schemas and access constraints.
 
-## [1.14.0] — 2026-11-09
+## [0.15.0] — 2026-11-09
 
 ### Added
 - Preview-first, bounded stale rechunking with exact plan hashes, per-run
@@ -626,7 +668,7 @@ brain upgrades in place
   exit-code restoration checks and retained lint findings are corrected.
 
 
-## [1.13.0] — 2026-11-09
+## [0.14.0] — 2026-11-09
 
 ### Added
 - Bounded page body windows, historical version reads, cursor-based page lists,
@@ -695,7 +737,7 @@ brain upgrades in place
   not grants, facts or version history. Model-quality and spend improvements
   still require observation on the deployed workload.
 
-## [1.12.0] — 2026-11-08
+## [0.13.0] — 2026-11-08
 
 ### Added
 - Search hits carry their owning source and content date, with an explicit
@@ -735,7 +777,7 @@ brain upgrades in place
 - Page lists, version histories and entity recall apply the same quarantine
   content withholding as page_get, with one batched source-scoped lookup.
 
-## [1.11.0] — 2026-11-07
+## [0.12.0] — 2026-11-07
 
 ### Action needed
 - **Change the transcript hook command.** The documented SessionEnd hook ran
@@ -786,7 +828,7 @@ brain upgrades in place
   or ingests outside text treats it as data and logs suspicious instructions
   through `log_friction`.
 
-## [1.10.0] — 2026-11-07
+## [0.11.0] — 2026-11-07
 
 ### Fixed
 - **No phantom rows after a failed query.** When a query that had already
@@ -843,7 +885,7 @@ brain upgrades in place
   restore `process.exitCode`. An upgrade test seeds data on the previous
   release and reads it back after every migration.
 
-## [1.9.1] — 2026-10-18
+## [0.10.1] — 2026-10-18
 
 ### Added
 - **A CycloneDX SBOM with every GitHub release.** Publishing a release runs
@@ -857,7 +899,7 @@ brain upgrades in place
   nothing. Rerun it for an existing tag through `workflow_dispatch`. Scope
   and verification are in SECURITY.md.
 
-## [1.9.0] — 2026-10-18
+## [0.10.0] — 2026-10-18
 
 ### Changed
 - **`mcp_request_log` is pruned.** The cycle's purge phase deletes rows older
@@ -878,7 +920,7 @@ brain upgrades in place
   calls with an OAuth or personal access token and admin-panel tool calls are
   logged whatever `MEMRAIN_REQUEST_LOG_DB` says.
 
-## [1.8.0] — 2026-10-18
+## [0.9.0] — 2026-10-18
 
 ### Security
 - A passkey POST with no `Origin` and no `Sec-Fetch-Site` header is refused
@@ -912,14 +954,14 @@ brain upgrades in place
 ### Changed
 - A red `Postgres tests` CI job now fails the workflow; it was advisory.
 
-## [1.7.1] — 2026-10-18
+## [0.8.1] — 2026-10-18
 
 ### Changed
 - README pictures and diagrams use the new Night, Slate and Mist palette: a new
   hero and feature illustrations, and recoloured how-it-works, architecture and
   demo diagrams.
 
-## [1.7.0] — 2026-10-18
+## [0.8.0] — 2026-10-18
 
 ### Added
 - A logo: the memory knot, a lowercase m whose middle is tied into a loop, in
@@ -939,7 +981,7 @@ brain upgrades in place
   registers 96 tools.
 - The Memrain name and logo are not covered by the MIT licence.
 
-## [1.6.0] — 2026-10-16
+## [0.7.0] — 2026-10-16
 
 ### Added
 - Passkey sign-in for the admin panel. The operator gives the panel owner a
@@ -961,7 +1003,7 @@ brain upgrades in place
 - `/admin` responses carry a `Permissions-Policy` that allows WebAuthn only on
   the panel's own origin.
 
-## [1.5.0] — 2026-10-16
+## [0.6.0] — 2026-10-16
 
 ### Added
 - The admin Overview shows charts with 7, 30 or 90 days of history: agent
@@ -985,7 +1027,7 @@ brain upgrades in place
 - Traffic, error-rate and per-credential usage counts leave out `tools/list`
   handshakes and webhook deliveries, so they agree with the new charts.
 
-## [1.4.0] — 2026-10-15
+## [0.5.0] — 2026-10-15
 
 ### Added
 - The admin panel opens on an Overview cockpit: brain health, request
@@ -1011,7 +1053,7 @@ brain upgrades in place
 - Page bodies render through an escape-only markdown renderer; links keep
   only `http`, `https` and `mailto` targets.
 
-## [1.3.0] — 2026-10-15
+## [0.4.0] — 2026-10-15
 
 ### Changed
 - The built-in model defaults move to the 5.5 generation: the utility tier
@@ -1021,14 +1063,14 @@ brain upgrades in place
   fresh install needs model access to both 5.5 models in its Bedrock account;
   the IAM policy already allows them.
 
-## [1.2.2] — 2026-10-15
+## [0.3.2] — 2026-10-15
 
 ### Fixed
 - `memrain skillify` and `friction propose-fix` ask the utility-tier model
   (`MEMRAIN_UTILITY_MODEL`) instead of a pinned Claude Haiku 4.5. An explicit
   `SKILLIFY_MODEL_ID` still wins.
 
-## [1.2.1] — 2026-10-12
+## [0.3.1] — 2026-10-12
 
 ### Fixed
 - A recursive `this.save()` / `self.save()` inside `save` no longer becomes a
@@ -1040,7 +1082,7 @@ brain upgrades in place
 - docs: `MEMRAIN_SECRET_SCAN_ALLOW` takes 16-hex fingerprints, as the
   redaction marker prints them.
 
-## [1.2.0] — 2026-10-11
+## [0.3.0] — 2026-10-11
 
 ### Added
 - Six ranking changes ship behind `MEMRAIN_RANK_*` flags, all off by default:
@@ -1104,7 +1146,7 @@ brain upgrades in place
   `code_edges_symbol.from_symbol_qualified`, 138 index on
   `reverse(documents.source_path)`, 140 `chunks.embed_failures`.
 
-## [1.1.0] — 2026-10-10
+## [0.2.0] — 2026-10-10
 
 ### Added
 - `page_edit` changes part of a page: exact old/new text replacements at a
@@ -1178,7 +1220,7 @@ brain upgrades in place
 - Chronicle extraction drops events dated only to a year or month, events
   dated after their page, and impossible calendar dates.
 
-## [1.0.9] — 2026-10-09
+## [0.1.9] — 2026-10-09
 
 ### Fixed
 - Retrieval scores are measured per page. Several chunks of one page used to
@@ -1217,9 +1259,9 @@ brain upgrades in place
   scoring (page dedup and abstention changed the numbers). It reports
   `rebaseline: true` and asks for `--write-baseline` instead of failing.
 - Migration 121 adds a `status` column to `eval_snapshots`. Rolling back past
-  1.0.0 now needs `--down 121` before `--down 120` (see UPGRADING.md).
+  0.1.0 now needs `--down 121` before `--down 120` (see UPGRADING.md).
 
-## [1.0.8] — 2026-10-09
+## [0.1.8] — 2026-10-09
 
 ### Fixed
 - The deployed stack now passes `MEMRAIN_UTILITY_MODEL` to the container, so
@@ -1230,7 +1272,7 @@ brain upgrades in place
   index-keyed object, so the next turn failed with a 400; the ledger now keeps
   their bytes as base64 and restores them on replay.
 
-## [1.0.7] — 2026-10-08
+## [0.1.7] — 2026-10-08
 
 ### Added
 - Memrain runs on the Claude 5.5 models. Point `MEMRAIN_UTILITY_MODEL` or
@@ -1249,7 +1291,7 @@ brain upgrades in place
 - A reply whose first block is the model's reasoning no longer reads as empty:
   Memrain takes the first text block of the answer.
 
-## [1.0.6] — 2026-10-03
+## [0.1.6] — 2026-10-03
 
 ### Fixed
 - Fact extraction on a page write now gets its one retry when the model's
@@ -1258,7 +1300,7 @@ brain upgrades in place
   facts on that page were silently lost. Normal writes cost the same: the
   setting is a ceiling, not a charge.
 
-## [1.0.5] — 2026-10-01
+## [0.1.5] — 2026-10-01
 
 ### Changed
 - The README is now a short product page: what Memrain is, who it is for,
@@ -1279,7 +1321,7 @@ brain upgrades in place
 - `make scrub-audit` no longer reports binary files whose bytes happen to
   match a text pattern.
 
-## [1.0.4] — 2026-09-30
+## [0.1.4] — 2026-09-30
 
 ### Fixed
 - The admin bootstrap token hint, in the server's own error message and in
@@ -1304,7 +1346,7 @@ brain upgrades in place
   --args '<json>'`, no `doctor --json`), and the scheduled-work example moves
   its JSON into a script so systemd quoting cannot break it.
 
-## [1.0.3] — 2026-09-30
+## [0.1.3] — 2026-09-30
 
 ### Fixed
 - A fresh install now accepts the tokens it issues. `memrain init` writes
@@ -1326,13 +1368,13 @@ brain upgrades in place
   search needs AWS Bedrock credentials. `docs/CLAUDE-CODE.md` now describes
   when a PAT is accepted on the internal path.
 
-## [1.0.2] — 2026-09-30
+## [0.1.2] — 2026-09-30
 
 ### Fixed
-- The changelog format test no longer assumes 1.0.0 is the newest release,
-  so CI passes on 1.0.x releases (1.0.1 shipped with that check red).
+- The changelog format test no longer assumes 0.1.0 is the newest release,
+  so CI passes on 0.1.x releases (0.1.1 shipped with that check red).
 
-## [1.0.1] — 2026-09-30
+## [0.1.1] — 2026-09-30
 
 ### Fixed
 - `scripts/init.sh` offered the pre-rename name as the default public repo
@@ -1345,7 +1387,7 @@ brain upgrades in place
   lock ids, terraform outputs, the unset `SECRETS_PREFIX` default, skill
   triggers).
 
-## [1.0.0] — 2026-09-30
+## [0.1.0] — 2026-09-30
 
 ### Added
 - Optional `.env` keys `POSTGRES_URL_SECRET_NAME`, `PUBLIC_BEARER_SECRET_NAME`,
@@ -1364,7 +1406,7 @@ brain upgrades in place
 ### Changed
 - **Renamed to Memrain.** The CLI (`memrain`), package, container service, `MEMRAIN_*`
   environment variables, host paths, systemd units, secret names and Terraform defaults use
-  the new name. Versioning restarts at 1.0.0; earlier releases are listed below and tagged
+  the new name. Versioning restarts at 0.1.0; earlier releases are listed below and tagged
   `memex-v<version>`. Existing installs keep their data, URL and credentials — see
   [UPGRADING.md](UPGRADING.md).
 - Terraform now sets `prevent_destroy` on the database, file system, instance, IP address,
@@ -1373,12 +1415,12 @@ brain upgrades in place
   cannot be read. Before, an access error left the tunnel token file empty.
 
 ### Deprecated
-- The old configuration names keep working in 1.0.x and are removed in 1.1.0: `MEMEX_*`
+- The old configuration names keep working in 0.1.x and are removed in 0.2.0: `MEMEX_*`
   environment variables, `~/.memex` and `memex.yml`, `x-memex-*` ingest headers, the
   `<prefix>/memex-*` secret names, the `memex` network alias, the `memex`
   command, `STACK_MEMEX_SUBDOMAIN`/`memex_subdomain` and the old Terraform output names. From
-  1.1.0 a leftover old name stops the service at start instead of being ignored. Upgrade to
-  1.0.x first and follow UPGRADING.md before taking 1.1.0.
+  0.2.0 a leftover old name stops the service at start instead of being ignored. Upgrade to
+  0.1.x first and follow UPGRADING.md before taking 0.2.0.
 - Data written by earlier versions stays readable permanently: `memex:` fence markers in pages,
   `memex_` token and client ids, and stored provenance values need no migration.
 

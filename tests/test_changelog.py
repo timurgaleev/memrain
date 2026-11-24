@@ -1,5 +1,5 @@
 """
-CHANGELOG.md after the rename: `[Unreleased]` first, then the Memrain 1.0.0
+CHANGELOG.md after the rename: `[Unreleased]` first, then the Memrain 0.1.0
 release, then one divider above every release from before the rename, each
 renamed to its archived `memex-v<version>` tag.
 """
@@ -62,23 +62,23 @@ def test_unreleased_is_first():
     assert re.match(r"^## \[\d+\.\d+\.\d+\] — \d{4}-\d{2}-\d{2}$", headings[1]), headings[1]
 
 
-def test_release_1_0_0_holds_the_rename():
+def test_release_0_1_0_holds_the_rename():
     above, _ = split()
-    release = section(above, "## [1.0.0]")
+    release = section(above, "## [0.1.0]")
     assert "**Renamed to Memrain.**" in release
     assert "### Deprecated" in release
 
 
 def test_rename_entry_links_an_existing_upgrading_guide():
-    release = section(split()[0], "## [1.0.0]")
+    release = section(split()[0], "## [0.1.0]")
     assert "[UPGRADING.md](UPGRADING.md)" in release
     assert (REPO_ROOT / "UPGRADING.md").is_file()
 
 
-def test_deprecated_entry_names_1_1_0_and_every_legacy_name():
-    release = section(split()[0], "## [1.0.0]")
+def test_deprecated_entry_names_0_2_0_and_every_legacy_name():
+    release = section(split()[0], "## [0.1.0]")
     deprecated = " ".join(release[release.index("### Deprecated") :].split())
-    assert "removed in 1.1.0" in deprecated
+    assert "removed in 0.2.0" in deprecated
     for item in DEPRECATED_ITEMS:
         assert item in deprecated, item
 
