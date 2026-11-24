@@ -7,9 +7,9 @@
 - Always confirm before destructive ops (commit, terraform apply, EC2 recreate).
 - TDD where the logic is testable; smoke-test where the network is the test.
 - Containers run on a single EC2; deploy = `git pull && docker compose up -d --build` over SSM.
-- Memrain's brain index is rebuildable from source content; if RDS is wiped, re-sweep restores it (~5-10 min, $0 — Titan is credit-eligible).
+- Memrain Lite is one person's brain: 29 MCP tools over pages, links, tags and hybrid search. Pages live in the database; `memrain export` dumps them to markdown, and the search index is rebuildable from the pages (`memrain reindex`, `memrain embed`).
 - Memrain is reached over MCP only (`POST /mcp`, through cloudflared or — with `ingress_mode = "caddy"` — a Caddy sidecar on the instance's own IP). No chat surface, no bot — just MCP clients (Claude Code, Codex, claude.ai, ChatGPT, …).
-- Callers authenticate with a personal access token bound to a source (`memrain auth create <name> --source <src>`) or an OAuth client (`memrain auth register-client`, enrollment mode for a shared team connector). The static public bearer is permanent, tenant-less and read-limited. Guides: `docs/clients/`.
+- Callers authenticate with a personal access token bound to a source (`memrain auth create <name> --source <src>`) or an OAuth client (`memrain auth register-client`). The static public bearer is permanent, tenant-less and read-limited. Credentials bound to a non-owner member or carrying a trust floor are refused. Guides: `docs/clients/`.
 
 ## Required workflow — run the skill for every change
 
@@ -63,14 +63,12 @@ There is no `bun run build` step for runtime — the daemon starts via `bun run 
 export [--dir DIR] [--source ID]     # dump every live page to a markdown tree (frontmatter + body,
                                       #   slug dirs); --source scopes to one tenant. Backup / portability
                                       #   escape hatch for the DB-only substrate.
-eval-probe [--limit N] [--max-usd N] # replay the eval set, append a row to eval_snapshots (nightly
-                                      #   probe); --max-usd caps per-run spend (converts to a query cap).
-cycle [--phases a,b,c] [--stale-days N]  # run one maintenance cycle on demand. Now takes the daemon's
-                                      #   `memrain-cycle` advisory lock — a one-shot skips (with a message)
-                                      #   when the periodic loop holds it, so the two can't double-spend.
+doctor [--json]                      # health of the subsystems this build runs; one line counts the
+                                      #   2.x feature rows it leaves unused
+transcripts ingest <path>            # import ChatGPT, Claude, Codex or Claude Code history as pages
+write-gate … / quarantine …          # work the review queues (there is no admin Approvals page)
+secrets audit|originals|reveal|restore|backup  # find stored credentials; work the kept originals
 ```
-
-The take-review lifecycle is exposed over MCP, not the CLI: `list_takes` / `takes_search` (trigram search over take claims) to find takes, `set_take_status` to flip one to `accepted` / `rejected`.
 
 ## Build & test (full stack — Docker)
 
@@ -127,7 +125,7 @@ and are not bumped as part of a release.
 
 | What | How |
 |---|---|
-| Pure logic (chunker, RRF, entity extractor) | Bun tests, deterministic, ~10ms each |
+| Pure logic (chunker, RRF, fences) | Bun tests, deterministic, ~10ms each |
 | Storage + DB shape | tmp PGLite, seeded directly, no Bedrock (PGLite is dev-only; prod runs Postgres) |
 | HTTP routes | `Bun.serve` on port 0, real fetch round-trip |
 | MCP transport | `Bun.serve` on port 0 + JSON-RPC client via fetch |
@@ -139,9 +137,9 @@ and are not bumped as part of a release.
 AWS_REGION=<your-region>          # required
 AWS_PROFILE=default               # required, not optional
 SECRETS_PREFIX=memrain            # AWS Secrets Manager namespace
-MEMRAIN_VAULT_PATHS=/memory       # paths memrain sweeps for content
-MEMRAIN_DREAM_INTERVAL_S=21600
-MEMRAIN_DREAM_STALE_DAYS=30
+MEMRAIN_VAULT_PATHS=/memory       # paths the `index` tool and `import` may read
+MEMRAIN_DAILY_BUDGET_USD=1.00     # brain-wide cap on embedding spend per UTC day
+MEMRAIN_CYCLE=0                   # env only: turns the hourly housekeeping off
 MEMRAIN_HOST=0.0.0.0              # in the container; loopback off-EC2
 BRAIN_PORT=18790
 MEMRAIN_PUBLIC_BEARER=<token>     # static public bearer: no tenant, public read
@@ -160,7 +158,9 @@ TUNNEL_TOKEN=<cloudflared>        # NOT CLOUDFLARE_TUNNEL_TOKEN — that's a dif
 | MCP write tool returns -32001 on internal path | `MEMRAIN_INTERNAL_TOKEN` not configured or not sent |
 | Cloudflared retries forever, no traffic | `--protocol http2` not set; SG blocks UDP |
 | Memrain `EACCES` reading `/memory` | Container running as uid 1000 (alpine `bun`); needs root or correct EFS chown |
-| SSM `ConnectionLost`, healthz down | Likely OOM on too-small instance during sweep |
+| SSM `ConnectionLost`, healthz down | Likely OOM on too-small instance during a large import or re-embed |
+| A client gets `credential_unsupported` | Its credential is bound to a member other than the owner, or carries a trust floor; issue an unbound one (UPGRADING.md "3.0.0") |
+| A client gets `unknown tool: <name>` | It calls a 2.x tool this build does not serve; update the client or its plugin |
 | MCP tool returns `insufficient_scope` or `permission_denied` | The credential lacks the scope, or the tool is operator-only; `whoami` shows what it carries |
 
 ## Compatibility code
@@ -174,7 +174,7 @@ alias, the `memexResponseVersion` response field, the `memex_admin`,
 `memex_return_to` and `memex_approval` cookies and parameters, the `memex-cycle`
 and `memex:fact-withdraw` lock ids, the `memex_rds_*` and `memex_postgres_url`
 terraform outputs, the `memex` secret prefix used when `SECRETS_PREFIX` is
-unset, and the "set up memex" / "update memex" skill triggers. Existing
+unset. Existing
 installs and stored data depend on them. Do not remove or rename them outside
 an announced release (see UPGRADING.md and the CONFIGURATION.md "Legacy names"
 section).

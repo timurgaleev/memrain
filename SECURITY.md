@@ -1,8 +1,7 @@
 # Security Policy
 
-This policy covers the open-source Memrain software that you install and run
-yourself, in your own AWS account. A hosted offer, when it exists, will publish
-its own terms.
+This policy covers the open-source Memrain Lite software that you install and
+run yourself, in your own AWS account or on your own machine.
 
 ## Reporting a vulnerability
 
@@ -21,8 +20,7 @@ first message.
 
 ## Scope
 
-This repo describes a self-hostable stack, single-operator by default, with
-optional per-person tenants. Anything that
+This repo describes a self-hostable stack for one person. Anything that
 could let an unauthorized actor read or modify another deploy's data —
 even when both deploys are running on different AWS accounts — is in
 scope. Examples:
@@ -30,12 +28,13 @@ scope. Examples:
 - Secret leakage via committed files.
 - Bedrock IAM privilege escalation.
 - MCP bearer-token bypass on `brain.<domain>`.
-- Cross-tenant data exposure in the Memrain index.
+- A credential reading or writing outside its sources, or seeing an
+  owner-only source it should not.
 - Cloudflare Tunnel auth bypass.
-- Reading a connector credential (a Google refresh token, a Fireflies key, an
-  OAuth client secret) out of the database, a log or a response, or using one
-  account's connector to read or delete another account's pages.
-- Making the notification webhook reach an address it should refuse.
+- Reading a kept secret original out of the database, a log or a response
+  without the admin passkey session.
+- A credential refused by this build (bound to a non-owner member, or carrying
+  a trust floor) being accepted.
 
 ## Out of scope
 
@@ -63,54 +62,41 @@ scope. Examples:
   refused sign-ins (401) take a fixed minimum time. Sign-out-everywhere waits
   for in-flight passkey operations, so none of them outlives it.
 
-## Connector credentials and notifications
+## The secret-store key
 
-Connectors (Google Calendar, Gmail, Fireflies) are off until the operator sets a
-connector key and `MEMRAIN_CONNECTORS_ENABLED=1`, connects an account from the
-admin panel and switches its sync on. With the switch off no credential is
-opened and nothing is synced or queued.
+Redacted originals are sealed with AES-256-GCM under one key, the secret-store
+key (KEK). It keeps its 2.x name, the connector key: `MEMRAIN_CONNECTOR_KEK`,
+`MEMRAIN_CONNECTOR_KEK_FILE`, the Secrets Manager secret
+`<prefix>/memrain-connector-kek` and the Terraform resource `connector_kek`.
 
-- **Token vault.** Refresh and access tokens, Fireflies API keys and
-  bring-your-own OAuth client secrets are sealed with AES-256-GCM before they
-  reach the database. Each sealed row records only the key's id. Routes and
-  logs never return or print a credential; a token a provider echoes into
-  synced text is redacted before the page is written.
-- **The connector key (KEK)** is 32 random bytes kept in AWS Secrets Manager
-  (`<prefix>/memrain-connector-kek`, created empty by terraform so the value
-  never sits in terraform state) and fetched into `deploy/.secrets/memrain.env`
-  (mode 0400). Without AWS it is read from a file only its owner can read
-  (`MEMRAIN_CONNECTOR_KEK_FILE`). It is never stored in the database:
-  `memrain config set` refuses it, and with no usable key connectors stay
-  closed instead of storing anything in the clear. `memrain connectors
-  rotate-kek` reseals every credential under a new key
-  (docs/connectors/KEY.md). Losing the key loses the stored credentials, not
-  the synced pages: accounts are connected again.
-- **Least access.** Google is asked only for `openid email` plus
-  `calendar.readonly` for a calendar source and `gmail.readonly` for a mailbox
-  source. Google merges the scopes a user granted one client, so a connect
-  also asks for the read-only scopes the brain's other Google accounts already
-  hold; nothing beyond those two read scopes is ever requested. A grant other
-  than the request, or than exactly the connected service's own scopes, is
-  refused and revoked. Connector text has credentials redacted
-  before it is written, whatever `MEMRAIN_SECRET_SCAN_DISPOSITION` says.
-  Fireflies keys carry the owner's full API access (Fireflies offers no scoped
-  key); Memrain only sends read queries with one.
-- **Outside text.** Everything a connector syncs is stored as untrusted
-  outside text, passes the write gate and is read back inside a trust frame;
-  nothing in it is acted on.
-- **Admin routes** for connectors, notifications, autonomy and approvals sit
-  behind the admin passkey session and its same-origin check on writes.
-  Disconnect and delete everything need the account's name typed back, and
-  delete everything also needs the hash of the preview it deletes.
-- **Notification webhook.** `MEMRAIN_NOTIFY_WEBHOOK_URL` must be https to a
-  host that is not loopback, private, link-local or `localhost`, with no
-  credentials in the URL. A host name is resolved again before each POST and
-  refused when any address is one of those (a name that changes its answer
-  between that lookup and the connection is not caught); redirects are not
-  followed. Each POST is signed
-  (HMAC-SHA256 over the timestamp and raw body, secret from
-  `<prefix>/memrain-notify-webhook`) and carries only a pointer: kind, id,
-  admin link and time.
+- It is 32 random bytes written as base64. Each sealed row records only the
+  key's id, never the key. It is never stored in the database (`memrain config
+  set` refuses it), a log, `/health` or an error message.
+- Without a usable key no original is kept and the write goes ahead with the
+  marker; nothing is ever stored in the clear.
+- On AWS, set `enable_connector_kek_secret = true` in `terraform.tfvars`;
+  Terraform creates the secret empty, so the value never sits in Terraform
+  state. Generate the key into a private file and put it in from that file:
+
+  ```bash
+  umask 077
+  openssl rand -base64 32 > kek.b64
+  aws secretsmanager put-secret-value --secret-id <prefix>/memrain-connector-kek \
+    --secret-string file://kek.b64 --region <region>
+  ```
+
+  Back `kek.b64` up offline, delete it, then run
+  `bash deploy/secrets/fetch-secrets.sh` and `bash deploy/deploy.sh`.
+  `fetch-secrets.sh` writes it into `deploy/.secrets/memrain.env` (mode 0400).
+  Never add it to the compose `environment:` block: an entry there, even an
+  empty one, replaces the fetched value.
+- Without AWS, point `MEMRAIN_CONNECTOR_KEK_FILE` at a file only its owner can
+  read (mode 0400 or 0600). Set one of the two variables, never both.
+- Losing the key loses the kept originals, not the pages: every page keeps its
+  markers.
+
+A 2.x brain's sealed connector credentials stay in the database under the
+same key; this build never opens them.
 
 ## Software bill of materials
 
@@ -134,8 +120,7 @@ sha256sum -c memrain-vX.Y.Z-server.cdx.json.sha256 memrain-vX.Y.Z-admin.cdx.json
 The checksum only shows that the file arrived intact; it comes from the same
 release. Not covered: build-only tooling (Vite, test and lint packages), the
 container base image and its OS packages (the image is built on your host and
-not published), the vendored tree-sitter WASM grammars, and Terraform
-providers. Licence texts stay in `THIRD_PARTY_NOTICES.md`.
+not published), and Terraform providers. Licence texts stay in `THIRD_PARTY_NOTICES.md`.
 
 ## If a secret reached the brain
 
@@ -146,8 +131,7 @@ URLs, HTTP Basic and Bearer credentials, and high-entropy `KEY=`/`TOKEN=`/
 Unicode escapes and selected zero-width inserts, percent-encoded URL
 separators, and base64 credential assignments that decode to a complete
 recognized vendor key. It does not normalize arbitrary prose or decode
-arbitrary blobs recursively. Source code is scanned the same way when it is
-indexed. Agent transcripts (`memrain transcripts ingest` and `push`) also get
+arbitrary blobs recursively. Agent transcripts (`memrain transcripts ingest`) also get
 rules no other write runs, because a header name or a label is a much
 weaker signal than a credential's own shape: cookie values after a `Cookie:`
 or `Set-Cookie:` header or a curl `-b`/`--cookie` argument (names, attributes
@@ -159,7 +143,7 @@ X`, openssl `-passin pass:X`), a cell under a password column or after a
 password key cell in a Markdown table, and a key, token or password label
 that ends a line or a message with the value alone on the next one.
 Placeholders, setting names such as `PASSWORD_FILE=`, code references and
-common words after a label stay. Connector mail, calendar and meeting pages never run them. No pattern set is complete, and text stored before a rule existed
+common words after a label stay. No pattern set is complete, and text stored before a rule existed
 keeps what it carried. If you find a live credential in the brain:
 
 1. **Rotate the credential first.** Anything a connected agent could read is
@@ -170,8 +154,8 @@ keeps what it carried. If you find a live credential in the brain:
    memrain secrets audit            # dry run; add --json for the full list
    ```
 
-   It rescans pages, page versions, facts, timeline events, synthesis rows,
-   chunks and raw data with the current rules and lists each hit by store,
+   It rescans pages, page versions, chunks, and the facts, timeline events,
+   synthesis rows and raw data a 2.x brain left, with the current rules and lists each hit by store,
    row, field, kind, fingerprint and line. It never prints the value. The
    fingerprint is the one in the `[REDACTED:<kind>:<fingerprint>]` marker.
    Jobs are also scanned, including JSON keys, but reported only as aggregate
@@ -191,7 +175,7 @@ keeps what it carried. If you find a live credential in the brain:
    `memrain secrets audit --transcripts` (add `--slug-prefixes P/,Q/` for
    other agent-written prefixes; connector pages are skipped whatever the
    prefix). It reports counts by kind and the page slugs, nothing else. Its
-   `--apply --yes` refuses without the connector key: every value it redacts
+   `--apply --yes` refuses without the secret-store key: every value it redacts
    is kept in the secret store in the same transaction that writes the new
    version, and a page is rewritten only when putting each original back over
    its marker gives the stored text exactly. Older versions of those pages
@@ -209,9 +193,8 @@ keeps what it carried. If you find a live credential in the brain:
    are reported as withheld, keep the audit unclean and return exit status 1.
    Deploying new scanner rules does not scrub stored data; run a fresh dry
    audit before choosing any corrective action.
-4. **Rebuild what the audit cannot rewrite.** If code chunks were listed,
-   run `memrain reindex --source code --all`. A rewritten chunk keeps the
-   embedding computed from its old text until it is embedded again.
+4. **Re-embed what the audit rewrote.** A rewritten chunk keeps the embedding
+   computed from its old text until it is embedded again (`memrain reindex`).
 5. **Check the other copies.** Database backups and snapshots, the vault or
    repository the text came from (and its git history), and any export
    directory still hold the value.
@@ -226,11 +209,9 @@ confirmed is not a credential.
 
 When a page write (`page_put`, `page_append`, `page_edit`, the CLI) replaces
 a credential with its marker, the value it removed is kept in the
-`secret_store` table, sealed with AES-256-GCM under the connector key
-(`MEMRAIN_CONNECTOR_KEK` or `MEMRAIN_CONNECTOR_KEK_FILE`) and bound to its
-source and fingerprint. Without that key nothing is kept and the write goes
-ahead. Connector pages keep nothing. Transcript ingest keeps them too, including a
-push, whose queued job carries the originals sealed, never in clear. Values
+`secret_store` table, sealed with AES-256-GCM under the secret-store key
+(see above) and bound to its source and fingerprint. Without that key nothing
+is kept and the write goes ahead. Transcript ingest keeps them too. Values
 redacted before the store existed, and anything the whole-brain `memrain
 secrets audit --apply` redacts, were not kept and cannot be recovered; the
 transcript audit (`--transcripts --apply`) keeps what it redacts. Only a
@@ -262,15 +243,13 @@ while that live page still holds it: a marker copied into another page binds
 to nothing. It writes a new page version, and from then on the value is
 allowed in that source, so later edits leave it in place. Purging a page
 removes its places in the store and every original no other page holds.
-A page rename takes its places with it. Rotating the connector key with
-`memrain connectors rotate-kek` reseals the store too, but not a backup taken
-before it: such a backup opens only under the old key, so take a new backup
-right after a rotation.
+A page rename takes its places with it. A backup opens only under the key it
+was sealed with.
 
 The database backup already carries the store. `memrain secrets backup`
 also writes one encrypted export to `<config dir>/secret-store/backups/`
 (on a Docker install, the persistent config mount): every entry as stored
-plus where it occurs, sealed again under the connector key, so no slug,
+plus where it occurs, sealed again under the secret-store key, so no slug,
 fingerprint or kind is in clear. It restores only where the same key is
 loaded, and only for originals whose page is live and still holds the
 marker, so a restore never brings back what a purge removed. `memrain

@@ -5,26 +5,18 @@
 
 ## What this repo is
 
-Self-hosted long-term memory for AI agents, reached over MCP only:
-- **Memrain** — knowledge brain (Bun + Postgres + pgvector). Hybrid
-  search + graph-signals ranking, entity + code call graph
-  (callers/callees), push-context, advisor; every MCP tool is declared in
-  `deploy/memrain/src/mcp/operations.ts`. Retrieval-first
-  — Bedrock Titan v2 embeddings + Claude Haiku intent/expansion; answer synthesis
-  is the MCP client's job, except the opt-in `think` tool. An opt-in, off-by-default LLM step distils notes
-  into a separate `synth_*` store (source notes never touched). PGLite is a
-  dev-only fallback.
-- **Platform layer (2.0; connectors, daemons, Ask and members are opt-in,
-  the write gate flags outside text by default)** — read-only
-  connectors (Gmail, Google Calendar, Outlook mail and calendar, Teams chats
-  and transcripts, Slack, Fireflies) with tokens sealed under a connector key;
-  an in-process daemon scheduler (`cycle`, `connector_sync`, `notifications`,
-  `loops_sweep`) under a spend wallet that holds every paid call at its
-  maximum cost; trust tiers (`owner` > `member` > `agent` > `external`) with a
-  deterministic write gate for outside text; open loops (`memrain waiting`,
-  `loops_list`); the admin **Ask** chat with optional share links; members,
-  groups and offboarding; PgBouncer transaction mode; extension hooks
-  (`core/extension.ts`, no-ops unless a wrapping build registers them).
+Memrain Lite: self-hosted long-term memory for one person's AI agents,
+reached over MCP only.
+- **Memrain** — knowledge brain (Bun + Postgres + pgvector). Pages with
+  version history, links and tags, and hybrid search (a keyword arm and a
+  vector arm fused with RRF) behind 29 MCP tools, all declared in
+  `deploy/memrain/src/mcp/operations.ts`. Retrieval only: the one model call
+  is Bedrock Titan v2 embeddings (none with `MEMRAIN_KEYWORD_ONLY=1`); answers
+  are the MCP client's job. Safety checks on every write: secret scan with
+  sealed originals, quarantine, write gate, owner-only sources. One hourly
+  in-process housekeeping pass (purge, mirrors, embed gaps, token sweep,
+  spend holds, retention); no worker, no daemons. PGLite is the local and
+  dev engine.
 - **cloudflared** — public HTTPS ingress for the MCP server
   (`brain.<domain>/mcp`) so MCP clients (Claude Code, Codex, claude.ai,
   ChatGPT, …) connect.
@@ -40,16 +32,15 @@ Both run as Docker Compose services on a single `t4g.medium` EC2.
 - **OAuth 2.1 client** — `memrain auth register-client …`. Memrain is its own
   authorization server (`/authorize`, `/token`, RFC 8414/9728 discovery).
   Browser connectors (claude.ai, ChatGPT) and CLI sign-ins use the
-  authorization-code flow; `--tenant-mode enrollment` lets one connector serve
-  a team, each person bound to their source by a one-time code. Dynamic Client
-  Registration is off by default.
+  authorization-code flow, approved by the owner in the admin panel. Dynamic
+  Client Registration is off by default.
 - **Static public bearer** — `<prefix>/memrain-public-bearer`, permanent, no
-  tenant, public read subset only. Not for people; hand out PATs or clients.
+  tenant, public read subset only. Not for agents you trust with writes; hand
+  out PATs or clients.
 
-People sign in separately to the admin panel (`/admin`, passkeys). A member's
-tokens, OAuth clients and enrollment grants are bound to them
-(`memrain member …`); `MEMRAIN_REQUIRE_MEMBER=1` refuses credentials bound to
-no member.
+The owner signs in separately to the admin panel (`/admin`, passkeys). A
+credential bound to a member other than the brain's owner, or carrying a
+trust floor (`min_trust`), is refused with `credential_unsupported`.
 
 `whoami` shows what a credential carries. Per-client guides: `docs/clients/`.
 
@@ -66,18 +57,14 @@ no member.
 | Memrain subsystem deep-dive | `deploy/memrain/docs/{ARCHITECTURE,API,OPERATIONS,README}.md` |
 | What Memrain is, who it is for, what it costs (short product page) | `README.md` |
 | Onboarding (`make init` flow), local try-out, credentials, day-to-day operation | `docs/QUICKSTART.md` |
-| Every env knob, with cost tier | `docs/CONFIGURATION.md` |
-| Every MCP tool and its parameters (generated) | `docs/TOOLS.md` |
+| Every env knob, with its default | `docs/CONFIGURATION.md` |
+| The 29 MCP tools and their parameters | `docs/TOOLS.md` |
 | Every error code: class, retryable, what to do (generated) | `docs/ERRORS.md` |
-| Connecting a client (Claude Code, Codex, claude.ai, Claude Team/Enterprise, ChatGPT) | `docs/clients/*.md` |
-| One connector for a team, enrollment codes, members and groups, offboarding | `docs/TEAM-SETUP.md` |
-| Connectors: switch-on order, the connector key, each provider, open loops | `docs/connectors/*.md` (start with `ENABLE.md`) |
-| The admin Ask chat: switch, caps, privacy, HTTP API | `docs/CHAT.md` |
+| Connecting a client (Claude Code, Codex, claude.ai, ChatGPT) | `docs/clients/*.md` |
 | Install / ingress modes / upgrade | `docs/DEPLOYMENT.md` |
-| Upgrading: the rename to 1.0, then each release through 1.16 → 2.0 | `UPGRADING.md` |
-| Plain-language tour of the pipeline, connectors, caps, trust | `docs/HOW-IT-WORKS.md` |
+| Upgrading: the rename to 1.0, each 1.x and 2.x release, the move to Lite 3.0 | `UPGRADING.md` |
+| Plain-language tour of ingest, search, caps and safety checks | `docs/HOW-IT-WORKS.md` |
 | Importing ChatGPT, Claude, Codex and Claude Code transcripts | `docs/TRANSCRIPTS.md` |
-| Evaluating a change to ranking (bench, promote, LongMemEval) | `docs/eval/*.md` |
 | Local checks and test commands for contributors | `CONTRIBUTING.md` |
 
 ## Source code map
@@ -86,37 +73,36 @@ no member.
 deploy/
 ├── docker-compose.yml           orchestrator (memrain + cloudflared + internal net)
 ├── memrain/                       knowledge brain
-│   ├── Dockerfile               oven/bun:1.3.13-alpine
+│   ├── Dockerfile               oven/bun:1.4.4-alpine
 │   ├── package.json             pinned deps incl. yaml + chokidar + AWS SDK Bedrock + postgres
 │   ├── memrain.yml.example        declarative runtime config overlay
 │   ├── templates/               SOUL/USER/ACCESS_POLICY/HEARTBEAT.md.template (seeded by init)
 │   ├── src/
 │   │   ├── cli.ts               argparse + subcommand dispatch
-│   │   ├── commands/            one file per subcommand (serve, index, search,
-│   │   │                        reindex, doctor, cycle, jobs, auth, eval-*, …).
+│   │   ├── commands/            one file per subcommand (serve, import, reindex,
+│   │   │                        doctor, auth, transcripts, write-gate, …).
 │   │   │                        `bun run src/cli.ts --help` is the live list.
 │   │   ├── http/                /health, /mcp, OAuth discovery + /authorize +
-│   │   │                        /token, /ingest, /admin (incl. Ask, Office,
-│   │   │                        connectors), /s/ share links
+│   │   │                        /token, /admin
 │   │   ├── mcp/                 JSON-RPC transport, tool dispatch, rate limiter
 │   │   └── core/
 │   │       ├── engine/          adapter pattern (interface, pglite, postgres, factory)
-│   │       ├── connectors/      providers, vault, sync engine, retention
-│   │       ├── daemons/         scheduler, registry, controls, caps
-│   │       ├── chat/  loops/  notifications/  feedback/
-│   │       ├── budget.ts        spend ledger + wallet
-│   │       ├── trust-tier.ts, write-gate*.ts
-│   │       ├── extension.ts     hooks for a wrapping build (no-ops by default)
-│   │       └── migrations/      numbered SQL migrations (through 186)
+│   │       ├── search/          keyword + vector arms, fusion, filters
+│   │       ├── housekeeping.ts  the hourly upkeep pass
+│   │       ├── budget.ts        spend ledger and daily caps
+│   │       ├── secret-store.ts, vault.ts   sealed originals of redacted secrets
+│   │       ├── write-gate*.ts, quarantine.ts
+│   │       └── migrations/      numbered SQL migrations (1-196, frozen)
 │   ├── admin/                   admin panel front end (Vite)
 │   └── docs/                    subsystem deep-dive (README, ARCHITECTURE, API, OPERATIONS)
-├── skills/                      agent skillpack served over MCP (`get_skill`)
 ├── cloudflared/                 public ingress sidecar (upstream image, no Dockerfile)
 │   └── docs/
 ├── secrets/                     AWS Secrets Manager fetch
 │   ├── fetch-secrets.sh         reads <secrets_prefix>/* into deploy/.secrets/
 │   └── README.md
-└── systemd/                     optional units (eval probe, bearer rotation); bootstrap installs neither
+└── systemd/                     optional bearer-rotation unit; bootstrap does not install it
+
+plugins/memrain/                 Claude Code + Codex plugin: MCP config and three skills
 
 scripts/
 ├── audit.sh                     PII gate
