@@ -26,11 +26,6 @@ RUN bun install --frozen-lockfile --production
 
 COPY src/ ./src/
 COPY templates/ ./templates/
-# Tree-sitter grammar WASM blobs for the code chunkers. Vendored into
-# the repo (deploy/memrain/wasm/) so the container build doesn't depend
-# on resolving them out of node_modules at runtime — keeps the boot
-# path deterministic and bun build (future) traversal-free.
-COPY wasm/ ./wasm/
 # Built admin SPA (static dist) from the builder stage — served at /admin by
 # http/admin-static.ts (resolves to /app/admin/dist).
 COPY --from=admin-builder /admin/dist ./admin/dist

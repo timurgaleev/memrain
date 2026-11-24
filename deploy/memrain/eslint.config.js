@@ -24,9 +24,6 @@ export default antfu({
     "node_modules/**",
     "dist/**",
     "admin/dist/**",
-    "wasm/**",
-    // Vendored grammars and generated artifacts are not ours to lint.
-    "**/*.wasm",
   ],
 }, {
   rules: {
