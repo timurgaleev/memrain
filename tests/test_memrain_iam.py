@@ -1,11 +1,7 @@
 """
-Asserts terraform/iam.tf grants Bedrock invoke for the two new foundation
-models the Memrain runtime needs:
-
-  - amazon.titan-embed-text-v2:0    (embeddings — credit-eligible)
-  - anthropic.claude-haiku-4-5*     (Tier A escalation — paid)
-
-Existing Nova permissions stay intact. We do NOT use bedrock:* wildcards.
+Asserts terraform/iam.tf lets the instance role invoke exactly one Bedrock
+model, the one the runtime calls: amazon.titan-embed-text-v2:0. No generative
+model (Claude, Nova) is reachable, and nothing is granted by wildcard.
 
 Run: python3 -m pytest tests/test_memrain_iam.py -v
 """
@@ -23,77 +19,38 @@ IAM = REPO / "terraform" / "iam.tf"
 def _read() -> str:
     if not IAM.is_file():
         pytest.skip(f"{IAM} missing — see test_iam_file_exists")
-    try:
-        return IAM.read_text()
-    except OSError as e:
-        pytest.skip(f"could not read {IAM}: {e}")
+    return IAM.read_text()
+
+
+def _invoke_statement() -> str:
+    text = _read()
+    m = re.search(r'sid\s*=\s*"BedrockInvoke".*?\n  }\n', text, re.S)
+    assert m, "no BedrockInvoke statement"
+    return m.group(0)
 
 
 def test_iam_file_exists() -> None:
     assert IAM.is_file()
 
 
-def test_titan_embed_v2_arn() -> None:
-    text = _read()
-    assert re.search(
-        r'arn:aws:bedrock:[^:]*::foundation-model/amazon\.titan-embed-text-v2:0',
-        text,
-    ), "Bedrock policy must allow invoking amazon.titan-embed-text-v2:0"
+def test_invoke_allows_only_titan_embed_v2() -> None:
+    stmt = _invoke_statement()
+    arns = re.findall(r'"(arn:aws:bedrock:[^"]+)"', stmt)
+    assert arns == ["arn:aws:bedrock:${var.aws_region}::foundation-model/amazon.titan-embed-text-v2:0"], arns
 
 
-def test_claude_haiku_4_5_arn() -> None:
-    text = _read()
-    assert re.search(
-        r'arn:aws:bedrock:[^:]*::foundation-model/anthropic\.claude-haiku-4-5',
-        text,
-    ), "Bedrock policy must allow invoking anthropic.claude-haiku-4-5*"
+def test_invoke_has_no_streaming_or_profile_actions() -> None:
+    actions = re.findall(r'"(bedrock:[A-Za-z]+)"', _invoke_statement())
+    assert actions == ["bedrock:InvokeModel"], actions
+
+
+def test_no_generative_model_is_allowed() -> None:
+    stmt = _invoke_statement()
+    for family in ("anthropic.", "amazon.nova", "inference-profile/"):
+        assert family not in stmt, f"BedrockInvoke still grants {family}"
 
 
 def test_no_bedrock_action_wildcard() -> None:
     text = _read()
-    assert not re.search(r'"bedrock:\*"', text), \
-        "bedrock:* action wildcard not allowed — enumerate actions"
-
-
-def test_existing_bedrock_invoke_actions_preserved() -> None:
-    """Regression guard: the Bedrock invoke statement still has the
-    expected action set (InvokeModel + InvokeModelWithResponseStream)."""
-    text = _read()
-    assert '"bedrock:InvokeModel"' in text or "bedrock:InvokeModel" in text, \
-        "Bedrock policy must include bedrock:InvokeModel"
-
-
-def test_nova_invoke_is_scoped() -> None:
-    """The Nova family invoke ARN must remain present, scoped to the
-    foundation-model namespace (no broad foundation-model/* wildcard)."""
-    text = _read()
-    assert re.search(
-        r'arn:aws:bedrock:[^:]*::foundation-model/amazon\.nova-',
-        text,
-    ), "Bedrock policy must allow invoking the amazon.nova-* family"
-    assert not re.search(
-        r'foundation-model/\*"\s*,?\s*$',
-        text,
-        re.MULTILINE,
-    ), "broad foundation-model/* wildcard must NOT be present"
-
-
-def test_inference_profiles_are_scoped() -> None:
-    """Cross-region inference profile ARNs must be enumerated, not wildcarded."""
-    text = _read()
-    assert not re.search(r'inference-profile/\*"', text), \
-        "inference-profile/* wildcard must NOT be present — enumerate profiles"
-    assert re.search(
-        r'inference-profile/(eu|global)\.amazon\.nova-',
-        text,
-    ), "Nova inference profile ARN must be enumerated"
-
-
-def test_haiku_inference_profile_is_scoped() -> None:
-    """Claude Haiku 4.5 cross-region inference profile ARN must be
-    enumerated. The IAM policy lists Haiku separately from Nova."""
-    text = _read()
-    assert re.search(
-        r'inference-profile/(eu|us|global)\.anthropic\.claude-haiku-4-5',
-        text,
-    ), "Haiku 4.5 inference profile ARN must be enumerated"
+    assert not re.search(r'"bedrock:\*"', text), "bedrock:* action wildcard not allowed"
+    assert not re.search(r'foundation-model/\*"', text), "foundation-model/* wildcard not allowed"

@@ -129,11 +129,13 @@ resource "aws_secretsmanager_secret_version" "memrain_internal_token" {
   }
 }
 
-# Connector key (KEK) and notification-webhook HMAC secret. Both are opt-in
+# Secret-store key (KEK) and notification-webhook HMAC secret. Both are opt-in
 # empty placeholders: terraform creates the secret, the operator puts the value
-# in with `aws secretsmanager put-secret-value` (docs/connectors/KEY.md). No
-# secret version and no random_password here: the KEK opens every connector
-# token stored in the database, so it must not also live in terraform state.
+# in with `aws secretsmanager put-secret-value` (SECURITY.md, "The secret-store
+# key"). The resource keeps its 2.x name, connector_kek: renaming it would
+# destroy the secret. The key seals the originals the secret scan redacts (and
+# any 2.x connector credentials still in the database). No secret version and
+# no random_password here: the key must not also live in terraform state.
 # fetch-secrets.sh treats "no version yet" as not provisioned.
 resource "aws_secretsmanager_secret" "connector_kek" {
   count = var.enable_connector_kek_secret ? 1 : 0

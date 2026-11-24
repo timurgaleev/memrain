@@ -26,65 +26,24 @@ resource "aws_iam_role_policy_attachment" "cloudwatch" {
 }
 
 data "aws_iam_policy_document" "memrain_custom" {
-  # Bedrock invoke — limited to the models the stack actually calls
-  # (Titan embed + Nova family + Claude Haiku 4.5/5.5 + Claude Sonnet 4.6/5.5).
-  # Region-scoped where
-  # possible. Cross-region inference profiles ("eu." / "global.") are
-  # listed explicitly so a compromised instance role cannot invoke
-  # arbitrary paid models.
+  # Bedrock invoke — limited to the one model the stack calls: Titan text
+  # embeddings v2, region-pinned (it has no cross-region profile). No
+  # generative model is reachable, so a compromised instance role cannot
+  # invoke a paid chat model.
   statement {
     sid    = "BedrockInvoke"
     effect = "Allow"
     actions = [
       "bedrock:InvokeModel",
-      "bedrock:InvokeModelWithResponseStream",
-      "bedrock:GetInferenceProfile",
     ]
     resources = [
-      # Titan embed is region-pinned (no cross-region profile).
       "arn:aws:bedrock:${var.aws_region}::foundation-model/amazon.titan-embed-text-v2:0",
-
-      # Foundation-model ARNs for the cross-region inference profiles.
-      # The `eu.*` profiles dispatch to a foundation model in any EU
-      # region; the `global.*` profiles dispatch globally. Bedrock
-      # authorises the request against the foundation-model ARN
-      # *without* the region segment, so the region must be `*` here.
-      # We compensate with an explicit Deny statement below that
-      # blocks direct `bedrock:InvokeModel` against any region that is
-      # not on the configured allowlist (default: the stack's own
-      # `var.aws_region` plus the EU + US regions backing `eu.*` and
-      # `global.*` inference profiles).
-      "arn:aws:bedrock:*::foundation-model/amazon.nova-*",
-      "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5*",
-      # Claude Sonnet 4.6 — the paid model behind the opt-in, default-OFF
-      # conversation->facts extractor (MEMRAIN_FACTS_MODEL). Stays region-locked
-      # via the BedrockDenyOffRegion statement below, same posture as Haiku.
-      "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6*",
-      # The 5.5 generation, selectable per tier via MEMRAIN_UTILITY_MODEL /
-      # MEMRAIN_FACTS_MODEL. Region-locked by the same Deny below.
-      "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-5-5*",
-      "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5-5*",
-
-      # Cross-region inference profiles — enumerated, no wildcards.
-      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/eu.amazon.nova-*",
-      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/eu.anthropic.claude-haiku-4-5*",
-      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/eu.anthropic.claude-sonnet-4-6*",
-      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/eu.anthropic.claude-haiku-5-5*",
-      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/eu.anthropic.claude-sonnet-5-5*",
-      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/global.amazon.nova-*",
     ]
   }
 
-  # Deny direct off-region Bedrock invocations of the EXPENSIVE Claude
-  # models. A compromised container could otherwise call Claude directly
-  # in, e.g., us-east-1 and silently burn the operator's credits.
-  #
-  # Nova is deliberately NOT covered here: the `global.amazon.nova-*`
-  # inference profile routes the underlying foundation-model call
-  # region-less (worldwide), so `aws:RequestedRegion` never matches a
-  # fixed allowlist and the call is denied. Nova 2 Lite is cheap and
-  # credit-eligible, so we let it invoke in any region; only Claude
-  # stays region-locked.
+  # Deny direct off-region Bedrock invocations of the Claude models. The
+  # Allow above grants none of them; this stays as a second wall should a
+  # broader grant ever be attached to the role.
   statement {
     sid    = "BedrockDenyOffRegion"
     effect = "Deny"
@@ -133,12 +92,13 @@ data "aws_iam_policy_document" "memrain_custom" {
     ]
   }
 
-  # Secrets Manager: read the connector key and the notification webhook
+  # Secrets Manager: read the secret-store key (still named connector_kek; it
+  # seals the originals the secret scan redacts) and the notification webhook
   # secret by exact ARN. SecretsRead above already covers them while
-  # secrets_read_prefixes includes secrets_prefix; this grant keeps connectors
-  # working when it does not (a prefix move), without widening that list. Only
-  # present once one of the two secrets exists: a statement with no Resource
-  # is a malformed policy.
+  # secrets_read_prefixes includes secrets_prefix; this grant keeps them
+  # readable when it does not (a prefix move), without widening that list.
+  # Only present once one of the two secrets exists: a statement with no
+  # Resource is a malformed policy.
   dynamic "statement" {
     for_each = length(local.connector_secret_arns) > 0 ? [1] : []
     content {
