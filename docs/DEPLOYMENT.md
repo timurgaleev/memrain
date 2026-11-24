@@ -27,28 +27,12 @@ Throughout, replace placeholders: `example.com` (your domain), `<subdomain>`
 
 - **An AWS account** with credentials configured locally (`aws configure` / an
   `~/.aws/config` profile).
-- **Bedrock Anthropic access unlocked for the account.** Bedrock model access
-  is now enabled by default (the console *Model access* page is gone), but
-  Anthropic models additionally require a **one-time use-case form** per
-  account (or once at the AWS Organization's management account) before the
-  first invoke — until it is submitted, every Claude call fails with
-  `Model use case details have not been submitted for this account` while
-  embeddings work fine, so the brain looks half-broken. Submit it either from
-  the Bedrock console model catalog (open any Anthropic model → use case
-  details) or via the CLI (`aws bedrock put-use-case-for-model-access`), then
-  verify with:
-
-  ```bash
-  aws bedrock get-foundation-model-availability \
-    --model-id anthropic.claude-haiku-5-5 \
-    --query agreementAvailability.status   # expect "AVAILABLE"
-  ```
-
-  The models the brain uses: **Amazon Titan Text Embeddings V2** (indexing —
-  no form needed), **Claude Haiku 5.5** (utility tier), **Claude Sonnet 5.5**
-  (only if you turn on any paid slice). See the AWS docs on
+- **Bedrock in your region.** The only model the brain calls is **Amazon
+  Titan Text Embeddings V2** (`amazon.titan-embed-text-v2:0`), for indexing
+  and for each search. Bedrock model access is enabled by default and Titan
+  needs no use-case form. See the AWS docs on
   [model access](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)
-  for the current procedure.
+  if your account restricts it.
 - **Terraform ≥ 1.6**.
 - **A domain** you control, plus a **Cloudflare account** (free tier is fine) —
   the public MCP ingress runs over a Cloudflare Tunnel.
@@ -85,23 +69,16 @@ profile, project name (default `memrain`; it drives AWS resource names and the
 host path `/opt/<project>`), **domain**, subdomain (default `brain`), GitHub
 owner/repo, secrets prefix (default `memrain`), the tfstate bucket + region +
 key (default `<project>/terraform.tfstate`), optional alarm email / SSH CIDR,
-whether to clone over an SSH deploy key (default `false`, for a public repo),
-and a **feature tier** (default **Max quality** — the full paid Sonnet brain;
-the installer opts you into the recommended tier). It then writes three
-**gitignored** files atomically:
+and whether to clone over an SSH deploy key (default `false`, for a public
+repo). It then writes three **gitignored** files atomically:
 
 - `.env` — runtime config for compose + scripts (`PUBLIC_HOST` becomes
-  `<subdomain>.<domain>`, `MEMRAIN_PUBLIC_WRITE=0`, plus the chosen tier's
-  feature flags). The tier default is **Max**; pick `balanced` or `free` at the
-  prompt, or set `MEMRAIN_INIT_TIER=free|balanced|max` for the non-interactive
-  path. These flags only take effect once you recompose — a bare `git clone`
-  (whose runtime code defaults stay OFF) never bills. See
-  [CONFIGURATION.md](CONFIGURATION.md#quality--cost-tiers-pick-one).
-  This `.env` stays on your machine: the host's `/opt/<project>/.env` is
-  rendered by bootstrap without any tier flags, so the deployed brain runs
-  with the code defaults until you copy the tier block into the host's `.env`
-  and run `sudo bash deploy/deploy.sh` there (step 10; on a brain with no pages
-  yet add `DEPLOY_ALLOW_EMPTY=1`).
+  `<subdomain>.<domain>`, `MEMRAIN_PUBLIC_WRITE=0`). This `.env` stays on your
+  machine: the host's `/opt/<project>/.env` is rendered by bootstrap from the
+  terraform env contract, so a setting you want on the deployed brain goes into
+  the host's `.env`, followed by `sudo bash deploy/deploy.sh` there (step 10;
+  on a brain with no pages yet add `DEPLOY_ALLOW_EMPTY=1`). See
+  [CONFIGURATION.md](CONFIGURATION.md).
 - `terraform/terraform.tfvars` — terraform inputs.
 - `terraform/backend.hcl` — the S3 partial-backend config.
 
@@ -112,8 +89,8 @@ Before `plan`, check two things init.sh does not write into
   `eu-west-1b`) and `multi_az_subnet_cidrs` (default `eu-west-1a` /
   `eu-west-1c`) keep their defaults, so for any other region set both in
   `terraform.tfvars` to AZs of that region, or `apply` fails on the subnets.
-  Pick an EU region: the IAM policy and the default Claude model ids use the
-  `eu.*` cross-region inference profiles.
+  The region must offer Titan Text Embeddings V2; the IAM policy allows it
+  in `aws_region` only.
 - **SSH.** Setting the SSH CIDR only opens port 22; no key pair exists unless
   you also set `ssh_public_key` in `terraform.tfvars` by hand. Without it, use
   SSM.
@@ -154,7 +131,6 @@ From an operator host with AWS CLI, the selected profile and region:
 
 ```bash
 memrain backup status --rds-instance <db-id> --efs-id <fs-id>
-memrain backup status --copy-report /private/restore-check.json
 ```
 
 The first command reads RDS retention, the latest available automated snapshot
@@ -166,13 +142,6 @@ Missing read permissions are reported; this command never changes IAM or backup
 settings. A policy being enabled does not prove a completed recovery point.
 Snapshot results are capped at 1,000 and flag truncation. Exit zero means the
 requested inspection succeeded, not that its retention or age meets your policy.
-
-`--copy-report` reads the JSON stdout saved from `memrain migrate-engine`
-(copy or `--verify-only`), including its completion time and per-table counts
-and hashes. A dry-run report cannot pass. Older receipts without a completion
-time report it as unknown; the file's modification time is shown separately.
-Only the listed tables were checked. This is supplied evidence, not a new
-restore test or proof that the receipt belongs to this database.
 
 ```bash
 memrain export --dir /private/page-export --source <source-id>
@@ -193,13 +162,12 @@ created slugs, and leaves those creates intact. Review before retrying.
 Symlinks are refused; limits are 1 MiB per file, 100 MiB and 10,000
 pages per import. Ordinary write validation and credential redaction still apply.
 
-Import does not invoke fact extraction or paid indexing. Search mirrors are
-deferred to reconciliation. For a controlled restore, keep the daemon's
-maintenance/extraction loop paused until the imported pages are reviewed;
-resuming it can run normal backfills and embedding work. Markdown export covers
-page title, type and body, not facts, versions, grants or the rest of the database.
-A full restore uses RDS PITR/snapshots or the verified `migrate-engine` command
-(the internal `engine-copy` implementation), followed by a restore drill.
+Import does not embed. Search mirrors and vectors are filled by the hourly
+housekeeping pass; for a controlled restore, turn housekeeping off
+(`MEMRAIN_CYCLE=0`) until the imported pages are reviewed, since resuming it
+rebuilds mirrors and embeds the new chunks. Markdown export covers page title,
+type and body, not versions, links, tags, grants or the rest of the database.
+A full restore uses RDS PITR or snapshots, followed by a restore drill.
 Installing the import command does not perform a restore: keep a separate
 receipt for the actual source, target, created pages and verification.
 
@@ -419,22 +387,13 @@ yet: `sudo DEPLOY_ALLOW_EMPTY=1 bash deploy/deploy.sh`, see step 10). Leave the 
 the server mints a fresh token every restart. Owner approval stays on either
 way (it is the default); only `MEMRAIN_OAUTH_REQUIRE_LOGIN=0` makes `/authorize`
 auto-approve — on a caddy install that consent screen is directly on the
-public internet.
-
-**If anyone but the operator will connect, that flag has to come off.**
-The bootstrap token and the panel owner's passkeys (below) are the only admin
-credentials; there is no per-user login, so with the gate on a teammate can only finish
-a connector flow by holding an operator session for the whole brain. Use an
-enrollment-mode client instead: the one-time code IS the resource-owner
-authentication, the gate is not consulted for it, and each person is pinned to
-her own source. See "Connecting a whole team through ONE connector" in
-[CONFIGURATION.md](./CONFIGURATION.md). Keep the flag on only for a brain that
-serves one operator and nobody else.
+public internet. Keep it on: the brain serves one person, and that person
+approves each new client while signed in to the panel.
 
 ### Passkey sign-in for the panel owner
 
-The person who runs the panel (on a hosted install, the client's admin) signs
-in with a passkey: Touch ID, Face ID, Windows Hello or a hardware key. No
+The owner signs in to the panel with a passkey: Touch ID, Face ID, Windows
+Hello or a hardware key. No
 password and no email are involved, and the bootstrap token stays the
 operator's emergency way in.
 
@@ -467,12 +426,12 @@ device; keep them offline.
 
 A passkey created from a recovery code, or from a setup link while another
 passkey already exists, starts in a 24-hour cooldown: it can use the panel but cannot
-mint API keys, register or change OAuth clients, approve connector requests,
+mint API keys, register or change OAuth clients, approve OAuth sign-ins,
 rename or revoke passkeys, replace recovery codes, mint links or sign everyone out.
 That limits what a stolen link or code can do before the owner notices the
 "new passkey" warning, which only an older passkey or the operator can dismiss.
-The owner's first passkey created from a setup link has no cooldown, so a new
-client can connect agents right away. That also holds after every passkey has
+The owner's first passkey created from a setup link has no cooldown, so the
+owner can connect agents right away. That also holds after every passkey has
 been revoked: whoever opens the next live setup link becomes the owner with no
 cooldown, so mint links only when you mean to hand them over. If a link or code may have leaked: sign in with the
 bootstrap token, revoke the unknown passkey on the Security page, mint a new
@@ -546,7 +505,7 @@ aws s3 cp s3://<scripts-bucket>/scripts/bootstrap.sh /tmp/b.sh && sudo bash /tmp
 ```
 
 A re-run rewrites `/opt/<project>/.env` from scratch, so any line you added to
-it by hand (tier flags, other feature flags) is lost and has to be added again.
+it by hand is lost and has to be added again.
 
 ---
 
@@ -563,65 +522,23 @@ list-clients` and `memrain auth list`, and revoke anything you no longer want.
 ## 7. Index your first content
 
 The container mounts your content read-only at `/memory`
-(`MEMRAIN_VAULT_PATHS`) and the code checkout at `/repo-source`
-(`MEMRAIN_CODE_PATHS`). Content written through MCP (`page_put`, `add_fact`, …)
-is indexed immediately. Markdown *files* dropped into the EFS
+(`MEMRAIN_VAULT_PATHS`). Content written through MCP (`page_put`,
+`page_append`, …) is indexed immediately. Markdown *files* dropped into the EFS
 `workspace/memory` tree are indexed with one directory-level command (there is
 no `memrain` alias inside the container — go through the CLI entry point):
 
 ```bash
-sudo docker exec deploy-memrain-1 bun run src/cli.ts reindex --source vault --vault /memory
+sudo docker exec deploy-memrain-1 bun run src/cli.ts reindex --vault /memory
 ```
 
 It is incremental (unchanged files are skipped); add `--all` to force a full
-pass and `--reconcile-deletes` to drop pages whose files were removed. Code
-roots (`MEMRAIN_CODE_PATHS`) are swept at serve boot; `reindex --source code`
-re-sweeps them after a `git pull`.
+pass and `--reconcile-deletes` to retire pages whose files were removed.
 
-For a bounded chunker upgrade, use
-[`reindex --rechunk-stale`](../deploy/memrain/docs/OPERATIONS.md#bounded-chunker-upgrade).
-It previews by default and requires a reviewed hash to apply; it does not
-combine an incremental sweep or deletion reconciliation with the upgrade.
-Unchanged Markdown version-2 mirrors stay out of automatic rechunking even
-though new writes use version 3.
-
-To rebuild the code graph (definitions, references, callers, callees) in
-place, force a full code pass:
-
-```bash
-sudo docker exec deploy-memrain-1 bun run src/cli.ts reindex --source code --all
-```
-
-A chunk whose text is unchanged keeps its vector, so a forced pass pays only
-for new or changed code, under `MEMRAIN_CODE_EMBED_MAX_USD` (default $0: code
-is indexed without vectors unless you set it). Run it once after upgrading
-past the release that stopped the entity re-extract from deleting code symbol
-mentions, or whenever an empty `code_def` reports readiness `no_symbols` while
-code documents exist.
-
-Code chunks indexed with embedding off, or past that cap, have no vector
-until you fill them. Price it first, then run it under an explicit cap:
-
-```bash
-sudo docker exec deploy-memrain-1 bun run src/cli.ts embed --code
-sudo docker exec deploy-memrain-1 bun run src/cli.ts embed --code --apply --max-usd 0.50
-```
-
-The dry run prints the count, `estimatedUsd` and `costUpperBoundUsd`; a cap at
-the upper bound finishes in one run. A smaller cap stops cleanly
-(`capReached: true`) and the same command continues from what is left. It also
-prints `vectorIndex`: the HNSW index now and after the run (`indexMb`,
-`projectedMb`) next to `sharedBuffersMb`. On a small instance every vector
-search reads an index that does not fit `shared_buffers` from disk, so
-`--apply` refuses a run with `fits: false` before any call; size it down with
-`--limit`.
-`bun run src/cli.ts eval code` before and after shows how many code chunks
-carry a vector and what that did to hit@5.
-
-The 6-hour maintenance cycle maintains the existing corpus (re-embeds stale
-documents, housekeeping) — it does **not** ingest new files on its own in
-the DB-canonical design. If search misses content you expect, check the
-embed backlog on the host: `sudo docker exec deploy-memrain-1 bun run src/cli.ts embed --dry-run`.
+The hourly housekeeping pass inside `memrain serve` maintains what is already
+stored (embeds chunks that have no vector, rebuilds missing search mirrors,
+purges expired soft-deletes); it does **not** ingest new files on its own. If
+search misses content you expect, check the embed backlog on the host:
+`sudo docker exec deploy-memrain-1 bun run src/cli.ts embed --dry-run`.
 
 ---
 
@@ -650,15 +567,14 @@ claude mcp add --transport http memrain https://<subdomain>.example.com/mcp \
   --header "Authorization: Bearer <token-from-step-4>"
 ```
 
-Restart Claude Code. The read tools appear under `memrain.*` (`search`,
-`backlinks`, `page_{get,list,versions}`, `graph_{neighbors,query}`,
-`traverse_graph`, `entity_{facts,timeline,recall}`, `source_health`,
-`whoami`). Write tools are filtered from the public surface unless
-`MEMRAIN_PUBLIC_WRITE=1`. The static public bearer is also denied `query`,
-`think`, every `code_*` tool, `volunteer_context`, the `find_*` analytics, the
-takes/calibration tools, `recall`, `get_chunks`, `get_tags`,
-`relational_recall`, `stats`, the `jobs_*` tools and more
-(`FORBIDDEN_MCP_TOOLS_FROM_PUBLIC` in `http/public_guard.ts`); use a personal
+Restart Claude Code. With the static public bearer, seven read tools appear
+under `memrain.*`: `search`, `backlinks`, `page_get`, `page_list`,
+`page_versions`, `get_brain_identity` and `whoami`. The constructive write
+tools (`page_put`, `page_append`, `page_edit`, `index`, `link`, `add_tag`)
+appear only with `MEMRAIN_PUBLIC_WRITE=1`. The bearer is always denied the
+rest: `search_exact`, `get_chunks`, `get_links`, `get_tags`, `resolve_slugs`,
+the destructive page and link tools, `sources_*`, `stats` and `run_doctor`
+(`FORBIDDEN_MCP_TOOLS_FROM_PUBLIC` in `http/public_guard.ts`). Use a personal
 access token (`memrain auth create <name>`) or an OAuth client for those. The
 bearer is static unless you install the optional `memrain-rotate-bearer` timer
 (section 5).
@@ -733,7 +649,7 @@ documents, a `client_credentials` mint (with `--client-file` holding
 `{client_id, client_secret}`; a token file skips it), MCP `initialize` (its
 `serverInfo.version` must equal the `/health` stamp, which catches a stale
 container still answering), `tools/list`, `whoami`, and the caller's scope
-(`--expect-source ID` for a tenant client; `--expect-operator` for the
+(`--expect-source ID` for a client scoped to one source; `--expect-operator` for the
 operator's PAT, which passes only when `whoami` reports `is_public: false` and
 a read scope that covers the `default` source — the static public bearer
 fails it). Redirects are never followed: any 3xx fails the check and names
@@ -749,8 +665,8 @@ Rebuild only the service(s) that changed. Infrastructure changes go through
 `terraform plan` / `apply` against the S3 state — never mutate a
 terraform-managed resource with ad-hoc CLI/console calls.
 
-To enable optional features (synthesis, paid Sonnet slices, tenancy flags,
-retrieval tuning), see [CONFIGURATION.md](./CONFIGURATION.md) — remember a flag
+To change a setting (daily budget, retrieval tuning, safety checks), see
+[CONFIGURATION.md](./CONFIGURATION.md) — remember a flag
 must be in **both** `.env` and the compose `environment:` allowlist to take
 effect. A bootstrap re-run rewrites the host's `.env` and drops hand-added
 flags; keep a copy of them and add them back after every re-run.

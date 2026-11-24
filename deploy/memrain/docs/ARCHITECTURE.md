@@ -1,43 +1,38 @@
 # Memrain — Architecture
 
-Deep dive into the Memrain subsystem. For project-level topology see
-`ARCHITECTURE.md` at the repo root; this doc covers internal layout,
-the schema, the search pipeline, the cycle phases, and operational
+Deep dive into the Memrain package. For project-level topology see
+`ARCHITECTURE.md` at the repo root; this doc covers internal layout, the
+engine, the schema, the search pipeline, housekeeping, and operational
 boundaries.
 
 ## High-level layout
 
 ```
 deploy/memrain/src/
-├── cli.ts               argparse + dispatch (17 subcommands)
-├── commands/            one .ts per subcommand
+├── cli.ts               argument parsing + dispatch (`--help` lists the commands)
+├── commands/            one .ts per command
 ├── core/
 │   ├── engine/          adapter pattern (PGLite + Postgres)
-│   ├── chunkers/        recursive (live), code/semantic stubs
-│   ├── search/          hybrid + sub-modules (intent, intent-weights,
-│   │                    recency, salience, token-budget, query-cache, …)
-│   ├── cycle/           6 maintenance phases + orchestrator
-│   ├── output/          progress events + transcripts
-│   ├── resolvers/       wikilink + path resolvers (registry-based)
+│   ├── chunkers/        recursive markdown chunker
+│   ├── search/          hybrid search: keyword, vector, filters, dedup,
+│   │                    token budget, exact-phrase scan
+│   ├── transcripts/     chat-history importers
 │   ├── migrations/      append-only NNN_*.sql
-│   ├── frontmatter.ts   YAML parser
+│   ├── housekeeping.ts  the hourly upkeep pass inside `serve`
 │   ├── embedding.ts     Bedrock Titan v2 client
-│   ├── entities.ts      regex extractor (wikilinks/tags/dates)
-│   ├── extract.ts       re-extract w/o re-embed
-│   ├── backlinks.ts     entity_mentions reverse lookup
-│   ├── friction.ts      log + analyse "agent confused" events
-│   ├── sources.ts       sources registration / resolver / backfill
 │   ├── indexer.ts       chunks → embed → write transaction
+│   ├── pages.ts         page writes and versions
+│   ├── links.ts, tags.ts, backlinks.ts
+│   ├── secret-scan*.ts, write-gate*.ts, content-sanity.ts, quarantine.ts
+│   ├── budget.ts        spend reservations against the daily caps
+│   ├── oauth-provider.ts
 │   ├── migrate.ts       versioned migration runner
-│   ├── rrf.ts           Reciprocal Rank Fusion (Cormack k=60)
+│   ├── rrf.ts           Reciprocal Rank Fusion
 │   ├── sweep.ts         vault walk + change detection
 │   ├── storage.ts       thin façade over Engine
 │   └── config.ts        JSON + YAML + env layered loader
-├── http/                two contract routes: /health + /mcp
-│                        (legacy REST routes removed in A.7 — all via /mcp)
-├── mcp/                 JSON-RPC 2.0 transport + dispatch
-├── recipes/             cycle (6h maintenance tick)
-└── tests/               120 Bun tests
+├── http/                /health, /mcp, OAuth endpoints, /admin
+└── mcp/                 JSON-RPC 2.0 transport, tool definitions, dispatch
 ```
 
 ## Engine adapter
@@ -47,240 +42,136 @@ deploy/memrain/src/
 `core/engine/factory.ts` instantiates the right adapter based on
 `config.database.type` (`pglite | postgres`).
 
-Production runs `postgres` against the RDS instance defined in
-`terraform/rds.tf`. PGLite is **dev-only** and serves three narrow
-purposes:
+The AWS deploy runs `postgres` against the RDS instance defined in
+`terraform/rds.tf`. PGLite serves the local install (`init --pglite`,
+`make local-up`) and the test suite. PGLite admits one process at a time:
+while `serve` holds it, other CLI commands refuse to start.
 
-- `init --pglite` creates a local store for fresh installs / contributor dev
-- the test suite uses it as a cheap backing — no RDS required for `bun test`
-- `migrate-engine --from postgres --to pglite` copies every table (and
-  verifies each by count and content hash) when re-provisioning RDS in
-  another account or rehearsing a rollback
-
-The migrations are engine-agnostic SQL — `vector(1024)`, `tsvector
-GENERATED ALWAYS AS`, `jsonb`, HNSW, `TIMESTAMPTZ DEFAULT NOW()` —
-all portable. So adding new schema today only needs a new
-`migrations/NNN_*.sql` file, not adapter-specific code.
+The migrations are engine-agnostic SQL — `vector(1024)` (or `halfvec(1024)`
+where pgvector has it), `tsvector GENERATED ALWAYS AS`, `jsonb`, HNSW,
+`TIMESTAMPTZ DEFAULT NOW()` — so new schema needs only a new
+`migrations/NNN_*.sql` file. Append-only convention: never edit a shipped
+migration; ship a new one. 3.0 ships no new migration; tables of 2.x
+features stay in the schema, unused.
 
 ## Schema
 
-```mermaid
-erDiagram
-  sources ||--o{ documents : has
-  documents ||--o{ chunks : contains
-  chunks ||--|| embeddings : embeds
-  chunks ||--o{ entity_mentions : mentions
-  entities ||--o{ entity_mentions : referenced_by
+The tables the Lite build reads and writes:
 
-  sources {
-    text id PK
-    text kind "vault|memory|webhook|mailbox|calendar|transcript|other"
-    text path_prefix
-    text sync_policy "synced|local-only|mirror"
-    text indexed_policy "verbatim|hashed-only|tombstoned"
-  }
-  documents {
-    text id PK
-    text source_path
-    text title
-    jsonb frontmatter
-    text source_id FK
-    bigint last_indexed_mtime
-  }
-  chunks {
-    text id PK
-    text document_id FK
-    int chunk_index
-    text content
-    tsvector ts "GENERATED"
-  }
-  embeddings {
-    text chunk_id PK_FK
-    vector_1024 vector
-    text model
-  }
-  entities {
-    text id PK
-    text type "wikilink|tag|date"
-    text name
-  }
-  entity_mentions {
-    text chunk_id FK
-    text entity_id FK
-    text surface_form
-  }
-```
-
-Plus three append-only telemetry tables:
-
-- `migrations` (id, name, applied_at)
-- `cycle_snapshots` (every 6 h tick — counts of docs/chunks/embeddings/entities/mentions)
-- `friction_events` (kind, query, reason, source_path, extra)
-
-Migration files live in `src/core/migrations/`:
-
-| ID | Name |
-|---|---|
-| 001 | initial — documents, chunks, embeddings + HNSW |
-| 002 | entities — entities, entity_mentions, last_indexed_mtime |
-| 003 | cycle_snapshots |
-| 004 | sources |
-| 005 | friction |
-
-Append-only convention: never edit a shipped migration; ship a new one.
+- `sources` — groups of pages: `id`, `kind`, `path_prefix`, policies, the
+  owner-only and federated flags.
+- `pages` and `page_versions` — the canonical record: slug, type, title,
+  markdown body, frontmatter, source, soft-delete time; every write adds a
+  version.
+- `documents` — the search mirror of a page (or of an indexed file):
+  `source_path`, `title`, `frontmatter`, `source_id`, `last_indexed_mtime`.
+- `chunks` — passages of a document, with a generated `tsvector`.
+- `embeddings` — one vector per chunk (`vector` or `halfvec`, 1024
+  dimensions), with the model that made it.
+- `links` and `tags` — `[[wikilinks]]`, typed links with optional validity
+  dates, and page tags.
+- OAuth clients and tokens, personal access tokens, admin passkeys, the
+  spend ledger, the request log, the write-gate and quarantine queues, the
+  sealed secret store, and `migrations`.
 
 ## Search pipeline
 
+`core/search/hybrid.ts`:
+
 ```mermaid
 flowchart TD
-  Q[query string] --> C{query cache hit?\ngated on document_generation_clock}
-  C -->|hit| OUT[hydrate cached ids → token_budget → return]
-  C -->|miss| I[classifyIntent — Claude Haiku + heuristics]
-  I --> E[embedText — Titan v2]
+  Q[query string] --> K[keywordSearch — tsvector]
+  Q --> E[embedText — Titan v2]
   E --> V[vectorSearch — pgvector cosine]
-  Q --> K[keywordSearch — tsvector + ts_rank_cd]
-  Q --> X[expandQuery — Claude Haiku paraphrase ×3]
-  X --> K2[extra keywordSearch passes]
-  V --> R[intent-weighted reciprocalRankFusion]
-  K --> R
-  K2 --> R
-  R --> H[hydrate from documents JOIN sources]
-  H --> B[applySourceBoost]
-  B --> RS[× recency updated_at  × salience frontmatter]
-  RS --> D[dedup per page — mirror, truth mirror and file twin share cap 2]
-  D --> RR{MEMRAIN_RERANK?}
-  RR -->|yes| TP[Haiku two-pass rerank]
-  RR -->|no| TK[trim to k]
-  TP --> TK
-  TK --> TB[token_budget cap — opt-in]
-  TB --> W[cache write — fire-and-forget]
+  K --> R[reciprocalRankFusion]
+  V --> R
+  R --> H[hydrate from documents — re-check scope, visibility, filters]
+  H --> D[dedup per page — mirror, truth mirror and file twin share a cap of 2]
+  D --> TK[trim to k]
+  TK --> TB[token_budget cap — optional]
 ```
 
-**Ranking signals** (all gentle, post-fusion, neutral when their input is
-absent — `core/search/`):
-- **intent-weighted RRF** (`intent-weights.ts`): `exact`/`factual` lean
-  keyword, `topic`/`personal` lean vector, `howto` balanced (0.7–1.4×).
-- **recency** (`recency.ts`): floor-bounded decay on `documents.updated_at`
-  (half-life ~120 d, floor 0.6×).
-- **salience** (`salience.ts`): frontmatter `pinned:true` → ≥1.3×,
-  `weight:<n>` → clamped 0.5–2.0×.
-- **source-boost** weights: `vault=1.0`, `memory=0.7`, `webhook=0.5`,
-  `mailbox=0.6`, `calendar=0.6`, `transcript=0.65`, `other=0.8`.
+- Both arms push the source scope, the visibility filter, the
+  date/type/slug filters and the configured hard-excludes into their own SQL,
+  so a filtered match is never pushed out by unfiltered ones.
+- No model is called except the query embedding. A failed or slow embed falls
+  back to keyword-only and says so in `meta` (`vectorEnabled: false`,
+  `degraded`); a spent budget refuses the call with `budget_exhausted`.
+- Owner-only, quarantine and write-gate fences and the trust frame are
+  applied by `mcp/dispatch.ts` on the returned hits.
+- **token_budget** (`token-budget.ts`): optional `search` param caps total
+  returned context (~chars/4), keeping whole hits in rank order.
+- `search_exact` (`exact.ts`) scans page bodies for a literal phrase, with no
+  ranking and no embedding.
 
-**Query cache** (`query-cache.ts`, migration 026): exact-match, on by default,
-fail-open. Keyed on the live-model `document_generation_clock` (migration 025,
-bumped on every document write), so any ingest invalidates it. Stores chunk
-ids only (re-hydrated from live tables); a hit skips embed/intent/retrieval.
-Disable per-call with `noCache` or globally with `MEMRAIN_QUERY_CACHE=0`.
+## Housekeeping
 
-**token_budget** (`token-budget.ts`): optional `search` param caps total
-returned context (~chars/4); the overflowing tail hit is truncated and
-flagged `truncated:true`.
-
-Two-pass rerank is opt-in via `MEMRAIN_RERANK=1` env (Haiku is paid;
-default off keeps cost on Bedrock credit-eligible models).
-
-## Cycle pipeline
-
-Runs every 6 h via `recipes/cycle.ts`. Six phases in order; one
-failing doesn't stop the others:
-
-1. **embed-stale** — re-embed chunks whose embeddings are older than
-   `staleDays` (default 30). Skipped during the configured quiet
-   hours so it doesn't fight interactive MCP recall traffic.
-2. **extract** — re-run the regex entity extractor on every chunk.
-   Cheap (no Bedrock).
-3. **reconcile-links** — find `[[wikilinks]]` that don't resolve to
-   any document. Read-only; report only.
-4. **orphans-purge** — delete embeddings/entity_mentions/entities
-   without parents. Flag (don't delete) docs missing on disk and
-   docs with zero chunks.
-5. **frontmatter-inference** — fill missing `title` (from H1), `tags`
-   (from inline `#hashtags`), `created` / `updated` (from
-   `ingested_at` / `updated_at`). Idempotent.
-6. **snapshot** — append a row to `cycle_snapshots` so `reports`
-   can render trends.
+`core/housekeeping.ts` runs once an hour inside `serve` (first run five
+minutes after boot), one process at a time under a database lock. Steps:
+purge pages soft-deleted past their window, rebuild missing or stale search
+mirrors, embed chunks written without a vector, sweep expired OAuth tokens,
+expire spend reservations a crashed call never settled, and trim the request
+log and 2.x chat history past their retention. A failing step is recorded and
+the next one runs. No model is called; the only paid calls are the Titan
+embeds, under the brain's daily cap. `MEMRAIN_CYCLE=0` turns it off; the other
+switches are in [UPGRADING.md](../../../UPGRADING.md#300).
 
 ## MCP JSON-RPC transport
 
 `POST /mcp` accepts JSON-RPC 2.0. Methods:
 - `initialize` — handshake, returns server info + capabilities
-- `tools/list` — returns the 25 tool defs from `mcp/tool_defs.ts`
+- `tools/list` — the tools this caller may call, from `mcp/operations.ts`
 - `tools/call` — invokes a tool, returns content blocks
 - `ping` — `{}`
 
-Tools (25), grouped:
-- **Read:** `search` (+ optional `token_budget`), `backlinks`, `stats`,
-  `page_get`, `page_list`, `page_versions`, `graph_neighbors`, `graph_query`,
-  `entity_facts`, `entity_timeline`, `entity_recall`, `jobs_list`, `jobs_get`,
-  `jobs_logs`.
-- **Write** (internal-token only — in `FORBIDDEN_MCP_TOOLS_FROM_PUBLIC`):
-  `index`, `page_put`, `page_append`, `page_delete`, `link`, `unlink`,
-  `add_fact`, `add_timeline_event`, `jobs_submit`, `jobs_cancel`,
-  `log_friction`.
+The 29 tools and their parameters are in
+[docs/TOOLS.md](../../../docs/TOOLS.md). The static public bearer sees seven
+read tools and, by default, no page bodies (`core/public_redaction.ts`);
+`FORBIDDEN_MCP_TOOLS_FROM_PUBLIC` in `http/public_guard.ts` lists what it may
+never call. `stats` and `run_doctor` answer only the operator
+(`OPERATOR_ONLY_TOOLS` in `mcp/visibility.ts`).
 
-Public-bearer reads are body-redacted (`core/public_redaction.ts`); the
-internal token returns full content.
-
-Per-IP rate limit (token bucket, default 60 req/min). Configurable
-via `mcp.rate_limit_per_minute` in `memrain.yml`.
-
-## Soul / identity files
-
-`init` seeds 4 templates into `~/.memrain/`. An install from before the
-rename that still has only `~/.memex/config.json` keeps using `~/.memex/` in
-1.0.x (and `memex.yml` when there is no `memrain.yml`); `init` refuses to
-create `~/.memrain/` beside a `~/.memex/` that holds data:
-- `SOUL.md` — agent identity (voice / values / hard constraints)
-- `USER.md` — user profile
-- `ACCESS_POLICY.md` — channel-by-channel capabilities
-- `HEARTBEAT.md` — operational state
-
-Mode `0600`. Reserved for future agent-side consumption.
+Per-IP rate limit (token bucket, default 60 req/min), configurable via
+`mcp.rate_limit_per_minute` in `memrain.yml`.
 
 ## Bedrock model wiring
 
 | Use | Model | Cost |
 |---|---|---|
-| Embeddings | `amazon.titan-embed-text-v2:0` | credit-eligible |
-| Query intent (internal) | `eu.anthropic.claude-haiku-5-5` | paid (per-query; heuristic cache skips most) |
-| Query expansion (internal) | `eu.anthropic.claude-haiku-5-5` | paid (per non-exact query) |
-| Two-pass rerank (opt-in) | `eu.anthropic.claude-haiku-5-5` | paid (~$1-3/mo if `MEMRAIN_RERANK=1`) |
+| Embeddings | `amazon.titan-embed-text-v2:0` | about $0.02 per million tokens |
 
-Answer synthesis is not performed by Memrain — the MCP client (Claude
-Code, Cursor, …) composes answers from the cited chunks Memrain returns.
+That is the only model call. Answer synthesis is the MCP client's job; with
+`MEMRAIN_KEYWORD_ONLY=1` nothing is embedded and no call is made.
 
 Auth: EC2 IAM role + `AWS_PROFILE=default` env + container-mounted
-`~/.aws/config` (`credential_source = Ec2InstanceMetadata`).
+`~/.aws/config` (`credential_source = Ec2InstanceMetadata`). The Terraform
+policy allows Titan embeddings only.
 
 ## Configuration layering
 
 Highest precedence → lowest:
 
 1. `MEMRAIN_*` env vars (containers / one-off CLI invocations)
-2. `~/.memrain/memrain.yml` (declarative knob panel — sweep delays,
-   cycle intervals, MCP rate limits, vault paths)
-3. `~/.memrain/config.json` (boot-essentials only — db type/path,
-   embedding provider/model/region; written by `init`)
+2. `~/.memrain/memrain.yml` (declarative knobs — MCP rate limits, vault
+   paths, self-issued auth)
+3. `~/.memrain/config.json` (boot essentials only — db type/path, embedding
+   provider/model/region; written by `init`)
 4. defaults compiled into `core/config.ts`
 
-`config.ts::loadConfig` does the merge. The factory then instantiates
-the engine from the merged shape.
+`config.ts::loadConfig` does the merge. `memrain config set` stores
+overrides for known `MEMRAIN_*` keys in the database; a value in the process
+environment still wins. The full list of settings is
+[docs/CONFIGURATION.md](../../../docs/CONFIGURATION.md).
 
 ## Security boundary
 
-- Memrain binds `0.0.0.0:18790` inside its container but the port
-  is `expose:` only — never `ports:` — so it's reachable only on the
-  Docker `internal` network and through Cloudflare Tunnel for the
-  `brain.<domain>/mcp` public surface.
-- All state outside `node_modules` lives on EFS / RDS — container is
+- Memrain binds `0.0.0.0:18790` inside its container but the port is
+  `expose:` only — never `ports:` — so it is reachable only on the Docker
+  network and through the Cloudflare Tunnel or Caddy ingress for the public
+  `/mcp` surface.
+- All state outside `node_modules` lives on EFS / RDS — the container is
   stateless and re-creatable.
 - The Postgres SG only allows ingress 5432 from the stack EC2 SG.
-- Friction events MAY contain user queries; treat the
-  `friction_events` table as private. Public-bearer reads are gated
-  on the `FORBIDDEN_MCP_TOOLS_FROM_PUBLIC` allowlist in
-  `mcp/dispatch.ts`; the read-tools allowed are: `search`,
-  `backlinks`, `stats`, `page_{get,list,versions}`,
-  `graph_{neighbors,query}`, `entity_{facts,timeline,recall}`,
-  `jobs_{list,get,logs}`. Writes require `MEMRAIN_INTERNAL_TOKEN`
-  on the internal bridge.
+- Public-bearer access is limited by `FORBIDDEN_MCP_TOOLS_FROM_PUBLIC` and
+  body redaction; writes from it need `MEMRAIN_PUBLIC_WRITE=1`. On the
+  internal path, `MEMRAIN_INTERNAL_TOKEN` is required once it is set.

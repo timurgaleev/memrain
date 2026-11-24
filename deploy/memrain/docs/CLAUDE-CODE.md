@@ -8,37 +8,37 @@ Guides for the other clients sit next to it in
 
 ## The short version
 
-Mint a personal access token bound to the person's source, on the host:
+Mint a personal access token on the host (without `--source` it writes to
+`default`):
 
 ```bash
-docker exec deploy-memrain-1 bun run src/cli.ts auth create alice-laptop --source alice
+docker exec deploy-memrain-1 bun run src/cli.ts auth create laptop
 ```
 
-The token is printed once. Then, on the person's machine:
+The token is printed once. Then, on your machine:
 
 ```bash
 claude mcp add --transport http --scope user memrain https://brain.<your-domain>/mcp \
   --header "Authorization: Bearer <token>"
 ```
 
-Ask Claude Code to call `whoami`; `write_source` should be `alice`.
+Ask Claude Code to call `whoami`; `write_source` should be `default`.
 
 ## Which credential
 
-| Credential | Tenant | Reaches |
+| Credential | Writes to | Reaches |
 |---|---|---|
-| PAT from `auth create <name> --source <src>` | the named source | the tools its scopes cover (`read,write` by default), scoped to its sources |
-| OAuth client from `auth register-client` | the client's source, or the person's enrollment | the same, per client |
-| Static public bearer (`<prefix>/memrain-public-bearer`) | none | the public read subset only |
+| PAT from `auth create <name> [--source <src>]` | the named source, or `default` | the tools its scopes cover (`read,write` by default), scoped to its sources |
+| OAuth client from `auth register-client` | the client's source | the same, per client |
+| Static public bearer (`<prefix>/memrain-public-bearer`) | nothing, unless `MEMRAIN_PUBLIC_WRITE=1` | the public read subset only |
 
-The static public bearer is permanent: its rotation timer is disabled on
-purpose, and bootstrap does not install it. It carries no tenant, so it cannot
-tell two people apart, and it cannot call `query`, `think`, `recall`,
-`get_chunks`, `volunteer_context`, the `code_*` and `jobs_*` tools and others
-(`FORBIDDEN_MCP_TOOLS_FROM_PUBLIC` in `src/http/public_guard.ts`). With
-`MEMRAIN_PUBLIC_WRITE=1` it can also call the constructive writes (`index`,
-`page_put`, `page_append`, `add_fact`, `add_timeline_event`, `add_tag`,
-`link`); anyone holding it can then write, so prefer PATs.
+The static public bearer is static: bootstrap does not install the optional
+rotation timer. It reaches only `search`, `backlinks`, `page_get`,
+`page_list`, `page_versions`, `get_brain_identity` and `whoami`, with page
+bodies hidden by default (`FORBIDDEN_MCP_TOOLS_FROM_PUBLIC` in
+`src/http/public_guard.ts`). With `MEMRAIN_PUBLIC_WRITE=1` it can also call the
+constructive writes (`index`, `page_put`, `page_append`, `page_edit`,
+`add_tag`, `link`); anyone holding it can then write, so prefer PATs.
 
 ## Check the connection
 
@@ -48,7 +48,7 @@ Put the token in a file only you can read, holding `{"token": "..."}`:
 
 ```bash
 bun run src/cli.ts auth doctor https://brain.<your-domain> \
-  --token-file ~/.config/memrain/alice.json --expect-source alice
+  --token-file ~/.config/memrain/laptop.json --expect-operator
 ```
 
 ## Local-only alternative: SSM port-forward

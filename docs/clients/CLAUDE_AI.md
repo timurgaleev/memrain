@@ -2,16 +2,12 @@
 
 At the end, Claude on claude.ai can search your Memrain memory and write to it
 from any chat. You need a running Memrain server, a shell on its host to
-register a client, and a Pro or Max plan. For anyone but the operator, the
-admin login gate must be off or the client must use enrollment mode (see
-[If the admin login page appears](#if-the-admin-login-page-appears)).
+register a client, and a Pro or Max plan.
 
-On an individual Pro or Max plan each person adds their own custom connector.
+On a Pro or Max plan you add the custom connector to your own account.
 Memrain does not let a client register itself (Dynamic Client Registration is
-off), so you register a confidential client for the person and they paste its
-ID and secret into the connector's Advanced settings. For a Team or Enterprise
-organisation, where only an Owner adds connectors, see
-[CLAUDE_TEAM.md](./CLAUDE_TEAM.md).
+off), so you register a confidential client and paste its ID and secret into
+the connector's Advanced settings.
 
 A connector set up before the rename to Memrain keeps working: the URL is
 unchanged and so are its credentials. Renaming its display name is optional.
@@ -25,20 +21,19 @@ unchanged and so are its credentials. Renaming its display name is optional.
 - Memrain is deployed, `curl -s <issuer>/health` returns `{"ok":true,...}`, and
   `MEMRAIN_PUBLIC_URL` is set to `<issuer>` so the discovery documents name the
   public host.
-- A source for the person:
+- A source for claude.ai, so its writes stay apart from your other pages:
 
   ```bash
-  memrain sources register alice --kind other --path-prefix tenant:alice
+  memrain sources register claude-ai --kind other --path-prefix agent:claude-ai
   ```
 
 ## Steps
 
-1. Register a client for the person, in the default `client` tenant mode. The
-   tenant comes from `--source`.
+1. Register a client. Its writes go to the source named by `--source`.
 
    ```bash
-   memrain auth register-client claude-alice \
-     --scopes 'read write' --source alice \
+   memrain auth register-client claude-ai \
+     --scopes 'read write' --source claude-ai \
      --redirect-uris 'https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback'
    ```
 
@@ -49,18 +44,17 @@ unchanged and so are its credentials. Renaming its display name is optional.
    names the URL it sent, and `memrain auth set-redirect-uris` changes the list
    without rotating the secret.
 
-2. Optional: cap the person's daily spend on paid calls.
+2. Optional: cap the client's daily spend on paid calls.
 
    ```bash
    memrain auth set-budget <client_id> 2.00
    ```
 
-3. Hand the person the server URL, the client ID and the secret, privately. The
-   secret is their credential: treat it like a password and never reuse one
-   client for two people.
+3. Keep the client ID and secret private. The secret is a credential: treat it
+   like a password and use one client per connector.
 
-4. The person adds the connector (click-path checked against Anthropic's help
-   center on 2026-09-28):
+4. Add the connector (click-path checked against Anthropic's help center on
+   2026-09-28):
 
    - **Customize → Connectors**, click **+**, then **Add custom connector**.
    - Name it, and set the URL to `<issuer>/mcp`.
@@ -71,16 +65,14 @@ unchanged and so are its credentials. Renaming its display name is optional.
 ### If the admin login page appears
 
 With owner approval on (the default; `MEMRAIN_OAUTH_REQUIRE_LOGIN=0` turns it off),
-`/authorize` first sends the browser to `/admin/login`, which accepts only the
-operator's bootstrap token. That is right when the connector is the operator's
-own. For anyone else, either turn the flag off for the brain or give the person
-an enrollment-mode client and a code ([CLAUDE_TEAM.md](./CLAUDE_TEAM.md) shows
-the flow; it works the same on an individual plan).
+`/authorize` first sends the browser to `/admin/login`. Sign in with your
+passkey (or the bootstrap token), approve the client, and the browser returns
+to claude.ai.
 
 ## Verify
 
 In a chat, ask Claude to call Memrain's `whoami` tool. `write_source` should be
-`alice`, `read_sources` `["alice"]`, and `scopes` `["read","write"]`.
+`claude-ai`, `read_sources` `["claude-ai"]`, and `scopes` `["read","write"]`.
 
 On the host, `memrain auth list-clients` shows the client, its `grant_types`
 (`authorization_code`, `refresh_token`) and its `source_id`.
@@ -90,11 +82,11 @@ On the host, `memrain auth list-clients` shows the client, its `grant_types`
 | Symptom | First check |
 |---|---|
 | Connect fails with `redirect_uri is not registered for this client` | The account uses a callback origin you did not register. `memrain auth set-redirect-uris <client_id> https://claude.ai/api/mcp/auth_callback https://claude.com/api/mcp/auth_callback`. |
-| Connect lands on the admin login page | Owner approval is on (the default) and the person is not the operator. See [If the admin login page appears](#if-the-admin-login-page-appears). |
+| Connect lands on the admin login page | Owner approval is on (the default). Sign in and approve; see [If the admin login page appears](#if-the-admin-login-page-appears). |
 | Connect fails with `invalid_client` | The secret was mistyped or the client was revoked (`memrain auth list-clients` no longer shows it). Register a new client. |
 | Connect fails with `invalid_target` | claude.ai named a `resource` that is not this server: the connector URL must be `<issuer>/mcp` on the host `MEMRAIN_PUBLIC_URL` names. |
 | Callback carries `error=unauthorized_client` | The client has no `authorization_code` grant, or it is a public client in `client` mode. Register it as above (with `--redirect-uris`, without `--token-endpoint-auth-method none`). |
 | Tools fail with `401` and `Bearer error="invalid_token"` after working for weeks | The refresh token expired or was revoked (`memrain auth invalidate-tokens`, a rescope). Disconnect and connect again. |
 | A tool returns `insufficient_scope` | The client was registered with `--scopes read`. Re-register with `'read write'`. |
-| `permission_denied`, "is operator-only and not callable by a tenant token" | Expected for `stats`, `run_doctor`, `get_status_snapshot`, `jobs_*` and similar on a scoped client. |
+| `permission_denied`, "is operator-only and not callable by a tenant token" | Expected for `stats` and `run_doctor` on a scoped client. |
 | `budget_exhausted` | The client's daily cap is spent. Raise it or wait for the UTC day. |

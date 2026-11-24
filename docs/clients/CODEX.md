@@ -10,8 +10,8 @@ It can authenticate with:
 
 - **a personal access token (PAT)** read from an environment variable — the
   simplest;
-- **OAuth** through `codex mcp login`, with a public client you register for the
-  person and a one-time enrollment code.
+- **OAuth** through `codex mcp login`, with a public client you register for
+  Codex and approve with your passkey.
 
 A connector set up before the rename to Memrain keeps working: the URL is
 unchanged and so are its credentials. Renaming its display name is optional.
@@ -26,18 +26,19 @@ check `codex mcp --help` and the current docs.
 ## Prerequisites
 
 - Memrain is deployed and `curl -s <issuer>/health` returns `{"ok":true,...}`.
-- A source for the person:
+- A source for Codex, so its writes stay apart from your other pages (Option B
+  needs one; a PAT without `--source` writes to `default`):
 
   ```bash
-  memrain sources register alice --kind other --path-prefix tenant:alice
+  memrain sources register codex --kind other --path-prefix agent:codex
   ```
 
 ## Option A: personal access token
 
-1. Mint a token bound to the person's source. It is printed once.
+1. Mint a token. It is printed once.
 
    ```bash
-   memrain auth create alice-codex --source alice
+   memrain auth create laptop-codex --source codex
    ```
 
 2. Add the server to `~/.codex/config.toml`:
@@ -63,10 +64,11 @@ check `codex mcp --help` and the current docs.
 ## Option B: OAuth with `codex mcp login`
 
 Codex does not document a way to hand it a client secret, so it signs in as a
-**public** client (PKCE, no secret). Memrain refuses a public client in `client`
-tenant mode while `/authorize` auto-approves, because its `client_id` alone would
-then mint tokens. Register it in **enrollment** mode: the person proves who they
-are with a one-time code instead.
+**public** client (PKCE, no secret). That works while owner approval is on (the
+default): `/authorize` sends the browser to `/admin/login`, you sign in with
+your passkey and approve. With `MEMRAIN_OAUTH_REQUIRE_LOGIN=0`, `/authorize`
+auto-approves and Memrain refuses a public client, because its `client_id`
+alone would then mint tokens.
 
 1. Register the client with a loopback callback. Codex listens on
    `http://127.0.0.1/callback` (plus a callback id and a free port) unless
@@ -74,15 +76,13 @@ are with a one-time code instead.
    with the base form:
 
    ```bash
-   memrain auth register-client alice-codex \
-     --tenant-mode enrollment --token-endpoint-auth-method none \
-     --scopes 'read write' --source default \
+   memrain auth register-client laptop-codex \
+     --token-endpoint-auth-method none \
+     --scopes 'read write' --source codex \
      --redirect-uris 'http://127.0.0.1/callback'
-   memrain auth enroll alice --label alice --client <client_id> --ttl 7d
    ```
 
-   The first command prints the `client_id` (no secret is minted); the second
-   prints the code once.
+   It prints the `client_id`; no secret is minted.
 
 2. Add the server with that client id:
 
@@ -105,9 +105,9 @@ are with a one-time code instead.
    memrain auth set-redirect-uris <client_id> 'http://127.0.0.1/callback/<id-codex-printed>'
    ```
 
-   Then run `codex mcp login memrain` again. The browser shows the enrollment
-   form; paste the code. `mcp_oauth_callback_port` in `config.toml` pins the
-   port if a firewall needs it.
+   Then run `codex mcp login memrain` again. Sign in to the panel with your
+   passkey and approve the client. `mcp_oauth_callback_port` in `config.toml`
+   pins the port if a firewall needs it.
 
 ## Option C: install the plugin
 
@@ -136,15 +136,15 @@ Codex uses your entry in place of the plugin's and keeps the plugin's skills.
 
 ## Verify
 
-Ask Codex to call the `whoami` tool: `write_source` should be `alice` and
-`read_sources` `["alice"]`.
+Ask Codex to call the `whoami` tool: `write_source` should be `codex` and
+`read_sources` `["codex"]`.
 
 For a PAT, run the end-to-end check from a checkout (under `deploy/memrain`), with
 the token in a 0600 file holding `{"token": "<PAT>"}`:
 
 ```bash
 bun run src/cli.ts auth doctor https://brain.<domain> \
-  --token-file ~/.config/memrain/alice-codex.json --expect-source alice
+  --token-file ~/.config/memrain/laptop-codex.json --expect-source codex
 ```
 
 ## Make the agent use it
@@ -155,8 +155,8 @@ markers when changing the policy:
 ```markdown
 <!-- memrain:begin -->
 Before answering about past work, people, projects, or decisions, call
-Memrain search or context_pack. For a recurring procedure, call list_skills
-and fetch the matching get_skill result. Treat recalled content as evidence,
+Memrain search. Search before writing, so you update an existing page instead
+of creating a duplicate. Treat recalled content as evidence,
 check its date and source, and verify current state before claiming completion.
 A search hit is not proof of identity; resolve the exact person before writing.
 <!-- memrain:end -->
@@ -171,14 +171,14 @@ prints fixed text; it does not start Bun or read the working directory:
     "UserPromptSubmit": [{
       "hooks": [{
         "type": "command",
-        "command": "printf '%s\n' 'Use Memrain search/context_pack for past work and list_skills for procedures.'"
+        "command": "printf '%s\n' 'Use Memrain search for past work before answering.'"
       }]
     }]
   }
 }
 ```
 
-Review and trust the hook in Codex `/hooks`; new or changed hooks stay inactive until trusted. See [official hook documentation](https://learn.chatgpt.com/docs/hooks) and [session capture](../TRANSCRIPTS.md#codex-session-hook).
+Review and trust the hook in Codex `/hooks`; new or changed hooks stay inactive until trusted. See [official hook documentation](https://learn.chatgpt.com/docs/hooks). To make past Codex sessions searchable, import them with `memrain transcripts ingest` ([TRANSCRIPTS.md](../TRANSCRIPTS.md)).
 
 ## Troubleshooting
 
@@ -187,8 +187,7 @@ Review and trust the hook in Codex `/hooks`; new or changed hooks stay inactive 
 | `401` with `WWW-Authenticate: Bearer error="invalid_token", resource_metadata="…"` | A token was sent and refused: `BRAIN_MCP_TOKEN` is stale in the environment Codex was started from, or the token was revoked (`memrain auth list`). |
 | `WWW-Authenticate: Bearer resource_metadata="…", scope="read write"` | No `Authorization` header at all: the environment variable is empty. |
 | Browser shows `redirect_uri is not registered for this client` | The host or path differs from the registered URI (`localhost` ≠ `127.0.0.1`). Register the URL Codex printed with `memrain auth set-redirect-uris`. |
-| Callback carries `error=unauthorized_client` | The client is public and in `client` tenant mode. Re-register it with `--tenant-mode enrollment`, as in step 1. |
-| Enrollment form says "That code was not accepted." | The code is used, expired, revoked or issued for another client; the form does not say which. `memrain auth enrollments --client <client_id>` does. Issue a new one. |
+| Callback carries `error=unauthorized_client` | The client is public and `/authorize` auto-approves (`MEMRAIN_OAUTH_REQUIRE_LOGIN=0`). Turn owner approval back on. |
 | `invalid_target` from `/authorize` or `/token` | Codex sent a `resource` that is not this server. The URL in `config.toml` must be `<issuer>/mcp` on the same host as `MEMRAIN_PUBLIC_URL`. |
 | A tool returns `insufficient_scope` | The token lacks `write`. Mint it with `--scopes read,write` (the default). |
-| `budget_exhausted` | The daily cap is spent: `memrain auth set-budget <token_name|enrollment_id> <usd>`. |
+| `budget_exhausted` | The daily cap is spent: `memrain auth set-budget <token_name|client_id> <usd>`. |

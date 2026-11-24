@@ -8,9 +8,9 @@ Claude Code talks to Memrain over HTTP at `<issuer>/mcp`, where `<issuer>` is
 your public origin, for example `https://brain.<domain>`. It can authenticate
 two ways:
 
-- **a personal access token (PAT)** in an `Authorization` header — the simplest,
-  and the right choice for one person on one machine;
-- **OAuth**, with a client you register for that person and a browser sign-in
+- **a personal access token (PAT)** in an `Authorization` header — the
+  simplest, and the right choice for one machine;
+- **OAuth**, with a client you register for Claude Code and a browser sign-in
   from `/mcp` inside Claude Code.
 
 A connector set up before the rename to Memrain keeps working: the URL is
@@ -22,26 +22,27 @@ unchanged and so are its credentials. Renaming its display name is optional.
 ## Prerequisites
 
 - Memrain is deployed and `curl -s <issuer>/health` returns `{"ok":true,...}`.
-- A source for the person, so their writes land in their own space:
+- Optional: a source of its own for this agent, so its writes stay apart from
+  your other pages:
 
   ```bash
-  memrain sources register alice --kind other --path-prefix tenant:alice
+  memrain sources register laptop --kind other --path-prefix agent:laptop
   ```
 
-  Skip it for the operator's own machine; the operator writes to `default`.
+  Skip it and the agent writes to `default`, your main space.
 - Claude Code with `claude mcp add` (any current release).
 
 ## Option A: personal access token
 
-1. Mint a token bound to the person's source. It is printed once.
+1. Mint a token. It is printed once.
 
    ```bash
-   memrain auth create alice-laptop --source alice
+   memrain auth create laptop-claude-code --source laptop
    ```
 
    `--federated-read a,b` adds read-only sources, `--scopes read` makes a
    read-only token (the default is `read,write`). A token minted without
-   `--source` lands on `default`, the operator's space.
+   `--source` writes to `default`.
 
 2. Add the server. `--scope user` makes it available in every project.
 
@@ -55,17 +56,17 @@ unchanged and so are its credentials. Renaming its display name is optional.
 3. Optional: cap the token's daily spend on paid calls.
 
    ```bash
-   memrain auth set-budget alice-laptop 2.00
+   memrain auth set-budget laptop-claude-code 2.00
    ```
 
 ## Option B: OAuth
 
 1. Pick a free local port for the callback and register a confidential client
-   for the person. Claude Code signs in through `http://localhost:<port>/callback`.
+   for Claude Code. Claude Code signs in through `http://localhost:<port>/callback`.
 
    ```bash
-   memrain auth register-client alice-claude-code \
-     --scopes 'read write' --source alice \
+   memrain auth register-client laptop-claude-code \
+     --scopes 'read write' --source laptop \
      --redirect-uris 'http://localhost:8765/callback'
    ```
 
@@ -86,10 +87,8 @@ unchanged and so are its credentials. Renaming its display name is optional.
 3. In Claude Code run `/mcp`, pick `memrain` and sign in in the browser.
 
 With owner approval on (the default; `MEMRAIN_OAUTH_REQUIRE_LOGIN=0` makes
-`/authorize` auto-approve), `/authorize` sends the browser to `/admin/login` first, which only
-the operator can pass. For anyone else, use Option A, or give them an
-enrollment-mode client and a code as described in
-[CLAUDE_TEAM.md](./CLAUDE_TEAM.md).
+`/authorize` auto-approve), `/authorize` sends the browser to `/admin/login`
+first: sign in with your passkey and approve the client.
 
 ## Option C: install the plugin
 
@@ -119,7 +118,7 @@ mean every tool appears twice.
 ## Verify
 
 Ask Claude Code to call the `whoami` tool. It returns `write_source` and
-`read_sources`; for Alice they should be `alice` and `["alice"]`.
+`read_sources`; for the token above they should be `laptop` and `["laptop"]`.
 
 For a PAT, run the end-to-end check from your machine (in a checkout, under
 `deploy/memrain`). The credential goes in a file only you can read, holding
@@ -127,9 +126,9 @@ For a PAT, run the end-to-end check from your machine (in a checkout, under
 shell history:
 
 ```bash
-chmod 600 ~/.config/memrain/alice.json
+chmod 600 ~/.config/memrain/laptop.json
 bun install --frozen-lockfile   # once per checkout
-bun run src/cli.ts auth doctor <issuer> --token-file ~/.config/memrain/alice.json --expect-source alice
+bun run src/cli.ts auth doctor <issuer> --token-file ~/.config/memrain/laptop.json --expect-source laptop
 ```
 
 It checks `/health`, both OAuth discovery documents, `initialize`,
@@ -146,8 +145,8 @@ markers when changing the policy:
 ```markdown
 <!-- memrain:begin -->
 Before answering about past work, people, projects, or decisions, call
-Memrain search or context_pack. For a recurring procedure, call list_skills
-and fetch the matching get_skill result. Treat recalled content as evidence,
+Memrain search. Search before writing, so you update an existing page instead
+of creating a duplicate. Treat recalled content as evidence,
 check its date and source, and verify current state before claiming completion.
 A search hit is not proof of identity; resolve the exact person before writing.
 <!-- memrain:end -->
@@ -162,14 +161,15 @@ prints fixed text; it does not start Bun or read the working directory:
     "UserPromptSubmit": [{
       "hooks": [{
         "type": "command",
-        "command": "printf '%s\n' 'Use Memrain search/context_pack for past work and list_skills for procedures.'"
+        "command": "printf '%s\n' 'Use Memrain search for past work before answering.'"
       }]
     }]
   }
 }
 ```
 
-See [transcript hooks](../TRANSCRIPTS.md#claude-code-session-hook) to save sessions.
+To make past Claude Code sessions searchable, import them with
+`memrain transcripts ingest` ([TRANSCRIPTS.md](../TRANSCRIPTS.md)).
 
 ## Troubleshooting
 
@@ -181,6 +181,6 @@ See [transcript hooks](../TRANSCRIPTS.md#claude-code-session-hook) to save sessi
 | Callback carries `error=unauthorized_client` | The client has no secret and is in `client` mode while `/authorize` auto-approves. Register a confidential client (drop `--token-endpoint-auth-method none`). |
 | `invalid_client` from `/token` | Wrong client secret. It cannot be recovered; register a new client. |
 | A tool returns `insufficient_scope`, "requires the 'write' scope" | The token is read-only. Mint one with `--scopes read,write`, or re-register the client with `--scopes 'read write'`. |
-| `permission_denied`, "is operator-only and not callable by a tenant token" | `stats`, `run_doctor`, `advisor`, `jobs_*`, `list_concepts`, `get_status_snapshot` and a few others answer only the operator. Expected for a scoped token. |
+| `permission_denied`, "is operator-only and not callable by a tenant token" | `stats` and `run_doctor` answer only the operator. Expected for a scoped token; `sources_status` gives per-source health. |
 | `budget_exhausted` | The token's daily cap is spent. Raise it with `memrain auth set-budget`, or wait for the UTC day to roll. |
 | `whoami` shows `write_source: "default"` | The PAT was minted without `--source`. Revoke it (`memrain auth revoke <name>`) and mint again with `--source`. |

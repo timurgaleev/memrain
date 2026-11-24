@@ -1,92 +1,82 @@
 # Memrain — Personal-Knowledge Brain
 
-Hybrid vector + keyword + entity-graph search over your markdown notes
-and code. Single contract: MCP JSON-RPC at `POST /mcp`. Any
-MCP-compatible client (Claude Code, Cursor, Codex) calls the public
-surface at `https://brain.<your-domain>/mcp`; in-stack callers reach it
-on the internal Docker network.
+Hybrid vector + keyword search over one person's pages. Single contract: MCP
+JSON-RPC at `POST /mcp`. Any MCP-compatible client (Claude Code, Codex,
+claude.ai, ChatGPT) calls it at `https://brain.<your-domain>/mcp`; in-stack
+callers reach it on the internal Docker network.
 
-Bun + TypeScript runtime. Storage: **RDS Postgres 16.13** + pgvector +
-tsvector. Embeddings: Bedrock Titan v2 (1024-dim).
+Bun + TypeScript runtime. Storage: **RDS Postgres 16** + pgvector + tsvector,
+or an embedded PGLite database. Embeddings: Bedrock Titan Text Embeddings v2
+(1024-dim), the only model the server calls.
 
 ## What it does
 
-- Indexes markdown documents from configured vault paths (currently
-  `/memory`) into a hybrid index — vectors for semantic recall,
-  tsvector for keyword precision, RRF fuse.
-- Maintains an entity graph (`[[wikilinks]]`, `#hashtags`, dates,
-  frontmatter `tags:`) so we can answer "what links to X" and
-  "documents tagged Y".
-- Runs a 15-phase maintenance cycle every 6 h (`lint`, `embed-stale`,
-  `embed-gaps`, `mirror-pages`, `embed-facts`, `extract`,
-  `resolve-symbol-edges`, `links-stale`, `reconcile-links`, `orphans-purge`, `recompute-salience`,
-  `extract-timeline`, `timeline-anchor`, `snapshot`, `purge`) — the
-  authoritative list is `ALL_PHASES` in `src/core/cycle/index.ts`. The
-  paid synthesis and facts-maintenance phases are opt-in and run only
-  when named explicitly.
-- Exposes its MCP tools (search, index, backlinks, stats,
-  page_{put,append,delete,get,list,versions}, link, unlink,
-  graph_{neighbors,query}, entity_{facts,timeline,recall},
-  add_fact, add_timeline_event, jobs_{submit,list,get,cancel,logs},
-  log_friction). `/mcp` accepts a personal access token, an OAuth access
-  token or the public bearer; what a caller may do follows its scopes and
-  sources. In-stack callers send `MEMRAIN_INTERNAL_TOKEN`.
+- Stores pages with full version history; every write is a new version.
+- Indexes pages written over MCP, and markdown files from the configured vault
+  path (`/memory` in the container) when `reindex` runs, into a hybrid index —
+  vectors for semantic recall, tsvector for keyword precision, fused with
+  Reciprocal Rank Fusion.
+- Keeps `[[wikilinks]]`, typed links and tags, so it can answer "what links to
+  X" and "pages tagged Y".
+- Runs one hourly housekeeping pass inside `serve`: purge pages past their
+  soft-delete window, rebuild missing search mirrors, embed chunks that have no
+  vector, sweep expired OAuth tokens, expire unsettled spend holds, and trim
+  the request log. `MEMRAIN_CYCLE=0` turns it off.
+- Exposes 29 MCP tools (search, search_exact, resolve_slugs, get_chunks,
+  page_{get,list,versions,put,append,edit,rename,delete,restore,revert},
+  purge_deleted_pages, index, link, unlink, get_links, backlinks, add_tag,
+  remove_tag, get_tags, get_brain_identity, whoami, stats, sources_list,
+  sources_status, run_doctor); the full list is
+  [docs/TOOLS.md](../../../docs/TOOLS.md). `/mcp` accepts a personal access
+  token, an OAuth access token or the public bearer; what a caller may do
+  follows its scopes and sources. In-stack callers send
+  `MEMRAIN_INTERNAL_TOKEN`.
 - HTTP routes: `POST /mcp` (the agent contract), `GET /health`, the OAuth
-  discovery documents under `/.well-known/`, the OAuth flow at
-  `/authorize`, `/token`, `/register` and `/revoke`, `POST /ingest` for
-  webhook capture, and `/admin` with its own sign-in. Every tool is
-  reached through `tools/call` on `/mcp`.
+  discovery documents under `/.well-known/`, the OAuth flow at `/authorize`,
+  `/token`, `/register` (only with `MEMRAIN_ENABLE_DCR=1`) and `/revoke`, and
+  `/admin` with its own sign-in. Every tool is reached through `tools/call` on
+  `/mcp`.
 
 ## What it isn't
 
-- Not a public-facing API by default. The internal Docker network is
-  the primary route. The optional public MCP HTTPS surface
-  (`https://brain.<your-domain>/mcp`) is the remote AI client path; each
-  client authenticates with its own token.
-- Not a generic vector DB. The data model is markdown-shaped:
-  `documents` → `chunks` → `embeddings` + `entities` + `entity_mentions`,
-  layered with `pages`, `links`, `entity_facts`, `timeline_events`,
-  `hot_memory`, `jobs`, and `subagent_*` ledgers.
-- Per-credential source scoping (each remote client confined to its sources;
-  opt-in fail-closed via `MEMRAIN_TENANT_FAIL_CLOSED`).
+- Not a chat agent. It returns ranked passages with their sources; the client
+  writes the answer.
+- Not a public-facing API by default. The internal Docker network is the
+  primary route. The optional public MCP HTTPS surface is the remote AI client
+  path; each client authenticates with its own token.
+- Not a generic vector DB. The data model is page-shaped: `pages` (with
+  versions) → `documents` → `chunks` → embeddings, plus links and tags.
 
 ## Quick CLI surface
 
+`bun run src/cli.ts --help` is the live list. The main commands:
+
 | Command | Purpose |
 |---|---|
-| `init --pglite` | bootstrap config + db + 4 soul templates (used at first install only) |
-| `serve --http --port 18790` | start the daemon |
-| `index <path>` / `search <q>` | one-shot indexing / retrieval |
-| `reindex [--all] [--vault P]` | walk a vault, re-ingest changed files |
-| `reindex --rechunk-stale [--source vault\|code\|all] [--limit N] [--max-cost-usd N]` | preview a bounded chunker upgrade; apply by repeating the options with `--plan-hash HASH` |
-| `import --dir DIR --source ID [--apply --plan-hash HASH]` | preview/create new pages from an export; never overwrite existing or deleted slugs |
-| `import --calls --dir DIR --source ID [--apply --plan-hash HASH]` | preview/import call transcripts (`.txt`/`.md`) as `calls/<date>-<title>` meeting pages: credentials redacted, out of automatic fact extraction, each file once (a changed file is reported `kept`, never overwritten) |
-| `transcripts repair-origin PATH [--source ID] [--apply --plan-hash HASH]` | preview/correct agent-session fact attribution from explicit local logs |
-| `mirror-adopt --source ID [--limit N] [--apply --plan-hash HASH]` | preview/repair proven unowned page mirrors without re-embedding |
-| `secrets audit [--kinds jobs] [--json]` | inspect stored credentials; jobs are aggregate-only and never rewritten |
-| `secrets audit --transcripts [--slug-prefixes P/] [--apply --yes]` | rescan agent transcripts with the cookie, `.netrc` and password-label rules; counts and slugs only; the apply keeps every original |
-| `extract` | re-run the regex entity extractor over all chunks (no Bedrock) |
-| `backlinks <name>` | docs that mention this wikilink target |
-| `reconcile-links [--limit N]` | broken `[[wikilinks]]` |
-| `orphans` | DB hygiene (delete safe orphans, flag suspicious) |
-| `pages [--limit N] [--filter S]` | full catalog of known wikilink targets |
-| `lint` | frontmatter conformance |
-| `reports [--since H]` | trend report from cycle_snapshots |
-| `doctor` | self-diagnostics, exit non-zero on any failed check |
-| `integrity [--vault P]` | vault-vs-index drift report |
-| `eval [--k N]` | retrieval quality harness against `tests/eval/qrels.json` |
-| `eval-replay {capture\|list\|run\|delete}` | regression harness from captured production queries; `run --promote` sets the new baseline |
-| `check-resolvable [--limit N] [--threshold P]` | wikilink coverage report; exits 1 when orphan-rate exceeds `P` % |
-| `skillify "<prompt>" [--out P] [--slug S] [--dry-run]` | draft a skill `*.md` via Bedrock Claude Haiku + deterministic linter |
-| `skillpack [--out P]` | bundle skills as tar.gz with manifest (for downstream agent loaders that consume skill packs) |
-| `skillpack lint [--json] [--dir P]` | every tool, command, subcommand, flag and tool-call argument a skill names exists; skills stay under 16 KB unless `skill-budgets.tsv` gives a ceiling |
-| `skillpack check [--json] [--dir P] [--strict] [--fix]` | the pack as a routing tree: resolver rows, reachability, trigger overlaps and gaps, routing-eval cases, shared rules copied into skills; `--fix` rewrites the safe copies, `--strict` fails on warnings |
-| `jobs {list\|stats\|show\|retry\|cancel}` | inspect / reset / cancel rows in the durable job queue |
-| `friction {analyze\|propose-fix}` | counts + recents (`analyze`); Claude-Haiku-suggested skill-text edits (`propose-fix`) |
-| `migrate-engine --from X --to Y` | copy every table between Engine adapters, then verify counts and content hashes (exit 1 on mismatch) |
+| `init --pglite` | create `~/.memrain/` with an embedded PGLite database |
+| `serve --http --port 18790` | start the server (loopback only by default) |
+| `reindex [--all] [--vault P] [--reconcile-deletes]` | walk a vault, index changed (or all) files |
+| `embed [--dry-run] [--limit N] [--all] [--stale]` | backfill missing vectors, or re-embed targets |
+| `export --dir DIR [--source ID]` | export live pages as markdown |
+| `import --dir DIR --source ID [--apply --plan-hash HASH]` | preview/create new pages from an export; never overwrites existing or deleted slugs |
+| `transcripts ingest <path>` / `transcripts status` | import ChatGPT, Claude.ai, Codex and Claude Code history as redacted pages |
+| `sources list\|show\|register\|update\|delete\|owner-only` | manage sources |
+| `rename <from> <to> --expected-version N` | move a page and its history |
+| `auth create\|list\|revoke` | personal access tokens |
+| `auth register-client\|list-clients\|revoke-client\|set-redirect-uris` | OAuth clients |
+| `auth set-budget <id> <usd\|none>` | a credential's daily spend cap |
+| `auth doctor <base-url> --token-file F` | remote check: `/health` stamp, OAuth discovery, MCP, scope |
+| `admin setup-link` | one-time link for the panel owner to create a passkey |
+| `quarantine list\|clear\|scan` | the content-sanity quarantine |
+| `write-gate list\|approve\|reject\|scan` | the write gate's held items |
+| `secrets audit\|originals\|reveal\|restore\|backup` | the secret scanner and its sealed originals |
+| `config show\|get\|set\|unset` | stored runtime settings (env still wins) |
+| `doctor` / `status` | self-diagnostics / one-shot counts and health |
+| `backup status --rds-instance ID --efs-id ID` | inspect RDS and EFS backup evidence |
+| `apply-migrations [--dry-run]` | manual migration runner (`init`, which the container entrypoint runs, applies them automatically) |
 
 ## Read more
 
-- `ARCHITECTURE.md` — internals, schema, cycle phases, search pipeline
-- `API.md` — HTTP routes + MCP JSON-RPC tool reference
+- `ARCHITECTURE.md` — internals, schema, search pipeline
+- `API.md` — HTTP routes + MCP JSON-RPC reference
 - `OPERATIONS.md` — deploy, restart, troubleshoot, rollback

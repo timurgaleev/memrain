@@ -74,30 +74,27 @@ sudo bash deploy/secrets/fetch-secrets.sh
 sudo docker compose --env-file .env up -d cloudflared
 ```
 
-**6. Submit the Bedrock Anthropic use-case form** once in the AWS console.
-Without it every Claude call fails.
-
-**7. Add your notes.** The notes folder is empty on a fresh install. Either:
+**6. Add your notes.** The notes folder is empty on a fresh install. Either:
 
 - copy your markdown to `/mnt/<project>-efs/<project>/workspace/memory` on the
   host (it is `/memory` inside the container), then index it in an SSM session
   with the command below; or
-- or, once your agent is connected (step 9), have it save notes with
+- or, once your agent is connected (step 8), have it save notes with
   `page_put`.
 
 Details are in [DEPLOYMENT.md](./DEPLOYMENT.md) section 7.
 
 ```bash
-sudo docker exec deploy-memrain-1 bun run src/cli.ts reindex --source vault --vault /memory
+sudo docker exec deploy-memrain-1 bun run src/cli.ts reindex --vault /memory
 ```
 
-**8. Check health** (expect `{"ok":true,"db":...,"version":...}`)
+**7. Check health** (expect `{"ok":true,"db":...,"version":...}`)
 
 ```bash
 curl -s https://<subdomain>.<domain>/health
 ```
 
-**9. Connect your agent.** Mint a personal access token for yourself on the
+**8. Connect your agent.** Mint a personal access token for yourself on the
 host (it is printed once; without `--source` it writes to `default`, the
 operator's space), then add the server to your agent:
 
@@ -109,8 +106,8 @@ claude mcp add --transport http --scope user memrain https://<subdomain>.<domain
 
 Use this token, not the auto-generated public bearer: the public bearer is
 read-only and, by default, hides note bodies, so searches through it return no
-passages. For other people and other clients, see the credential table below
-and [clients/](./clients/).
+passages. For other clients, see the credential table below and
+[clients/](./clients/).
 
 ## Try it locally without AWS
 
@@ -133,9 +130,7 @@ Ask your agent to save a note with `page_put`, then `search` for a word in it.
 
 - **Keyword-only.** The container runs with `MEMRAIN_KEYWORD_ONLY=1`: notes
   are stored without embeddings and search matches words, not meaning.
-  Features that need a model (`think`, `query` synthesis, fact extraction)
-  are unavailable: every model call is refused with `unsupported` before it is
-  sent, so no request leaves for AWS. `/health` reports
+  Nothing is embedded, so no request leaves for AWS. `/health` reports
   `"keyword_only":true`. For semantic search, use the AWS install above or
   the Bun setup below.
 - **Your data.** Pages live in the Docker volume `memrain-local_memrain-data`
@@ -163,7 +158,7 @@ cd deploy/memrain
 bun install --frozen-lockfile
 bun run src/cli.ts init --pglite
 bun run src/cli.ts sources register laptop --kind vault --path-prefix /abs/path/to/notes
-bun run src/cli.ts reindex --source vault --vault /abs/path/to/notes
+bun run src/cli.ts reindex --vault /abs/path/to/notes
 bun run src/cli.ts auth create laptop --source laptop --scopes read,write
 MEMRAIN_INTERNAL_TOKEN=$(openssl rand -hex 32) \
   bun run src/cli.ts serve --http --port 18790
@@ -178,9 +173,7 @@ claude mcp add --transport http memrain http://127.0.0.1:18790/mcp \
 ```
 
 The CLI runs as `bun run src/cli.ts`; a `memrain` command is on your PATH only
-after you link it yourself (for example with `bun link`). A hook must not rely
-on that link: it runs `bun` and `cli.ts` by absolute path from `/` (see
-[TRANSCRIPTS.md](TRANSCRIPTS.md#claude-code-session-hook)).
+after you link it yourself (for example with `bun link`).
 
 - `init` creates `~/.memrain` with an embedded PGLite database, a `config.json`
   and a `memrain.yml` that turns on `auth.selfIssued`, which the server needs to
@@ -218,8 +211,8 @@ OAuth. What the caller can do depends on the credential:
 | Credential | How you get it | What it unlocks |
 |---|---|---|
 | Personal access token | `memrain sources register <src> ...`, then `memrain auth create <name> --source <src>` | One person or machine, writing to its own source, with an optional daily cap. |
-| OAuth 2.1 client | `memrain auth register-client ...` | Browser connectors (claude.ai, ChatGPT) and CLI sign-ins through `/authorize`, machine clients through client credentials, and enrollment mode for one connector shared by a team. |
-| Static public bearer | Auto-generated in Secrets Manager as `<prefix>/memrain-public-bearer` | No tenant. Read tools such as `search`, `page_get`, `backlinks` and graph/entity reads; no `code_*`, `think`, `query`, `get_chunks` or `volunteer_context`. A small set of writes only with `MEMRAIN_PUBLIC_WRITE=1`. |
+| OAuth 2.1 client | `memrain auth register-client ...` | Browser connectors (claude.ai, ChatGPT) and CLI sign-ins through `/authorize`, and machine clients through client credentials. |
+| Static public bearer | Auto-generated in Secrets Manager as `<prefix>/memrain-public-bearer` | Seven read tools (`search`, `page_get`, `page_list`, `page_versions`, `backlinks`, `get_brain_identity`, `whoami`), with page bodies hidden by default; no `search_exact`, `get_chunks`, `get_links` or `stats`. A small set of writes only with `MEMRAIN_PUBLIC_WRITE=1`. |
 
 Run the `whoami` tool to see the scopes, write source and read sources of the
 credential you are using. Step-by-step guides, each with a troubleshooting table:
@@ -229,8 +222,7 @@ credential you are using. Step-by-step guides, each with a troubleshooting table
 | Claude Code | [docs/clients/CLAUDE_CODE.md](./clients/CLAUDE_CODE.md) |
 | Codex CLI | [docs/clients/CODEX.md](./clients/CODEX.md) |
 | claude.ai (Pro, Max) | [docs/clients/CLAUDE_AI.md](./clients/CLAUDE_AI.md) |
-| Claude Team, Enterprise | [docs/clients/CLAUDE_TEAM.md](./clients/CLAUDE_TEAM.md) |
-| ChatGPT (developer mode, workspace apps) | [docs/clients/CHATGPT.md](./clients/CHATGPT.md) |
+| ChatGPT (developer mode) | [docs/clients/CHATGPT.md](./clients/CHATGPT.md) |
 
 ## Deploy and operate
 
@@ -239,16 +231,17 @@ credential you are using. Step-by-step guides, each with a troubleshooting table
 - **Access.** Reach the host through SSM (`aws ssm start-session --target <instance-id>`). No SSH.
 - **Update.** `cd /opt/<project> && sudo git pull --ff-only && sudo bash deploy/deploy.sh`. It
   stamps the build, and `/health` must report the new stamp.
-- **Upgrading from before the rename.** See [UPGRADING.md](../UPGRADING.md); a
-  plain pull and deploy is not enough.
-- **Operate.** `memrain doctor`, `memrain spend --days 7` and the `/admin` panel.
-- **Optional units.** `deploy/systemd` ships a nightly eval probe and a bearer
-  rotation timer. Bootstrap installs neither, and the static public bearer is
-  meant to stay fixed; hand people PATs or OAuth clients instead.
+- **Upgrading from 2.x.** Read [UPGRADING.md](../UPGRADING.md#300) first;
+  from before the rename, follow the rest of that guide, since a plain pull and
+  deploy is not enough.
+- **Operate.** `memrain doctor`, `memrain status` and the `/admin` panel.
+- **Optional unit.** `deploy/systemd` ships a bearer rotation timer. Bootstrap
+  does not install it, and the static public bearer is meant to stay fixed;
+  give each agent a PAT or an OAuth client instead.
 
 See [docs/DEPLOYMENT.md](./DEPLOYMENT.md) and [docs/CONFIGURATION.md](./CONFIGURATION.md).
 
-## Security and tenancy
+## Security
 
 - Every route except `GET /health`, the OAuth metadata and flow endpoints and
   `/admin` (which has its own sign-in) needs a credential. `/mcp` is the agent contract.
@@ -256,10 +249,9 @@ See [docs/DEPLOYMENT.md](./DEPLOYMENT.md) and [docs/CONFIGURATION.md](./CONFIGUR
   `MEMRAIN_ENABLE_DCR=1`, and then the server boots only with
   owner approval on (`MEMRAIN_OAUTH_REQUIRE_LOGIN`, the default) or the explicit
   `MEMRAIN_ENABLE_DCR_INSECURE=1`.
-- Every new agent sign-in waits for the owner's approval in the dashboard.
-- Enrollment codes are single-use, and only their SHA-256 is stored.
-- Credentials pasted into pages, facts, timeline entries, indexed files or
-  `/ingest` are redacted before storage by default
+- Every new agent sign-in waits for the owner's approval in the admin panel.
+- Credentials pasted into pages, indexed files or imported transcripts are
+  redacted before storage by default
   (`MEMRAIN_SECRET_SCAN_DISPOSITION=flag|reject` changes that).
 - For a capped caller, a paid call reserves its worst-case cost against the
   daily cap under a lock before it is sent.
