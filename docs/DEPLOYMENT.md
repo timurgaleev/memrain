@@ -492,17 +492,16 @@ bootstrap token.
 
 ### Scheduled units
 
-`deploy/systemd/` ships the nightly retrieval-quality probe and the daily
-bearer rotation. Bootstrap does **not** install them; do it deliberately:
+`deploy/systemd/` ships the daily bearer rotation. Bootstrap does **not**
+install it; do it deliberately:
 
 ```bash
 cd /opt/memrain
 sudo install -m 644 deploy/systemd/*.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now memrain-eval-probe.timer
 ```
 
-Both read `AWS_REGION` from `/opt/memrain/.env`. The units hardcode
+It reads `AWS_REGION` from `/opt/memrain/.env`. The units hardcode
 `/opt/memrain` and the `deploy-memrain-1` container, so they assume
 `project_name = "memrain"`; edit the paths first for any other name. Enable
 `memrain-rotate-bearer.timer` only once you know what consumes the public

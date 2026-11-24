@@ -339,8 +339,8 @@ fi
 # 7. Bake AWS profile config so containers inheriting ~/.aws/config can
 #    use the EC2 instance metadata service for credentials.
 # ---------------------------------------------------------------------------
-# Log sink for the shipped systemd units (memrain-eval-probe,
-# memrain-rotate-bearer). Absent, the units fail on first start.
+# Log sink for the shipped systemd unit (memrain-rotate-bearer). Absent, the
+# unit fails on first start.
 mkdir -p /var/log/memrain
 
 mkdir -p /home/ec2-user/.aws
