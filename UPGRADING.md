@@ -6,7 +6,8 @@ data. Installing for the first time? You do not need this page: start with
 [docs/QUICKSTART.md](./docs/QUICKSTART.md), and read
 [docs/HOW-IT-WORKS.md](./docs/HOW-IT-WORKS.md) to see how Memrain works.
 Already on 1.0 or later? Skip to the section for your release, from
-[1.0.x to 1.1](#from-10x-to-11) through [2.1 to 2.2](#from-21-to-22).
+[1.0.x to 1.1](#from-10x-to-11) through [2.3 to 2.4](#from-23-to-24). Moving a
+2.x brain to Memrain Lite 3.0.0? Read [3.0.0](#300).
 
 Memrain was called memex before 1.0.0. This guide takes an install of a
 pre-rename release (tags `memex-v1.x`) to Memrain 1.0.x without losing data.
@@ -408,8 +409,8 @@ and 140 on start. Things to know:
 
 - **Ranking is unchanged.** The six `MEMRAIN_RANK_*` flags are off. Turn one
   on only after a paired A/B on your own corpus (`memrain eval qrels build`,
-  then `memrain eval --config-a … --config-b …`; docs/eval/PREREG-TEMPLATE.md
-  has the decision rule).
+  then `memrain eval --config-a … --config-b …`; the evaluation guide that
+  held the decision rule was removed in 3.0.0).
 - **Links re-extract once.** The link extractor version moved, so every page
   is stale for links after the deploy. The `links-stale` cycle phase works
   through them, 200 pages per cycle (`MEMRAIN_LINKS_STALE_MAX_PER_CYCLE`), with
@@ -505,12 +506,12 @@ memrain config set MEMRAIN_WRITE_GATE_EXTERNAL off
 
 | Feature | Switch | Guide |
 |---|---|---|
-| Brain-wide daily cap (needed by Ask and every paid daemon) | `MEMRAIN_DAILY_BUDGET_USD` in the host `.env`, then `bash deploy/deploy.sh` | [docs/connectors/ENABLE.md](./docs/connectors/ENABLE.md#4-set-the-brain-wide-daily-budget) |
-| Ask, the admin chat | `MEMRAIN_CHAT=1` in the host `.env` | [docs/CHAT.md](./docs/CHAT.md) |
-| Connectors (Gmail, calendars, Outlook, Teams, Slack, Fireflies) | the connector key, `memrain config set MEMRAIN_CONNECTORS_ENABLED 1`, `memrain config set MEMRAIN_DAEMONS 1`, `memrain daemons enable connector_sync` | [docs/connectors/ENABLE.md](./docs/connectors/ENABLE.md), [docs/connectors/KEY.md](./docs/connectors/KEY.md) |
-| Open loops | `memrain daemons enable loops_sweep` (with connectors syncing) | [docs/connectors/LOOPS.md](./docs/connectors/LOOPS.md) |
+| Brain-wide daily cap (needed by Ask and every paid daemon) | `MEMRAIN_DAILY_BUDGET_USD` in the host `.env`, then `bash deploy/deploy.sh` | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
+| Ask, the admin chat | `MEMRAIN_CHAT=1` in the host `.env` | removed in 3.0.0 |
+| Connectors (Gmail, calendars, Outlook, Teams, Slack, Fireflies) | the connector key, `memrain config set MEMRAIN_CONNECTORS_ENABLED 1`, `memrain config set MEMRAIN_DAEMONS 1`, `memrain daemons enable connector_sync` | removed in 3.0.0 |
+| Open loops | `memrain daemons enable loops_sweep` (with connectors syncing) | removed in 3.0.0 |
 | Owner notifications by webhook | `MEMRAIN_NOTIFY_WEBHOOK_URL` and its secret, `memrain daemons enable notifications` | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
-| Members, groups, offboarding | `memrain member add`, `memrain group add`, `memrain member remove <id> --erase-personal-source`; `MEMRAIN_REQUIRE_MEMBER=1` | [docs/TEAM-SETUP.md](./docs/TEAM-SETUP.md#members-and-groups) |
+| Members, groups, offboarding | `memrain member add`, `memrain group add`, `memrain member remove <id> --erase-personal-source`; `MEMRAIN_REQUIRE_MEMBER=1` | removed in 3.0.0 |
 | Stricter write gate | `memrain config set MEMRAIN_WRITE_GATE_EXTERNAL quarantine` (or `reject`); `memrain config set MEMRAIN_WRITE_GATE_AGENT flag` | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
 | PgBouncer | `MEMRAIN_PG_POOLER=pgbouncer` and `MEMRAIN_POSTGRES_DIRECT_URL` | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
 
@@ -619,3 +620,137 @@ on start. Each has a down file in `deploy/memrain/src/core/migrations-down/`.
   The owner's own connector mail and calendars are never held for their
   content. A row hold the owner released or dropped under v1 keeps that
   decision.
+
+## 3.0.0
+
+3.0.0 is Memrain Lite: one person's brain with 29 MCP tools. It keeps pages,
+links, tags, hybrid search, the safety checks and the credentials, and drops
+everything else. It is a major release because existing clients and
+credentials can stop working. Read this section before you deploy.
+
+### Stay on 2.7.x if you use any of these
+
+Facts and fact extraction, takes and synthesis, `think` and the admin Ask chat,
+connectors (Gmail, calendars, Outlook, Teams, Slack, Fireflies, GitHub), open
+loops, owner notifications, members and groups, the code index and `code_*`
+tools, entities, graph, timelines and chronicle, the agent and skill jobs,
+automatic session capture through `/ingest`, or share links. 3.0.0 has none of
+them. Pin the `v2.7.0` tag and keep deploying it; nothing in 3.0.0 is needed
+to keep a 2.7 brain running.
+
+### What is removed
+
+- **MCP tools.** 79 tools go. Kept: `add_tag`, `backlinks`,
+  `get_brain_identity`, `get_chunks`, `get_links`, `get_tags`, `index`, `link`,
+  `page_append`, `page_delete`, `page_edit`, `page_get`, `page_list`,
+  `page_put`, `page_rename`, `page_restore`, `page_revert`, `page_versions`,
+  `purge_deleted_pages`, `remove_tag`, `resolve_slugs`, `run_doctor`,
+  `search`, `search_exact`, `sources_list`, `sources_status`, `stats`,
+  `unlink`, `whoami`. A call to any other tool, `query`, `recall` and
+  `context_pack` included, answers `not_found` with `unknown tool: <name>`.
+  Parameters of removed features (`mode`, `min_trust`, `walk_depth` and
+  similar) are refused as unknown arguments, as any unknown argument is;
+  `MEMRAIN_MCP_LENIENT_ARGS=1` still drops them instead.
+- **MCP prompts and the server-side skill pack.** `list_skills` and
+  `get_skill` are gone and no skill is served as a prompt. The Claude Code and
+  Codex plugin ships three skills, rewritten for the kept tools:
+  `connect-client`, `query` and `ingest`. The `setup` and `brain-upgrade` skills go
+  with the rest, and with them the legacy "set up memex" and "update memex"
+  triggers.
+- **Background work.** The jobs worker, the daemons and the six-phase
+  maintenance cycle are gone. One hourly pass inside `memrain serve` does the
+  deterministic upkeep: purge pages past their soft-delete window, rebuild
+  missing search mirrors, embed chunks that have no vector, sweep expired
+  OAuth tokens, expire unsettled spend holds, and trim the request log and
+  2.x chat history past their retention.
+- **CLI commands** of the removed features (`think`, `extract*`, `jobs`,
+  `daemons`, `connectors`, `member`, `group`, `trust`, `cycle`, `eval*`,
+  `bench`, `code`, `skill*` and others). `memrain --help` lists what is left;
+  `sources`, `quarantine`, `write-gate` and `secrets` stay.
+- **Admin pages.** The panel keeps sign-in, Health, Pages, page view, Search,
+  Agents and Security. Ask, Office, Graph, Timeline, Spend, Jobs, Approvals,
+  Notifications, Connections and the others go; the write-gate and
+  quarantine queues are worked with the CLI, and Health shows how many items
+  wait in each.
+- **Paid models.** Nothing calls a chat model. The only paid calls are Bedrock
+  Titan text embeddings, under the brain's daily cap and each client's own cap.
+  The Terraform policy for the instance role now allows Titan embeddings only.
+- **Deploy pieces.** The `memrain-eval-probe` timer, the skill-pack mount and
+  every compose variable of a removed feature. A removed variable left in your
+  `.env` does nothing.
+
+### Your data stays where it is
+
+3.0.0 adds no migration and changes no stored row on its own: the schema
+stays at migration 196. Rows of the removed features (facts, timeline events,
+takes, chat threads, connector accounts and their sealed credentials, jobs,
+loops, notifications, members and groups) stay in the database untouched, and
+a brain moved back to 2.7.x finds them as it left them. What does change:
+
+- Page writes no longer refresh what 2.x derived from a page (facts, timeline
+  events, takes), so those rows go stale. A put of the page on 2.7.x refreshes
+  them.
+- Purging a page still removes what was derived from it, as it did on 2.x.
+- A rename still moves the page's timeline and fact rows to the new slug.
+- Hourly housekeeping trims 2.x chat history older than
+  `MEMRAIN_CHAT_RETENTION_DAYS` (default 90; `0` keeps all), as the 2.x cycle
+  did.
+
+### Credentials that stop working
+
+A credential is refused with `credential_unsupported` when:
+
+- it is bound to a member who is not the brain's enabled owner (the member
+  named in config `access.owner_member`). One bound to the owner keeps
+  working and still reads owner-only sources; one bound to no member works as
+  before.
+- it carries a trust floor (`min_trust`). For an OAuth client, open it in the
+  admin panel and tick "Remove the trust floor". For a personal access token,
+  revoke it (`memrain auth revoke <name>`) and create a new one
+  (`memrain auth create <name>`).
+
+Before the upgrade, note which agents use a credential issued for a team
+member or one with a trust floor, and issue unbound replacements for the ones
+you keep.
+
+### Housekeeping off-switches
+
+An install that had switched its 2.x cycle off keeps its rows: the purge,
+mirror, embed and retention steps obey the switches the cycle obeyed.
+
+- `MEMRAIN_CYCLE=0` (environment only) turns housekeeping off entirely.
+- `MEMRAIN_MAINTENANCE=1` turns it off together with the boot token sweep, and
+  makes `deploy.sh` hold ingress.
+- `MEMRAIN_DAEMONS_DISABLED` naming `cycle`, or a paused `daemon_controls` row
+  for every daemon or for the cycle, keeps those four steps off.
+- `MEMRAIN_CYCLE_SKIP_PHASES` naming `purge` keeps purge and retention off;
+  naming `mirror-pages` or `embed-gaps` keeps that step off.
+- `MEMRAIN_EMBED_GAPS=0` turns off the embed step alone.
+
+The token sweep and spend-hold expiry always run, as they did outside the 2.x
+cycle.
+
+### Upgrade
+
+1. Back up the database (step 1 above applies).
+2. Disable the eval probe timer, which calls a command that no longer exists:
+   `sudo systemctl disable --now memrain-eval-probe.timer`, then remove its two
+   unit files from `/etc/systemd/system/` and run `sudo systemctl daemon-reload`.
+3. Check out the release and run `bash deploy/deploy.sh`. No migration runs.
+4. Run `memrain doctor`. One informational line counts the 2.x feature rows
+   this build leaves unused.
+5. From your ops directory, run `terraform plan`. Expect one in-place update
+   of the instance role's inline policy (the Bedrock statement) and nothing
+   destroyed or replaced; then `terraform apply`.
+6. Update the plugin in each client, and replace any credential refused above.
+
+`/health` now carries `"edition": "lite"`, so a check can tell this build
+apart.
+
+### Going back to 2.7.x
+
+The schema is unchanged, so going back is a checkout of `v2.7.0` and
+`bash deploy/deploy.sh`, with no down migration. Put a plan of the 2.7
+Terraform back the same way if you applied the narrower policy, and re-enable
+the eval probe timer if you used it.
+
