@@ -132,8 +132,17 @@ mcp pat-write "$pat"
 
 echo "[smoke] checking the spend ledger"
 compose stop memrain
-spend="$(compose run --rm --no-deps --entrypoint bun memrain run src/cli.ts spend --days 1)"
-calls="$(printf '%s' "$spend" | sed -n 's/^  "calls": \([0-9]*\),$/\1/p')"
+# No CLI reports spend any more, so count the ledger's rows directly; the
+# smoke brain is fresh, so any row is a model call this run booked.
+calls="$(compose run --rm --no-deps --entrypoint bun memrain -e '
+import { Storage } from "./src/core/storage.ts";
+import { loadConfig } from "./src/core/config.ts";
+const s = new Storage(loadConfig());
+await s.init();
+const r = await s.engine().query("SELECT count(*)::int AS n FROM mcp_spend_log");
+console.log("calls=" + r.rows[0].n);
+await s.close();
+' | sed -n 's/^calls=\([0-9]*\)$/\1/p')"
 if [ "$calls" != "0" ]; then
   echo "[smoke] FAIL: the spend ledger booked ${calls:-an unknown number of} model call(s)" >&2
   exit 1
