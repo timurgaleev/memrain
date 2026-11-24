@@ -55,7 +55,7 @@ search them. Each result points to the exact page it came from.
 
 ### The 29 tools
 
-Every MCP client sees the same set ([docs/TOOLS.md](./docs/TOOLS.md)):
+A client sees up to these 29 ([docs/TOOLS.md](./docs/TOOLS.md)); its scopes, its tool surface and the ingress it comes through decide which:
 
 | Kind | Tools |
 |---|---|
