@@ -17,8 +17,9 @@
  * While maintenance mode is on the body also carries `maintenance: true`, so a
  * deploy script or an operator's curl can see that ingress must stay shut
  * without credentials. The key is absent otherwise, and no switch detail or
- * count is ever exposed here. `keyword_only: true` marks a brain running
- * without embeddings or model calls (`MEMRAIN_KEYWORD_ONLY`), on the same terms.
+ * count is ever exposed here. `edition: "lite"` names this build's edition.
+ * `keyword_only: true` marks a brain running without embeddings or model calls
+ * (`MEMRAIN_KEYWORD_ONLY`), on the same terms.
  */
 import type { Storage } from "../core/storage.ts";
 import { VERSION } from "../version.ts";
@@ -61,6 +62,9 @@ export async function probeLiveness(
         // same string for every image ever built. A deploy check that reads
         // this field could not tell a fresh container from a stale one.
         version: VERSION,
+        // Which edition answers, so a client or an upgrade check can tell this
+        // build from a fuller one without credentials.
+        edition: "lite",
         // Measured at boot, never per probe. Informational: a rolled-back image
         // under a newer schema still serves, so this never turns /health red.
         schema_ahead: storage.schemaAhead(),
