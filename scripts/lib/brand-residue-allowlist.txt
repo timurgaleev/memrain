@@ -22,7 +22,7 @@ ARCHITECTURE.md|COMPAT-DOC|1|the legacy compose network alias
 CHANGELOG.md|HISTORY|810|release history from before the rename (memex-v* sections)
 CLAUDE.md|COMPAT-DOC|11|compatibility paragraph and the memex-v* archive tags
 TODO.md|HISTORY|198|backlog items written before the rename
-UPGRADING.md|COMPAT-DOC|38|the upgrade guide for installs from before the rename
+UPGRADING.md|COMPAT-DOC|39|the upgrade guide for installs from before the rename
 deploy/cloudflared/docs/OPERATIONS.md|COMPAT-DOC|2|tunnel origins through the legacy network alias
 deploy/cloudflared/docs/README.md|COMPAT-DOC|1|tunnel origins through the legacy network alias
 deploy/deploy.sh|COMPAT|9|legacy overlay and secrets-file preflights, MEMEX_ fallbacks
@@ -35,7 +35,6 @@ deploy/memrain/package.json|COMPAT|1|the memex bin alias (removed in 1.1.0)
 deploy/memrain/src/cli-alias.ts|COMPAT|1|the memex command alias
 deploy/memrain/src/commands/config.ts|COMPAT|7|config keys under either prefix
 deploy/memrain/src/commands/doctor.ts|COMPAT|6|legacy env, config dir and runtime_config warnings
-deploy/memrain/src/core/advisor/collectors.ts|COMPAT|1|names the legacy internal-token secret in a fix hint
 deploy/memrain/src/core/brand.ts|COMPAT|14|the legacy literals, defined once
 deploy/memrain/src/core/budget.ts|COMPAT|1|reserved legacy client and enrollment id prefixes
 deploy/memrain/src/core/config.ts|COMPAT|5|legacy config dir and yml fallback
@@ -43,8 +42,6 @@ deploy/memrain/src/core/db-lock.ts|COMPAT|1|legacy cycle rows are never reaped
 deploy/memrain/src/core/doctor-ops.ts|COMPAT|2|legacy fence markers in outside-content-fences
 deploy/memrain/src/core/engine/pglite-lock.ts|COMPAT|1|the legacy PGLite lock file
 deploy/memrain/src/core/env-compat.ts|COMPAT|5|the MEMEX_ env shim
-deploy/memrain/src/core/facts-fence.ts|COMPAT|5|legacy facts fence markers
-deploy/memrain/src/core/facts-reconcile.ts|COMPAT|2|mixed-brand fence guard
 deploy/memrain/src/core/fence-shared.ts|COMPAT|3|fence brands
 deploy/memrain/src/core/migrations-down/120_memrain_rename.down.sql|COMPAT|1|re-points the trigger to the legacy function
 deploy/memrain/src/core/migrations/001_initial.sql|HISTORY|1|applied migration; its text never changes
@@ -103,201 +100,68 @@ deploy/memrain/src/core/migrations/116_fact_withdrawn_trigger_search_path.sql|HI
 deploy/memrain/src/core/migrations/120_memrain_rename.sql|HISTORY|3|applied migration; its text never changes
 deploy/memrain/src/core/runtime-config.ts|COMPAT|16|runtime_config rows under either prefix
 deploy/memrain/src/core/secret-scan.ts|COMPAT|3|legacy token and PAT shapes
-deploy/memrain/src/core/skillpack/lint.ts|COMPAT|2|stored skill pages that say memex <cmd>; the flag scanner stops at a memex token
-deploy/memrain/src/core/sweep-code.ts|COMPAT|1|the legacy dotted data dir stays ignored
-deploy/memrain/src/core/synthesis/takes-canon.ts|COMPAT|1|mixed-brand takes fence guard
-deploy/memrain/src/core/synthesis/takes-fence.ts|COMPAT|7|legacy takes fence markers
-deploy/memrain/src/core/synthesis/takes-write.ts|COMPAT|1|reject injection of both current and legacy fence markers
 deploy/memrain/src/http/admin.ts|COMPAT|1|the legacy approval parameter
-deploy/memrain/src/http/ingest.ts|COMPAT|3|legacy x-memex-* ingest headers
 deploy/memrain/src/http/server.ts|COMPAT|2|legacy PAT prefix and internal-token secret hint
 deploy/memrain/src/mcp/http_transport.ts|COMPAT|1|the memexResponseVersion wire field clients read
-deploy/memrain/tests/add_fact_provenance.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/admin_api.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/admin_cookie_compat.test.ts|COMPAT-TEST|11|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/admin_cli_setup_link.test.ts|COMPAT-TEST|1|strips both MEMRAIN_ and legacy MEMEX_ env keys from the child process
 deploy/memrain/tests/admin_passkey_flow.test.ts|COMPAT-TEST|1|sets the legacy memex_admin cookie to prove passkey routes ignore it
-deploy/memrain/tests/advisor_collectors.test.ts|COMPAT-TEST|4|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/advisor_eval_blind.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/advisor_fix_commands.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/advisor_takes_ungradeable.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/agent_authority.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/agent_cli.test.ts|COMPAT-TEST|9|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/agent_runner.test.ts|COMPAT-TEST|6|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/agent_tenant.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/agent_tools_allowlist.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/audit_week_file.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/auth_pat.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/auth_self_issued_warning.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (the warning names a legacy overlay when that is the one read)
 deploy/memrain/tests/auth_rescope_fence.test.ts|COMPAT-TEST|4|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/auth_test_smoke.test.ts|COMPAT-TEST|1|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/backlinks.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/bedrock_circuit.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/bedrock_transport.test.ts|COMPAT-TEST|3|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/bench_cli.test.ts|COMPAT-TEST|3|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/bench_continuity.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/bench_fidelity.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/brain_resident_skillpack.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/budget_reserve_sites.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/cache_cli.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/call_cli.test.ts|COMPAT-TEST|4|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/capture_cli.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/check_resolvable.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/chronicle_core.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/chronicle_ops.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/chronicle_search_fence.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/chronicle_surfaces.test.ts|COMPAT-TEST|5|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/chronicle_timeline.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/chunker_version.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/chunks_source_id.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/claim_key_equivalence.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/cli_alias.test.ts|COMPAT-TEST|10|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/cli_args.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/cli_help.test.ts|COMPAT-TEST|8|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/code_commands.test.ts|COMPAT-TEST|1|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/code_edges.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/code_graph_source_stamp.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/code_readiness.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/command_storage_lifecycle.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/composite_pk_precursor.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/config.test.ts|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/config_cli.test.ts|COMPAT-TEST|7|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/config_paths.test.ts|COMPAT-TEST|27|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/connector_kek_not_in_db.test.ts|COMPAT-TEST|1|clears both the MEMRAIN_ and the legacy MEMEX_ connector key variables before asserting none is set
-deploy/memrain/tests/no_extension_unchanged.test.ts|COMPAT-TEST|3|covers legacy names: a legacy-prefixed runtime_config row must not change behaviour
 deploy/memrain/tests/notify_webhook_secret_not_in_db.test.ts|COMPAT-TEST|1|clears both the MEMRAIN_ and the legacy MEMEX_ webhook secret variables before asserting none is set
-deploy/memrain/tests/connectors_github.test.ts|COMPAT-TEST|6|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/content_flag.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/content_sanity.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/context_pack.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/context_volunteer.test.ts|COMPAT-TEST|1|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/contextual_embed.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/contextual_llm.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/contextual_reembed.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/contextual_tier.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/conversation_facts.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/core_readers_empty_scope.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/cycle.test.ts|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/cycle_command.test.ts|COMPAT-TEST|4|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/cycle_freshness.test.ts|COMPAT-TEST|1|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/cycle_synthesis_e2e.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/data_manifest_sql.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/dispatch_diary_fence.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/doctor.test.ts|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/doctor_code_grammars.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/doctor_connectors.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/doctor_mcp_status.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/doctor_ops.test.ts|COMPAT-TEST|1|covers legacy names or legacy data (a legacy fence marker in outside-content-fences)
-deploy/memrain/tests/doctor_tenancy.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/document_clock.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/document_id_heal.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/document_id_heal_pg.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/document_visibility.test.ts|COMPAT-TEST|1|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/effective_date_provenance.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/embed_backfill.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/embed_signature.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/embed_skip.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/embed_stale_guard.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/embed_targeting.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/engine_copy.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/engine_pglite.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/enrollment_spend_cap.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/entity_facts.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/entity_junk.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/entity_merge.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/env_compat.test.ts|COMPAT-TEST|15|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/env_compat_boot.test.ts|COMPAT-TEST|7|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/eval_capture.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/eval_chronicle.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/eval_compare_gate.test.ts|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/eval_export_prune.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/eval_mutation_bootstrap.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/eval_replay.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/eval_replay_gate.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/eval_snapshot.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/eval_wilson_whoami.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/evidence.test.ts|COMPAT-TEST|4|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/expansion.test.ts|COMPAT-TEST|1|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/export.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/extract.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/extract_incremental.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/fact_embedding.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/fact_withdraw_concurrency.test.ts|COMPAT-TEST|7|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/facts_backfill.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/facts_canonicalize_dedup.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/facts_claim_invariants.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/facts_consolidate.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/facts_decay.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/facts_extract_onwrite.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/facts_extract_persist.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/facts_id_roundtrip.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/facts_lifecycle.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/facts_metadata.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/facts_metric_claims.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/facts_ontology_isolation.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/facts_recall.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/facts_reconcile.test.ts|COMPAT-TEST|4|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/facts_withdrawal.test.ts|COMPAT-TEST|5|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/fence_brand.test.ts|COMPAT-TEST|43|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/fence_writer.test.ts|COMPAT-TEST|12|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/fenced_code.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/fixtures/github/issues-page-2.json|COMPAT-TEST|1|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/fixtures/tenant_isolation_matrix.ts|COMPAT-TEST|1|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/friction.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/friction_list_render.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/friction_propose.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/frontmatter_inference.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/gazetteer.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/generation.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/get_chunks.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/grammar_selfcheck.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/graph_rerank.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/health_maintenance.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/helpers/migration-120.ts|COMPAT-TEST|14|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/helpers/runtime-config-row.ts|COMPAT-TEST|1|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/hot_memory.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/hot_memory_meta.test.ts|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/http_ingest.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/hybrid_cache.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/identity_purge.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/import_chat_history.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/indexer_code_grammar_fallback.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/indexer_fence_trust.test.ts|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/indexer_parallel_chunks.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/indexer_size_cap.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/indexer_source_path_normalize.test.ts|COMPAT-TEST|5|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/ingest_headers.test.ts|COMPAT-TEST|5|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/ingest_log.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/init.test.ts|COMPAT-TEST|4|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/init_no_rewrite.test.ts|COMPAT-TEST|5|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/insights.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/jobs.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/jobs_cli_lifecycle.test.ts|COMPAT-TEST|4|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/jobs_dag.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/jobs_fencing.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/jobs_lifecycle.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/jobs_submit_kind.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/jobs_timeout.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/jsonb_binding_guard.test.ts|COMPAT-TEST|1|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/last_retrieved.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/links.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/links_extraction_fixes.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/links_extraction_watermark.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/links_link_source.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/links_read.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/links_stale_sweep.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/lint_content.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/lint_phase.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/llm_converse.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/llm_sanitize_redact.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/lock_legacy_rows.test.ts|COMPAT-TEST|6|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/locks_renamed.test.ts|COMPAT-TEST|8|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/mcp.test.ts|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/mcp_fact_visibility.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/mcp_internal_token.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/mcp_public_redaction.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/mcp_redaction.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/mcp_surface_stage2.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/mcp_surface_tools.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/mcp_unknown_args.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/metadata_tables.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
@@ -318,22 +182,17 @@ deploy/memrain/tests/oauth_rescope_unbound.test.ts|COMPAT-TEST|1|incidental: pre
 deploy/memrain/tests/oauth_revoke_grant.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/oauth_team_ops.test.ts|COMPAT-TEST|6|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/oauth_token_lifecycle.test.ts|COMPAT-TEST|7|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/ontology_facts.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/operation_error.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/operational_commands.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/operator_scope_parity.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/orphan_policy.test.ts|COMPAT-TEST|3|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/page_aliases.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/page_aliases_source_id.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/page_mirror_failure_log.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/page_mirror_job.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/page_mirror_rechunk.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/page_not_found_suggest.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/page_rename.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/page_restore_revert.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/page_retype.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/page_search_bridge.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/page_truth_search.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/page_type_distribution.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/page_type_infer.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/page_write_integrity.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
@@ -344,112 +203,43 @@ deploy/memrain/tests/per_source_health.test.ts|COMPAT-TEST|1|incidental: pre-ren
 deploy/memrain/tests/pglite_diagnose.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/pglite_lock.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/pglite_lock_dual.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/phase_default_off.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/preauth_throttle.test.ts|COMPAT-TEST|4|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/provenance_columns.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/public_error_redaction.test.ts|COMPAT-TEST|1|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/public_guard.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/push_bench.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/quarantine_cli.test.ts|COMPAT-TEST|4|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/query_cache.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/query_cache_semantic.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/query_intent.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/quiescence.test.ts|COMPAT-TEST|7|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/raw_data.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/recall_budget.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/recency_effective_date.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/rechunk_sweep.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/recipe_state.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/recompute_salience.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/regex_linearity.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/reindex_reconcile.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/reindex_reuse.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/relational_llm.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/relational_recall.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/remediation.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/remediation_reembed_integration.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/remediation_wiring.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/remote_doctor.test.ts|COMPAT-TEST|16|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/request_log_db.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/require_postgres.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/rerank_audit.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/reread_guard.test.ts|COMPAT-TEST|2|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/resolve_slugs.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/response_contract.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/retrieval_quality.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/retrieval_quality_eval_misses.test.ts|COMPAT-TEST|3|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/retrieval_quality_families.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/retrieval_quality_hybrid.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/rls_integrity.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/runtime_config.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/runtime_config_schema.test.ts|COMPAT-TEST|1|checks canonical validation through the legacy environment-prefix alias
 deploy/memrain/tests/runtime_config_overlay.test.ts|COMPAT-TEST|44|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/runtime_config_write.test.ts|COMPAT-TEST|57|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/search_diagnose_cli.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/search_embed_deadline.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/search_empty_scope.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/search_filters.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/search_maxpool_relational_arm.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/search_meta.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/search_meta_fences.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/search_mode_bundles.test.ts|COMPAT-TEST|1|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/search_modes.test.ts|COMPAT-TEST|1|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/search_ranking_pushdown.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/search_telemetry.test.ts|COMPAT-TEST|14|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/search_zero_result_retry.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/secret_scan.test.ts|COMPAT-TEST|12|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/sentinel_compat.test.ts|COMPAT-TEST|4|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/serve_quiescence.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/skill_and_model_json_linearity.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/skillify.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/skillopt_benchmark.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/skillopt_cli.test.ts|COMPAT-TEST|5|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/skillopt_evaluate.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/skillpack_cli_commands.test.ts|COMPAT-TEST|1|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/skillpack_lint.test.ts|COMPAT-TEST|29|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/slug_aliases.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/slug_canonicalize.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/source_health.test.ts|COMPAT-TEST|3|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/source_scope.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/sources.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/sources_crud.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/spend_attribution.test.ts|COMPAT-TEST|7|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/spend_call_hold.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/spend_client_attribution.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/spend_ledger.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/spend_ledger_tokens.test.ts|COMPAT-TEST|9|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/spend_report.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/status_cli.test.ts|COMPAT-TEST|4|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/status_quiescent.test.ts|COMPAT-TEST|9|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/structural_expand.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/subagent_ledger.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/sweep.test.ts|COMPAT-TEST|5|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/sweep_ignores.test.ts|COMPAT-TEST|4|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/synthesis_atoms.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_atoms_pages.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_auto_think.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_calibration.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_concepts.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_contradictions.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_contradictions_widen.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_deep_synth.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_drift.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_enrich_thin.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_patterns.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_reflections.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_take_lifecycle.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_take_review.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_takes.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_takes_evidence.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_think.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/synthesis_think_persist.test.ts|COMPAT-TEST|6|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
-deploy/memrain/tests/synthesis_voice_nudge.test.ts|COMPAT-TEST|1|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/tag_identity_tenant_scope.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/tags.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/takes_canon.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/takes_fence.test.ts|COMPAT-TEST|1|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/takes_phase.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/takes_write_patch.test.ts|COMPAT-TEST|6|preserve legacy fence bytes and refuse ambiguous mixed-brand mutations
 deploy/memrain/tests/templates.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/tenant_derived_write_owner.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/tenant_fail_closed.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
@@ -458,49 +248,27 @@ deploy/memrain/tests/tenant_isolation_contract.test.ts|COMPAT-TEST|1|incidental:
 deploy/memrain/tests/tenant_isolation_matrix.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/tenant_operator_only.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/tenant_write_isolation.test.ts|COMPAT-TEST|4|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/tenant_write_resolution.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/think_cli_wiring.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/tiebreak_determinism.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/timeline.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/timeline_anchor.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/timeline_body.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/timeline_meetings.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/title-match.test.ts|COMPAT-TEST|5|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/token_compat.test.ts|COMPAT-TEST|14|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/token_destructive_scope.test.ts|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/tool_defs_contract.test.ts|COMPAT-TEST|1|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/tests/tools_list_visibility.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/trajectory_tenant_scope.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/transcripts_fidelity.test.ts|COMPAT-TEST|3|incidental pre-rename string (legacy config dir in a temp HOME)
-deploy/memrain/tests/transcripts_push.test.ts|COMPAT-TEST|1|incidental pre-rename string (legacy token prefix in a fixture)
 deploy/memrain/tests/quarantine_override.test.ts|COMPAT-TEST|1|incidental pre-rename string (legacy config dir in a temp HOME)
 deploy/memrain/tests/page_edit.test.ts|COMPAT-TEST|1|incidental pre-rename string (legacy fence marker covered by the edit guard)
-deploy/memrain/tests/transcripts_ingest.test.ts|COMPAT-TEST|9|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/transcripts_session_logs.test.ts|COMPAT-TEST|6|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/traverse_graph.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/trigger_body_equivalence.test.ts|COMPAT-TEST|6|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/two_layer_cache.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/typed_links.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/usage_insights.test.ts|COMPAT-TEST|2|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/v1163_paths_post_migration.test.ts|COMPAT-TEST|10|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/validate_params.test.ts|COMPAT-TEST|1|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/vector_index.test.ts|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/vector_iterative_scan.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/verb_links_sync.test.ts|COMPAT-TEST|1|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 deploy/memrain/tests/walk.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/weighted_search_vector.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/well_form.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/worker_lock.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/worth_gate.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
-deploy/memrain/tests/write_preconditions.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/memrain/tests/write_timing.test.ts|COMPAT-TEST|1|incidental: pre-rename temp-dir prefix only; no legacy behaviour under test
 deploy/secrets/README.md|COMPAT-DOC|2|legacy secret names and the unset-prefix default
 deploy/secrets/fetch-secrets.sh|COMPAT|8|legacy secret names, prefix default and MEMEX_ fallbacks
 deploy/secrets/lib.sh|COMPAT|5|legacy secret names and the unset-prefix default
-deploy/skills/_brain-filing-rules.md|COMPAT-DOC|1|keep an existing memex: fence marker
-deploy/skills/_resolver.md|COMPAT-DOC|2|generated routing table repeats the legacy trigger aliases of brain-upgrade and setup
-deploy/skills/brain-upgrade/SKILL.md|COMPAT-DOC|8|legacy trigger alias and the rename-crossing rule
-deploy/skills/setup/SKILL.md|COMPAT-DOC|1|legacy trigger alias (removed in 1.1.0)
 docs/CONFIGURATION.md|COMPAT-DOC|16|Legacy names section and the deprecated memex_subdomain variable
 scripts/bootstrap.sh|COMPAT|5|legacy stack-env, admin secret and MEMEX_ fallbacks
 scripts/init.sh|COMPAT|2|MEMEX_ fallback and the public repository's current name
@@ -532,16 +300,10 @@ tests/test_fetch_secrets_sh.py|COMPAT-TEST|6|covers legacy names or legacy data 
 tests/test_memrain_skeleton.py|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/test_plugin_manifests.py|COMPAT-TEST|1|covers legacy names: the credential scan also rejects tokens with the legacy prefix the server still accepts
 tests/test_rotate_bearer_sh.py|COMPAT-TEST|3|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-tests/test_skills_brand.py|COMPAT-TEST|17|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/test_terraform_rename_guards.py|COMPAT-TEST|20|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/test_upgrading_doc.py|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
 tests/test_workflows.py|COMPAT-TEST|1|incidental: pre-rename name in comments, test data or temp-dir prefixes; no legacy behaviour under test
 deploy/memrain/src/core/neutralize-outside-text.ts|COMPAT|1|legacy fence markers defused in outside text
-deploy/memrain/tests/neutralize_outside_text.test.ts|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/outside_text_rerender.test.ts|COMPAT-TEST|2|covers legacy names or legacy data (may also carry incidental pre-rename test strings)
-deploy/memrain/tests/fence_location.test.ts|COMPAT-TEST|2|Quoted legacy fence markers must not override a real fence.
 deploy/memrain/src/core/migrations/146_function_search_path.sql|COMPAT|2|Pins search paths on the two retained legacy SQL functions.
 deploy/memrain/src/core/migrations-down/146_function_search_path.down.sql|COMPAT|3|Restores the exact prior search paths of retained legacy SQL functions.
 deploy/memrain/tests/migration_146_search_path.test.ts|COMPAT-TEST|4|Verifies both legacy and current SQL functions, including rollback and shadow tables.
-deploy/memrain/tests/outside_text_provenance.test.ts|COMPAT-TEST|1|Preserves carried fences and CRLF bytes for both marker brands.
-deploy/memrain/src/core/rechunk-plan.ts|COMPAT|1|Pins both supported environment prefixes in reviewed rechunk settings.
