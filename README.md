@@ -22,6 +22,27 @@ bill: about $52 a month for the server and database, plus a few cents of
 embedding calls, under a daily cap you set. **To start, follow
 [docs/QUICKSTART.md](./docs/QUICKSTART.md).**
 
+## Editions
+
+**Memrain Lite** is this repository: MIT, free, for one person, self-hosted in
+your own AWS account.
+
+- Pages with version history, links and tags, which your agents read and write
+  over MCP (29 tools).
+- Hybrid search, keywords plus Titan embeddings, with every result pointing to
+  its page.
+- Chat history import from ChatGPT, Claude, Codex and Claude Code.
+- Secrets redacted on the way in, scoped OAuth clients and personal access
+  tokens, and daily spend caps.
+
+**Memrain Pro** is the commercial edition. It adds facts, people and
+timelines, synthesis, a code index, connectors such as Gmail, Google Calendar,
+Microsoft 365 and Slack, an Ask chat, background maintenance, and team
+features: members, groups, private member data, shared sources and folder
+rules. It is hosted by the maintainer or self-hosted under a licence, and is in
+early access; see [memrain.com/pricing](https://memrain.com/pricing/). A Lite
+database can move to Pro without migration loss.
+
 ## Why
 
 - **Your agent forgets.** Every new chat starts from zero, so you paste the same context again and again.
@@ -65,8 +86,7 @@ A client sees up to these 29 ([docs/TOOLS.md](./docs/TOOLS.md)); its scopes, its
 | Links and tags | `link`, `unlink`, `get_links`, `backlinks`, `add_tag`, `remove_tag`, `get_tags` |
 | Brain and access | `get_brain_identity`, `whoami`, `stats`, `sources_list`, `sources_status`, `run_doctor` |
 
-Memrain Lite is the single-person edition; a fuller edition with team and
-connector features exists separately. Coming from 0.25 or earlier? Read
+Coming from 0.25 or earlier? Read
 [UPGRADING.md](./UPGRADING.md#0260) first.
 
 ## See it work

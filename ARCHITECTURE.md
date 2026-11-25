@@ -89,7 +89,19 @@ ingress configured before the rename to Memrain keeps working.
 ## Access
 
 Agents reach Memrain over MCP. The owner also uses the admin panel, which
-carries its own passkey sign-in. The agent path:
+carries its own passkey sign-in. The request path:
+
+```mermaid
+flowchart LR
+  client["MCP client"] --> auth["Credential check<br/>OAuth token, PAT or static bearer"]
+  auth --> tools["MCP tools<br/>POST /mcp"]
+  tools -->|"pages, search"| db[("Postgres + pgvector<br/>pages · chunks · embeddings")]
+  tools -->|"query, changed passages"| titan["Bedrock Titan v2"]
+  titan -->|"embeddings"| db
+  hk["Hourly housekeeping<br/>in-process"] -->|"purge, mirror, embed gaps, trim"| db
+```
+
+In detail:
 
 ```
 MCP client (Claude Code / Cursor / Codex)

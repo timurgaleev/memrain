@@ -18,6 +18,16 @@ it over MCP with 29 tools ([TOOLS.md](./TOOLS.md)), and the only model it ever
 calls is Amazon Titan, to turn text into embeddings. Turn that off and it runs
 with no AWS at all, on keyword search alone.
 
+```mermaid
+flowchart LR
+  client["Your agent<br/>MCP client"] --> auth["OAuth token or<br/>personal access token"]
+  auth --> tools["MCP tools"]
+  tools -->|"read, write, search"| db[("Postgres<br/>pages · passages · embeddings")]
+  tools -->|"question, changed passages"| titan["Amazon Titan<br/>embeddings"]
+  titan --> db
+  hk["Hourly housekeeping"] --> db
+```
+
 ## 1. How your knowledge gets in
 
 There are four ways in, and they all end in the same place: a page in
