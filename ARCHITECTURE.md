@@ -13,7 +13,7 @@ a question, read [docs/HOW-IT-WORKS.md](./docs/HOW-IT-WORKS.md).
 
 ```
    MCP clients (Claude Code, Codex,                 the owner in a browser
-   claude.ai, ChatGPT, Cursor)                      (admin panel, passkey)
+   claude.ai, ChatGPT, Copilot)                     (admin panel, passkey)
                 │                                          │
    https://brain.example.com/mcp          https://brain.example.com/admin
                 └──────────────────┬───────────────────────┘
@@ -104,7 +104,7 @@ flowchart LR
 In detail:
 
 ```
-MCP client (Claude Code / Cursor / Codex)
+MCP client (Claude Code / Copilot / Codex)
       │  Authorization: Bearer <OAuth token | personal access token | public bearer>
       ▼
 https://brain.example.com/mcp   →  cloudflared  →  memrain:18790  POST /mcp

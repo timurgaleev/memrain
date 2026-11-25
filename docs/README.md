@@ -16,6 +16,7 @@ Every user-facing document, one line each. New here? Read
 | Doc | What is in it |
 |---|---|
 | [clients/CLAUDE_CODE.md](./clients/CLAUDE_CODE.md) | Claude Code |
+| [clients/COPILOT.md](./clients/COPILOT.md) | GitHub Copilot in VS Code |
 | [clients/CODEX.md](./clients/CODEX.md) | Codex CLI |
 | [clients/CLAUDE_AI.md](./clients/CLAUDE_AI.md) | claude.ai (Pro, Max) |
 | [clients/CHATGPT.md](./clients/CHATGPT.md) | ChatGPT |
@@ -27,7 +28,7 @@ Every user-facing document, one line each. New here? Read
 | [TRANSCRIPTS.md](./TRANSCRIPTS.md) | Importing ChatGPT, Claude, Codex and Claude Code history |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Every install and update step, ingress modes |
 | [CONFIGURATION.md](./CONFIGURATION.md) | Every setting with its default, budgets, Terraform variables |
-| [../UPGRADING.md](../UPGRADING.md) | Upgrading: the rename to 0.1, each release from 0.1 to 0.25, and the move to Lite 0.26 |
+| [../UPGRADING.md](../UPGRADING.md) | Upgrading: the rename to 0.1, the releases from 0.1 to 0.22 that need extra steps, and the move to Lite 0.26 |
 | [../ARCHITECTURE.md](../ARCHITECTURE.md) | What runs where, storage, secrets, the security model |
 
 ## Reference

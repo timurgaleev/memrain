@@ -220,6 +220,7 @@ credential you are using. Step-by-step guides, each with a troubleshooting table
 | Client | Guide |
 |---|---|
 | Claude Code | [docs/clients/CLAUDE_CODE.md](./clients/CLAUDE_CODE.md) |
+| GitHub Copilot (VS Code) | [docs/clients/COPILOT.md](./clients/COPILOT.md) |
 | Codex CLI | [docs/clients/CODEX.md](./clients/CODEX.md) |
 | claude.ai (Pro, Max) | [docs/clients/CLAUDE_AI.md](./clients/CLAUDE_AI.md) |
 | ChatGPT (developer mode) | [docs/clients/CHATGPT.md](./clients/CHATGPT.md) |

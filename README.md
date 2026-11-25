@@ -6,7 +6,7 @@
 </picture>
 
 **Long-term memory for your AI agents.**<br>
-Your notes and decisions, searchable from Claude, ChatGPT and Codex. Every result points to the page it came from.
+Your notes and decisions, searchable from Claude, ChatGPT, GitHub Copilot and Codex. Every result points to the page it came from.
 
 <img src="docs/assets/hero.webp" alt="A note, a code file, a chat bubble and a sticky note, each on a thin thread that runs into one small shared store." width="100%">
 
@@ -37,7 +37,7 @@ your own AWS account.
 
 **Memrain Pro** is the commercial edition. It adds facts, people and
 timelines, synthesis, a code index, connectors such as Gmail, Google Calendar,
-Microsoft 365 and Slack, an Ask chat, background maintenance, and team
+Microsoft 365, Slack, Teams and Fireflies, an Ask chat, background maintenance, and team
 features: members, groups, private member data, shared sources and folder
 rules. It is hosted by the maintainer or self-hosted under a licence, and is in
 early access; see [memrain.com/pricing](https://memrain.com/pricing/). A Lite
@@ -131,6 +131,7 @@ Every client uses the same `https://<your-host>/mcp` address.
 | Client | Guide |
 |---|---|
 | Claude Code | [docs/clients/CLAUDE_CODE.md](./docs/clients/CLAUDE_CODE.md) |
+| GitHub Copilot (VS Code) | [docs/clients/COPILOT.md](./docs/clients/COPILOT.md) |
 | Codex CLI | [docs/clients/CODEX.md](./docs/clients/CODEX.md) |
 | claude.ai (Pro, Max) | [docs/clients/CLAUDE_AI.md](./docs/clients/CLAUDE_AI.md) |
 | ChatGPT | [docs/clients/CHATGPT.md](./docs/clients/CHATGPT.md) |

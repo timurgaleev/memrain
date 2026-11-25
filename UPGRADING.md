@@ -1,4 +1,4 @@
-# Upgrading to Memrain 0.1
+# Upgrading Memrain
 
 The first part of this page is for people who run a release from before Memrain 0.1,
 under the project's old name. It moves that install to 0.1 and keeps your

@@ -18,7 +18,7 @@ reached over MCP only.
   spend holds, retention); no worker, no daemons. PGLite is the local and
   dev engine.
 - **cloudflared** — public HTTPS ingress for the MCP server
-  (`brain.<domain>/mcp`) so MCP clients (Claude Code, Codex, claude.ai,
+  (`brain.<domain>/mcp`) so MCP clients (Claude Code, claude.ai, GitHub Copilot, Codex,
   ChatGPT, …) connect.
   `ingress_mode = "caddy"` swaps it for a Caddy + Let's Encrypt sidecar
   on a public IP instead (see `docs/DEPLOYMENT.md`).
@@ -60,7 +60,7 @@ trust floor (`min_trust`), is refused with `credential_unsupported`.
 | Every env knob, with its default | `docs/CONFIGURATION.md` |
 | The 29 MCP tools and their parameters | `docs/TOOLS.md` |
 | Every error code: class, retryable, what to do (generated) | `docs/ERRORS.md` |
-| Connecting a client (Claude Code, Codex, claude.ai, ChatGPT) | `docs/clients/*.md` |
+| Connecting a client (Claude Code, claude.ai, ChatGPT, GitHub Copilot, Codex) | `docs/clients/*.md` |
 | Install / ingress modes / upgrade | `docs/DEPLOYMENT.md` |
 | Upgrading: the rename to 0.1, each release from 0.1 to 0.25, the move to Lite 0.26 | `UPGRADING.md` |
 | Plain-language tour of ingest, search, caps and safety checks | `docs/HOW-IT-WORKS.md` |

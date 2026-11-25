@@ -10,7 +10,7 @@ in [UPGRADING.md](../UPGRADING.md).
 
 Memrain is a memory, not a chatbot. It keeps your notes as pages, and when
 your AI agent asks a question it hands back the most relevant passages, each
-with the page it came from. Your agent (Claude Code, ChatGPT, Codex and so on)
+with the page it came from. Your agent (Claude Code, ChatGPT, GitHub Copilot, Codex and so on)
 writes the answer from that evidence. Memrain never writes an answer itself.
 
 It is built for one person. One container serves one brain, your agents reach
